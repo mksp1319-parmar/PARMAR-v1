@@ -1,0 +1,64 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+htmlcov/
+.pybuild/
+*.egg-info/
+
+# Virtual environments and local tooling
+.venv/
+venv/
+ENV/
+env/
+.env/
+
+# Secrets, credentials, and environment files
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.secret
+*.token
+*.password
+*.passwd
+secrets/
+secrets.*
+api_keys*
+*.api
+
+# Temporary and editor files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig
+*.rej
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Build and distribution artifacts
+build/
+dist/
+site/
+
+# Local runtime artifacts
+logs/
+*.sqlite3
+*.db
