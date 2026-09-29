@@ -57,6 +57,20 @@ class CentralEnforcementGate:
             return "NO HUMAN APPROVAL REQUIRED"
         return "INVALID"
 
+    @staticmethod
+    def _valid_allow_execution(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, dict):
+            allow_execution = value.get("allow_execution")
+            return allow_execution is True
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            return lowered in {"true", "yes", "allow", "allowed", "pass", "safe", "ok"}
+        return False
+
     def _log(self, event_type: str, payload: dict[str, Any]) -> None:
         safe_payload = {
             "decision_id": payload.get("decision_id"),
@@ -90,18 +104,37 @@ class CentralEnforcementGate:
             or (risk_level in {"medium", "high", "critical"})
         )
 
-        privacy_allowed = bool((privacy_result or {}).get("allow_execution", True))
-        autonomy_allowed = bool((autonomy_result or {}).get("allow_execution", True))
-        emergency_allowed = bool((emergency_result or {}).get("allow_execution", True))
+        privacy_ok = self._valid_allow_execution(privacy_result)
+        autonomy_ok = self._valid_allow_execution(autonomy_result)
+        emergency_ok = self._valid_allow_execution(emergency_result)
 
-        self._log("proposal_received", {
-            "decision_id": decision_id,
-            "event": "proposal_received",
-            "risk_level": risk_level,
-            "human_approval": human_approval,
-        })
+        if privacy_result is None or autonomy_result is None or emergency_result is None:
+            result = {
+                "status": EnforcementState.BLOCKED,
+                "state": EnforcementState.BLOCKED,
+                "execution_allowed": False,
+                "human_approval_required": requires_human_approval,
+                "human_approval": self._normalize_approval(human_approval),
+                "reason": "Fail-closed: a required safety signal was missing. PARMAR does not treat the action as safe.",
+                "decision_id": decision_id,
+            }
+            self._log("blocked", {"decision_id": decision_id, "status": EnforcementState.BLOCKED, "event": "blocked", "risk_level": risk_level, "human_approval": result["human_approval"]})
+            return result
 
-        if not privacy_allowed or not autonomy_allowed or not emergency_allowed:
+        if not isinstance(privacy_result, dict) or not isinstance(autonomy_result, dict) or not isinstance(emergency_result, dict):
+            result = {
+                "status": EnforcementState.BLOCKED,
+                "state": EnforcementState.BLOCKED,
+                "execution_allowed": False,
+                "human_approval_required": requires_human_approval,
+                "human_approval": self._normalize_approval(human_approval),
+                "reason": "Fail-closed: a safety result was malformed and cannot be trusted.",
+                "decision_id": decision_id,
+            }
+            self._log("blocked", {"decision_id": decision_id, "status": EnforcementState.BLOCKED, "event": "blocked", "risk_level": risk_level, "human_approval": result["human_approval"]})
+            return result
+
+        if not privacy_ok or not autonomy_ok or not emergency_ok:
             result = {
                 "status": EnforcementState.BLOCKED,
                 "state": EnforcementState.BLOCKED,
@@ -111,31 +144,13 @@ class CentralEnforcementGate:
                 "reason": "Safety gate blocked the proposal before action permission could be granted.",
                 "decision_id": decision_id,
             }
-            self._log("blocked", {
-                "decision_id": decision_id,
-                "status": EnforcementState.BLOCKED,
-                "event": "blocked",
-                "risk_level": risk_level,
-                "human_approval": result["human_approval"],
-            })
-            self._log("execution_permission_denied", {
-                "decision_id": decision_id,
-                "status": EnforcementState.BLOCKED,
-                "event": "execution_permission_denied",
-                "risk_level": risk_level,
-                "human_approval": result["human_approval"],
-            })
+            self._log("blocked", {"decision_id": decision_id, "status": EnforcementState.BLOCKED, "event": "blocked", "risk_level": risk_level, "human_approval": result["human_approval"]})
+            self._log("execution_permission_denied", {"decision_id": decision_id, "status": EnforcementState.BLOCKED, "event": "execution_permission_denied", "risk_level": risk_level, "human_approval": result["human_approval"]})
             return result
 
         if requires_human_approval:
             normalized_approval = self._normalize_approval(human_approval)
-            self._log("safety_review", {
-                "decision_id": decision_id,
-                "status": EnforcementState.SAFETY_REVIEW,
-                "event": "safety_review",
-                "risk_level": risk_level,
-                "human_approval": normalized_approval,
-            })
+            self._log("safety_review", {"decision_id": decision_id, "status": EnforcementState.SAFETY_REVIEW, "event": "safety_review", "risk_level": risk_level, "human_approval": normalized_approval})
 
             if normalized_approval == "REJECTED":
                 result = {
@@ -147,20 +162,8 @@ class CentralEnforcementGate:
                     "reason": "The proposal was explicitly rejected by a human reviewer.",
                     "decision_id": decision_id,
                 }
-                self._log("rejected", {
-                    "decision_id": decision_id,
-                    "status": EnforcementState.REJECTED,
-                    "event": "rejected",
-                    "risk_level": risk_level,
-                    "human_approval": "REJECTED",
-                })
-                self._log("execution_permission_denied", {
-                    "decision_id": decision_id,
-                    "status": EnforcementState.REJECTED,
-                    "event": "execution_permission_denied",
-                    "risk_level": risk_level,
-                    "human_approval": "REJECTED",
-                })
+                self._log("rejected", {"decision_id": decision_id, "status": EnforcementState.REJECTED, "event": "rejected", "risk_level": risk_level, "human_approval": "REJECTED"})
+                self._log("execution_permission_denied", {"decision_id": decision_id, "status": EnforcementState.REJECTED, "event": "execution_permission_denied", "risk_level": risk_level, "human_approval": "REJECTED"})
                 return result
 
             if normalized_approval in {"INVALID", "PENDING HUMAN APPROVAL", "NO HUMAN APPROVAL REQUIRED"}:
@@ -173,20 +176,8 @@ class CentralEnforcementGate:
                     "reason": "Human approval is required before the proposal may reach an action boundary.",
                     "decision_id": decision_id,
                 }
-                self._log("approval_requested", {
-                    "decision_id": decision_id,
-                    "status": EnforcementState.HUMAN_APPROVAL_REQUIRED,
-                    "event": "approval_requested",
-                    "risk_level": risk_level,
-                    "human_approval": None,
-                })
-                self._log("execution_permission_denied", {
-                    "decision_id": decision_id,
-                    "status": EnforcementState.HUMAN_APPROVAL_REQUIRED,
-                    "event": "execution_permission_denied",
-                    "risk_level": risk_level,
-                    "human_approval": None,
-                })
+                self._log("approval_requested", {"decision_id": decision_id, "status": EnforcementState.HUMAN_APPROVAL_REQUIRED, "event": "approval_requested", "risk_level": risk_level, "human_approval": None})
+                self._log("execution_permission_denied", {"decision_id": decision_id, "status": EnforcementState.HUMAN_APPROVAL_REQUIRED, "event": "execution_permission_denied", "risk_level": risk_level, "human_approval": None})
                 return result
 
             if normalized_approval == "APPROVED":
@@ -199,13 +190,7 @@ class CentralEnforcementGate:
                     "reason": "The action has explicit human approval and passed the safety review gate.",
                     "decision_id": decision_id,
                 }
-                self._log("approved", {
-                    "decision_id": decision_id,
-                    "status": EnforcementState.READY_FOR_ACTION,
-                    "event": "approved",
-                    "risk_level": risk_level,
-                    "human_approval": "APPROVED",
-                })
+                self._log("approved", {"decision_id": decision_id, "status": EnforcementState.READY_FOR_ACTION, "event": "approved", "risk_level": risk_level, "human_approval": "APPROVED"})
                 return result
 
         result = {
@@ -217,11 +202,5 @@ class CentralEnforcementGate:
             "reason": "The proposal is low-risk and passed all safety checks without requiring explicit human approval.",
             "decision_id": decision_id,
         }
-        self._log("approved", {
-            "decision_id": decision_id,
-            "status": EnforcementState.READY_FOR_ACTION,
-            "event": "approved",
-            "risk_level": risk_level,
-            "human_approval": "NO HUMAN APPROVAL REQUIRED",
-        })
+        self._log("approved", {"decision_id": decision_id, "status": EnforcementState.READY_FOR_ACTION, "event": "approved", "risk_level": risk_level, "human_approval": "NO HUMAN APPROVAL REQUIRED"})
         return result

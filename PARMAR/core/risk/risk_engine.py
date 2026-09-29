@@ -2,31 +2,34 @@
 
 from __future__ import annotations
 
+from PARMAR.core.language_support import contains_any_keyword, normalize_text
+
 
 class RiskEngine:
     """Analyze a proposal for risk exposure across multiple categories."""
 
     def evaluate(self, request_text: str) -> dict:
-        text = (request_text or "").lower().strip()
+        text = normalize_text(request_text)
         categories = {
             "privacy": [
                 "personal data", "private data", "medical", "salary", "payroll", "employee data",
                 "customer contacts", "contacts", "messages", "photos", "location", "health records",
                 "profile data", "records", "ssn", "credit card", "export", "leak", "vendor",
-                "third-party", "contractor", "external sharing", "shared data", "private messages"
+                "third-party", "contractor", "external sharing", "shared data", "private messages",
+                "मेडिकल", "स्वास्थ्य", "कर्मचारी", "डेटा", "संपर्क", "फोटो", "स्थान", "संदेश", "तृतीय पक्ष"
             ],
-            "safety": ["harm", "weapon", "injury", "danger", "unsafe", "exploit", "attack", "disable safety systems", "safety systems"],
-            "autonomy": ["override", "disable user", "remove choice", "decision-making rights", "bypass approval", "without consent", "without explicit approval", "force decisions"],
-            "financial": ["money", "budget", "purchase", "loan", "invest", "transfer funds", "amount of company money", "expense", "procurement", "vendor payment", "large payment"],
-            "destructive": ["delete", "destroy", "wipe", "erase", "disable backups", "nuke", "shutdown", "delete the production database", "disable all safety systems"],
-            "system": ["admin", "root", "reconfigure", "exfiltrate", "take control", "system override", "emergency root access", "vendor tool"],
+            "safety": ["harm", "weapon", "injury", "danger", "unsafe", "exploit", "attack", "disable safety systems", "safety systems", "सुरक्षा", "खतरा"],
+            "autonomy": ["override", "disable user", "remove choice", "decision-making rights", "bypass approval", "without consent", "without explicit approval", "force decisions", "स्वतंत्रता", "स्वीकृति", "अनुमति"],
+            "financial": ["money", "budget", "purchase", "loan", "invest", "transfer funds", "amount of company money", "expense", "procurement", "vendor payment", "large payment", "धन", "पेमेंट", "वित्त"],
+            "destructive": ["delete", "destroy", "wipe", "erase", "disable backups", "nuke", "shutdown", "delete the production database", "disable all safety systems", "डिलीट", "मिटाना", "हटाना"],
+            "system": ["admin", "root", "reconfigure", "exfiltrate", "take control", "system override", "emergency root access", "vendor tool", "सिस्टम", "नियंत्रण"],
         }
 
         reasons = []
         risk_flags = {}
 
         for category, keywords in categories.items():
-            match = any(keyword in text for keyword in keywords)
+            match = contains_any_keyword(text, keywords)
             risk_flags[category] = match
             if match:
                 reasons.append(f"{category} risk detected: proposal includes indicators such as {', '.join(keywords[:3])}.")

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PARMAR | Human-Controlled AI Governance</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body data-state="IDLE" data-active-section="home" data-theme="midnight" data-animation="normal" data-voki-state="IDLE">
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="PARMAR workspace">
+        <a class="brand-block sidebar-brand" href="#section-home" aria-label="PARMAR home">
+          <span class="brand-mark" aria-hidden="true"><span>P</span></span>
+          <span class="brand-copy">
+            <span class="brand-title">PARMAR</span>
+            <span class="brand-subtitle">Human-guided intelligence</span>
+          </span>
+        </a>
+
+        <div class="nav-label">Workspace</div>
+        <nav class="nav" aria-label="Main navigation">
+          <button class="nav-item active" data-section="home"><span class="nav-mark" aria-hidden="true">01</span><span>Overview</span></button>
+          <button class="nav-item" data-section="chat"><span class="nav-mark" aria-hidden="true">02</span><span>Conversation</span></button>
+          <button class="nav-item" data-section="safety"><span class="nav-mark" aria-hidden="true">03</span><span>Safety review</span></button>
+          <button class="nav-item" data-section="simulator"><span class="nav-mark" aria-hidden="true">04</span><span>Scenarios</span></button>
+          <button class="nav-item" data-section="phone"><span class="nav-mark" aria-hidden="true">05</span><span>Phone awareness</span></button>
+          <button class="nav-item" data-section="audit"><span class="nav-mark" aria-hidden="true">06</span><span>Activity</span></button>
+        </nav>
+
+        <div class="sidebar-lower">
+          <div class="sidebar-section-label">Recent sessions</div>
+          <ul class="history-list" id="history-list"></ul>
+          <button class="settings-link nav-item" data-section="settings"><span class="nav-mark" aria-hidden="true">07</span><span>Preferences</span></button>
+          <div class="authority-note"><span class="authority-dot"></span><span>Human authority<br /><strong>Always retained</strong></span></div>
+        </div>
+      </aside>
+
+      <div class="main-panel">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Open navigation" aria-expanded="false"><span></span><span></span></button>
+            <div class="mobile-brand"><span class="brand-title">PARMAR</span><span class="brand-subtitle">Governance interface</span></div>
+            <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Overview</span></div>
+          </div>
+          <div class="header-controls">
+            <div class="status-pill status-safe" id="status-pill" aria-live="polite">READY</div>
+            <div class="human-pill"><span class="human-mark" aria-hidden="true">+</span> Human in control</div>
+            <button class="new-session-btn" id="new-session-btn"><span aria-hidden="true">+</span> New session</button>
+          </div>
+        </header>
+
+        <main class="workspace">
+          <section class="section-view active" data-section="home" id="section-home" aria-labelledby="home-title">
+            <div class="home-intro">
+              <div class="eyebrow"><span class="eyebrow-line"></span> Decision support, with you</div>
+              <h1 id="home-title">A clearer way<br />to <em>think it through.</em></h1>
+              <p>Bring a decision, proposal, or question. PARMAR will surface the relevant risks and keep the final say with you.</p>
+            </div>
+
+            <section class="home-presence" aria-label="PARMAR VOKI status">
+              <div class="presence-backdrop" aria-hidden="true"><span></span><span></span><span></span></div>
+              <div class="presence-status"><span class="mini-dot" id="mini-dot"></span><span id="voki-state" aria-live="polite">IDLE</span></div>
+              <div class="voki-stage" aria-live="polite">
+                <div class="halo halo-one"></div>
+                <div class="halo halo-two"></div>
+                <div class="halo halo-three"></div>
+                <button class="parmar-core idle" id="parmar-core" type="button" aria-label="VOKI, PARMAR's visual assistant. Activate for a subtle response.">
+                  <span class="core-ring ring-one" aria-hidden="true"></span>
+                  <span class="core-ring ring-two" aria-hidden="true"></span>
+                  <span class="core-ring ring-three" aria-hidden="true"></span>
+                  <span class="presence-form" aria-hidden="true"><span class="presence-head"></span><span class="presence-shoulders"></span></span>
+                  <span class="core-center" aria-hidden="true"><span>PARMAR</span></span>
+                  <span class="voki-face" aria-hidden="true"><span class="eye left"></span><span class="eye right"></span><span class="mouth"></span></span>
+                </button>
+              </div>
+              <div class="presence-caption"><span class="caption-kicker">PARMAR VOKI</span><span class="caption-divider"></span><span>Present, not in control</span></div>
+            </section>
+
+            <section class="home-interaction" aria-label="Start a PARMAR review">
+              <div class="interaction-heading">
+                <div>
+                  <span class="eyebrow">Your next decision</span>
+                  <h2 id="system-state">READY</h2>
+                </div>
+                <label class="language-control" for="language-select"><span>Language</span>
+                  <select id="language-select" class="language-select" aria-label="Request language">
+                    <option value="en">English</option><option value="hi">Hindi</option><option value="mix">Hinglish</option>
+                  </select>
+                </label>
+              </div>
+              <p id="status-message" class="status-message">What would you like to look at together?</p>
+              <div class="input-row">
+                <label class="sr-only" for="request-input">Describe a decision or proposal for PARMAR to review</label>
+                <textarea id="request-input" rows="3" placeholder="Tell PARMAR what you’re considering…"></textarea>
+                <button id="analyze-btn" class="primary-btn" type="button"><span>Review request</span><span class="button-arrow" aria-hidden="true">↗</span></button>
+              </div>
+              <div class="interaction-footnote"><span>Safety review only</span><span class="footnote-divider"></span><span>No action is taken on your behalf</span><button class="wake-btn" id="wake-btn" type="button">About VOKI</button></div>
+            </section>
+
+            <section class="home-summary" aria-label="Current review context">
+              <div class="summary-item"><span class="summary-icon risk-icon" aria-hidden="true"></span><span class="summary-label">Risk</span><strong id="risk-level">—</strong></div>
+              <div class="summary-item"><span class="summary-icon approval-icon" aria-hidden="true"></span><span class="summary-label">Human review</span><strong id="approval-state">Not assessed</strong></div>
+              <div class="summary-item"><span class="summary-icon outcome-icon" aria-hidden="true"></span><span class="summary-label">Outcome</span><strong id="outcome-state">Ready</strong></div>
+              <div class="summary-item"><span class="summary-icon provider-icon" aria-hidden="true"></span><span class="summary-label">Provider</span><strong id="provider-status">Local demo</strong></div>
+            </section>
+
+            <section class="quick-review" aria-label="Quick scenario">
+              <div><span class="eyebrow">Try a scenario</span><p>Explore how PARMAR handles a sample decision.</p></div>
+              <div class="quick-review-control"><select id="simulator-select" class="language-select" aria-label="Choose a scenario"></select><button class="text-button" id="run-scenario" type="button">Review <span aria-hidden="true">↗</span></button></div>
+              <div id="scenario-list" class="scenario-list" aria-hidden="true"></div>
+            </section>
+            <section class="home-activity" aria-label="Recent activity"><div class="section-title-row"><h2>Recent activity</h2><button class="text-button" type="button" data-section="audit">View all <span aria-hidden="true">↗</span></button></div><div id="audit-list" class="audit-list"></div></section>
+          </section>
+
+          <section class="section-view" data-section="chat" id="section-chat" aria-labelledby="chat-title">
+            <div class="view-heading"><div><span class="eyebrow">A considered conversation</span><h1 id="chat-title">Talk it through.</h1></div><p>Ask for perspective. PARMAR reviews requests through its existing safety pipeline before responding.</p></div>
+            <section class="conversation-surface" aria-label="PARMAR conversation">
+              <div class="conversation-topline"><span class="presence-small" aria-hidden="true">P</span><span>PARMAR</span><span class="conversation-divider"></span><span>Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
+              <div class="chat-thread" id="chat-thread" aria-live="polite" aria-relevant="additions"></div>
+              <div class="chat-composer">
+                <label class="sr-only" for="chat-input">Message PARMAR</label>
+                <textarea id="chat-input" rows="2" placeholder="What would you like to think through?"></textarea>
+                <button class="primary-btn send-button" id="chat-submit" type="button" aria-label="Send message"><span>Send</span><span class="button-arrow" aria-hidden="true">↗</span></button>
+              </div>
+              <div class="composer-note">Enter to send <span>·</span> Shift + Enter for a new line</div>
+            </section>
+          </section>
+
+          <section class="section-view" data-section="safety" id="section-safety" aria-labelledby="safety-title">
+            <div class="view-heading"><div><span class="eyebrow">Evidence before outcome</span><h1 id="safety-title">Safety review</h1></div><p>Review the signals and reasoning returned by PARMAR’s existing decision pipeline.</p></div>
+            <section class="review-ribbon" aria-label="Review pipeline"><div class="section-title-row"><h2>Pipeline</h2><span>Backend-reported stages</span></div><div class="pipeline" id="pipeline"></div></section>
+            <div class="review-grid">
+              <section class="review-section"><div class="section-title-row"><h2>Risk assessment</h2><span>Current request</span></div><div class="stat-grid" id="risk-center"></div></section>
+              <section class="review-section"><div class="section-title-row"><h2>Reasoning</h2><span>Decision context</span></div><ul class="bullet-list" id="explanation-list"></ul></section>
+            </div>
+            <section class="approval-panel" aria-labelledby="approval-title">
+              <div class="section-title-row"><div><span class="eyebrow">Human authority</span><h2 id="approval-title">Your decision remains yours.</h2></div><span class="approval-state-tag" id="approval-state-tag">No decision pending</span></div>
+              <div class="approval-box" id="approval-box">
+                <div class="approval-item"><span>Proposal</span><strong id="approval-action">No active proposal</strong></div>
+                <div class="approval-item"><span>Risk level</span><strong id="approval-risk">—</strong></div>
+                <div class="approval-item"><span>Conflict signals</span><strong id="approval-conflicts">No explicit conflict detected.</strong></div>
+                <div class="approval-item"><span>Safety checks</span><strong id="approval-safety">Awaiting review.</strong></div>
+                <div class="approval-item approval-alternative"><span>Safer alternative</span><strong id="approval-alternative">A recommendation will appear when available.</strong></div>
+                <div class="approval-actions" role="group" aria-label="Human approval decision">
+                  <button class="approve-btn" type="button" data-decision="APPROVE">Approve</button>
+                  <button class="reject-btn" type="button" data-decision="REJECT">Reject</button>
+                  <button class="info-btn" type="button" data-decision="INFO">More information</button>
+                  <button class="alt-btn" type="button" data-decision="ALTERNATIVE">Use safer alternative</button>
+                </div>
+              </div>
+              <p class="human-assurance">PARMAR can explain and recommend. Only you decide what happens next.</p>
+            </section>
+          </section>
+
+          <section class="section-view" data-section="simulator" id="section-simulator" aria-labelledby="simulator-title">
+            <div class="view-heading"><div><span class="eyebrow">Practice without consequence</span><h1 id="simulator-title">Scenario room</h1></div><p>Explore synthetic proposals through the existing PARMAR review flow. No real-world action is performed.</p></div>
+            <section class="scenario-surface"><div class="scenario-index"><span>SIMULATION</span><span>LOCAL · NO ACTION</span></div><label for="simulator-select-secondary">Choose a scenario</label><select id="simulator-select-secondary" class="language-select"></select><button class="primary-btn" id="run-scenario-secondary" type="button"><span>Run safety review</span><span class="button-arrow" aria-hidden="true">↗</span></button><button class="text-button" id="load-demo" type="button">Load a sample on the overview</button></section>
+          </section>
+
+          <section class="section-view" data-section="phone" id="section-phone" aria-labelledby="phone-title">
+            <div class="view-heading"><div><span class="eyebrow">Simulated and permission-gated</span><h1 id="phone-title">Phone awareness</h1></div><p>Local demonstrations only. PARMAR does not access real device data.</p></div>
+            <section class="phone-surface"><div class="phone-status-block"><span class="permission-mark" aria-hidden="true">P</span><div><span class="eyebrow">Permission status</span><h2 id="phone-status-label">Permission-gated</h2><p id="phone-policy-label">Only simulated, privacy-safe events are allowed.</p></div></div><div class="phone-box" id="phone-box" aria-live="polite"></div><label class="toggle-row"><span><strong>Phone awareness permission</strong><small>Controls the local simulated event flow.</small></span><input id="phone-permission-toggle" type="checkbox" /></label><div class="simulator-actions"><button class="secondary-btn" id="simulate-phone-safe" type="button">Simulate battery status</button><button class="secondary-btn" id="simulate-phone-risk" type="button">Simulate sensitive access</button></div><p class="safety-note">No camera, microphone, location, or personal device access is used by this demo.</p></section>
+          </section>
+
+          <section class="section-view" data-section="audit" id="section-audit" aria-labelledby="activity-title">
+            <div class="view-heading"><div><span class="eyebrow">Local interface activity</span><h1 id="activity-title">Activity</h1></div><p>A compact view of recent interface review events.</p></div>
+            <section class="activity-surface"><div class="section-title-row"><h2>Recent activity</h2><span>Stored in this browser</span></div><div class="audit-list" id="audit-list-secondary" aria-live="polite"></div></section>
+          </section>
+
+          <section class="section-view" data-section="settings" id="section-settings" aria-labelledby="settings-title">
+            <div class="view-heading"><div><span class="eyebrow">Your interface preferences</span><h1 id="settings-title">Preferences</h1></div><p>Adjust presentation and language. These settings do not alter PARMAR’s safety decisions.</p></div>
+            <section class="settings-grid">
+              <label class="setting-card"><span>Language</span><select id="settings-language" class="language-select"><option value="en">English</option><option value="hi">Hindi</option><option value="mix">Hinglish</option></select></label>
+              <label class="setting-card"><span>Appearance</span><select id="settings-theme" class="language-select"><option value="midnight">Midnight</option><option value="aurora">Aurora</option><option value="violet">Violet</option></select></label>
+              <label class="setting-card"><span>Motion intensity</span><select id="settings-animation" class="language-select"><option value="normal">Normal</option><option value="reduced">Reduced</option></select></label>
+              <label class="setting-card toggle-setting"><span><strong>Reduced motion</strong><small>Reduce movement and transitions.</small></span><input id="settings-reduced-motion" type="checkbox" /></label>
+              <label class="setting-card toggle-setting"><span><strong>Phone awareness permission</strong><small>Local simulated events only.</small></span><input id="settings-phone-toggle" type="checkbox" /></label>
+              <div class="setting-card"><span>Response provider</span><strong id="settings-provider">local-demo</strong></div>
+            </section>
+          </section>
+        </main>
+        <footer class="workspace-footer"><span>PARMAR</span><span>Safety review, never automatic authority.</span><span id="outcome-footer">Human-led</span></footer>
+      </div>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
