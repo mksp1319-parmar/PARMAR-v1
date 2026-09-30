@@ -17,7 +17,30 @@ class DecisionLogManager:
 
     def _sanitize_record(self, record: dict) -> dict:
         safe = dict(record)
-        for field in ["request_text", "customer_name", "email", "phone", "ssn", "medical_record", "messages", "photos", "contacts", "location"]:
+        for field in [
+            "request_text",
+            "customer_name",
+            "email",
+            "phone",
+            "ssn",
+            "medical_record",
+            "messages",
+            "photos",
+            "contacts",
+            "location",
+            "password",
+            "passphrase",
+            "token",
+            "secret",
+            "api_key",
+            "api-key",
+            "authorization",
+            "credentials",
+            "private_key",
+            "session_key",
+            "access_token",
+            "refresh_token",
+        ]:
             safe.pop(field, None)
         return safe
 

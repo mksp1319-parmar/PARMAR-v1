@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from PARMAR.core.language_support import contains_any_keyword, normalize_text
+
 
 class EmergencyGate:
     """A mandatory safety gate that prevents dangerous actions from being executed automatically."""
 
     def evaluate(self, request_text: str, risk_level: str) -> dict:
-        text = (request_text or "").lower()
+        text = normalize_text(request_text)
         critical_indicators = [
             "delete a production database", "destroy backups", "wipe all systems",
-            "disable safety systems", "take control of critical infrastructure"
+            "disable safety systems", "take control of critical infrastructure",
+            "प्रोडक्शन डेटाबेस", "सुरक्षा प्रणाली", "नियंत्रण"
         ]
-        is_high_risk = risk_level in {"high", "critical"} or any(keyword in text for keyword in critical_indicators)
+        is_high_risk = risk_level in {"high", "critical"} or contains_any_keyword(text, critical_indicators)
 
         if is_high_risk:
             return {
@@ -31,16 +34,16 @@ class EmergencyGate:
 
     def evaluate_phone_event(self, event: dict) -> dict:
         """Stop high-risk phone awareness workflows before any real-world action occurs."""
-        event_type = str(event.get("event_type", "unknown_phone_event")).lower()
+        event_type = normalize_text(event.get("event_type", "unknown_phone_event"))
         risk_level = str(event.get("risk_level", "LOW")).upper()
         permission_granted = bool(event.get("permission_granted", False))
         sensitive_data = event.get("requested_data") or []
-        sensitive_keywords = {"microphone", "camera", "messages", "contacts", "location", "photos", "call_log", "passwords"}
+        sensitive_keywords = {"microphone", "camera", "messages", "contacts", "location", "photos", "call_log", "passwords", "माइक्रोफोन", "कैमरा", "संदेश", "संपर्क", "स्थान", "फोटो"}
 
         if risk_level in {"HIGH", "CRITICAL"} or event_type in {
             "record_microphone", "record_camera", "read_private_messages", "read_contacts",
-            "track_location", "access_photos"
-        } or any(item.lower() in sensitive_keywords for item in sensitive_data):
+            "track_location", "access_photos", "माइक्रोफोन", "कैमरा", "संदेश", "संपर्क", "स्थान", "फोटो"
+        } or any(normalize_text(str(item)) in sensitive_keywords for item in sensitive_data):
             if not permission_granted:
                 return {
                     "allow_execution": False,

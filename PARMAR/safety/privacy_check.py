@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+from PARMAR.core.language_support import contains_any_keyword, normalize_text
+
 
 class PrivacyCheck:
     """Block proposals that expose private or sensitive data without explicit consent."""
 
     def evaluate(self, request_text: str) -> dict:
-        text = (request_text or "").lower()
+        text = normalize_text(request_text)
         privacy_keywords = [
             "medical records", "social security", "bank account", "personal data",
             "customer data", "private employee data", "sensitive information",
-            "exfiltrate", "share with vendor", "third-party"
+            "exfiltrate", "share with vendor", "third-party",
+            "मेडिकल रिकॉर्ड", "स्वास्थ्य", "गोपनीय", "साझा", "तृतीय पक्ष", "डेटा", "कर्मचारी"
         ]
-        serious = any(keyword in text for keyword in privacy_keywords)
+        serious = contains_any_keyword(text, privacy_keywords)
         if serious:
             return {
                 "allow_execution": False,

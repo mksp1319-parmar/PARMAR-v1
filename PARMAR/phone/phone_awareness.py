@@ -267,6 +267,16 @@ class PhoneAwarenessModule:
         })
         return result
 
+    def get_status(self) -> dict[str, Any]:
+        enabled = self.has_permission()
+        return {
+            "permission": "ON" if enabled else "OFF",
+            "enabled": enabled,
+            "current_event": "battery_low" if enabled else "permission_disabled",
+            "policy_decision": "ALLOW_LOCAL_SIMULATED_EVENT" if enabled else "BLOCKED_UNTIL_PERMISSION_GRANTED",
+            "message": "Local simulated phone awareness is enabled and remains separate from real device access.",
+        }
+
     def demo_phone_event(self) -> dict[str, Any]:
         demo = {
             "event_type": "battery_low",

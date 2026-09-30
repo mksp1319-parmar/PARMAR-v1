@@ -13,8 +13,9 @@ from PARMAR.core.risk.risk_engine import RiskEngine
 from PARMAR.phone.phone_awareness import PhoneAwarenessModule
 from PARMAR.safety.autonomy_check import AutonomyCheck
 from PARMAR.safety.emergency_gate import EmergencyGate
-from PARMAR.safety.enforcement_gate import ActionBoundary, CentralEnforcementGate
+from PARMAR.safety.enforcement_gate import ActionBoundary, CentralEnforcementGate, EnforcementState
 from PARMAR.safety.privacy_check import PrivacyCheck
+from PARMAR.state import LifecycleState, LifecycleStateMachine, StateSnapshot
 
 
 class TerminalDashboard:
@@ -24,6 +25,16 @@ class TerminalDashboard:
         self.logger = DecisionLogManager()
         self.phone_module = PhoneAwarenessModule()
         self.phone_awareness_enabled = True
+        self.state_machine = LifecycleStateMachine()
+        self._lifecycle_snapshot = self.state_machine.snapshot
+
+    @property
+    def lifecycle_snapshot(self) -> StateSnapshot:
+        """Return the current request state or its last terminal snapshot after reset."""
+        current_snapshot = self.state_machine.snapshot
+        if current_snapshot.current_state is not LifecycleState.IDLE:
+            return current_snapshot
+        return self._lifecycle_snapshot
 
     def set_phone_awareness_enabled(self, enabled: bool) -> bool:
         self.phone_awareness_enabled = bool(enabled)
@@ -74,11 +85,20 @@ class TerminalDashboard:
         return "BLOCKED"
 
     def run_pipeline(self, request_text: str, human_interests: list[str] | None = None, rules: list[str] | None = None) -> dict:
+        self.state_machine.transition(LifecycleState.LISTENING, reset_context=True)
+        self.state_machine.transition(LifecycleState.THINKING)
+        self.state_machine.transition(LifecycleState.ANALYZING)
+
         intent = IntentEngine().analyze_request(request_text)
         risk = RiskEngine().evaluate(request_text)
         conflict = ConflictDetector().detect(request_text, human_interests or [], rules or [])
         mediation = MediationEngine().generate_alternatives(conflict["reasons"], risk["risk_level"], intent["intent"])
 
+        self.state_machine.transition(
+            LifecycleState.RISK_CHECK,
+            risk_level=risk["risk_level"],
+            intent=intent["intent"],
+        )
         privacy = PrivacyCheck().evaluate(request_text)
         autonomy = AutonomyCheck().evaluate(request_text)
         emergency = EmergencyGate().evaluate(request_text, risk["risk_level"])
@@ -137,7 +157,43 @@ class TerminalDashboard:
             "safety_status": emergency["status"],
             "approval_status": decision["human_approval_status"],
         })
+
+        self._apply_enforcement_lifecycle(summary["enforcement"], response_completed=True)
+        self._return_terminal_lifecycle_to_idle()
         return summary
+
+    def _apply_enforcement_lifecycle(self, enforcement_result: dict, *, response_completed: bool) -> None:
+        if self.state_machine.snapshot.current_state not in {
+            LifecycleState.RISK_CHECK,
+            LifecycleState.WAITING_FOR_HUMAN,
+        }:
+            return
+
+        status = enforcement_result.get("status") or enforcement_result.get("state")
+        if status == EnforcementState.HUMAN_APPROVAL_REQUIRED and self.state_machine.snapshot.current_state is LifecycleState.WAITING_FOR_HUMAN:
+            return
+        if status not in {
+            EnforcementState.BLOCKED,
+            EnforcementState.REJECTED,
+            EnforcementState.HUMAN_APPROVAL_REQUIRED,
+            EnforcementState.READY_FOR_ACTION,
+            EnforcementState.APPROVED,
+        }:
+            return
+        if status in {EnforcementState.READY_FOR_ACTION, EnforcementState.APPROVED} and enforcement_result.get("execution_allowed") is not True:
+            return
+
+        self._lifecycle_snapshot = self.state_machine.apply_enforcement_result(
+            enforcement_result,
+            response_completed=response_completed,
+            risk_level=self.state_machine.snapshot.risk_level,
+            intent=self.state_machine.snapshot.intent,
+        )
+
+    def _return_terminal_lifecycle_to_idle(self) -> None:
+        if self.state_machine.snapshot.current_state in {LifecycleState.SAFE_RESPONSE, LifecycleState.BLOCKED}:
+            self._lifecycle_snapshot = self.state_machine.snapshot
+            self.state_machine.transition(LifecycleState.IDLE)
 
     def display_permission_status(self) -> None:
         state = "ENABLED" if self.phone_awareness_enabled else "DISABLED"
@@ -206,12 +262,16 @@ class TerminalDashboard:
             "decision": human_status,
             "reason": reason or "No reason provided.",
         })
-        return {
+        outcome = {
             "human_decision": human_status,
             "decision": result["decision"],
             "enforcement": result["enforcement"],
             "action_boundary": result["action_boundary"],
         }
+        if self.state_machine.snapshot.current_state is LifecycleState.WAITING_FOR_HUMAN:
+            self._apply_enforcement_lifecycle(outcome["enforcement"], response_completed=True)
+            self._return_terminal_lifecycle_to_idle()
+        return outcome
 
     def run_phone_demo(self) -> dict:
         if not self.phone_awareness_enabled:

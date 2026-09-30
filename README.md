@@ -1,63 +1,91 @@
 # PARMAR V1
 
-PARMAR — Predictive AI-Risk Mediation & Autonomous Reasoning
+PARMAR — Predictive AI–Risk Mediation & Autonomous Reasoning
 
-This workspace contains the working PARMAR V1 project under the [PARMAR](PARMAR) directory.
+PARMAR V1 is a human-controlled AI safety and guidance system. It is designed to evaluate requests, explain risk, enforce independent safety checks, and require explicit human approval before any consequential action is allowed to proceed.
 
-## What is included
+## Architecture
 
-- Human-centered AI safety pipeline
-- Intent analysis and risk evaluation
-- Conflict detection and mediation
-- Independent privacy, autonomy, and emergency safety gates
-- Central runtime enforcement gate that enforces approval as a runtime state
-- Structured decision records requiring human approval
-- Terminal interface and scenario simulation
-- Privacy-safe phone awareness module for simulated events only
-- Test suite covering the major modules and phone-awareness policy
+The system separates responsibilities so the front-end, safety engine, simulator, and VOKI layer each do different jobs:
 
-## Runtime enforcement architecture
+- Front-end: responsive governance dashboard and local interface
+- Safety engine: privacy, autonomy, emergency, and enforcement decisions
+- Simulation layer: local scenario tests without real-world effects
+- VOKI layer: presentation/state architecture only
+- Chat architecture: provider-agnostic, local-demo first, with safety middleware always enforced
 
-The system now includes a dedicated runtime enforcement layer before any action boundary is considered. The enforcement gate receives the complete PARMAR decision and checks all required conditions together:
+## Human-controlled safety model
 
-- risk level
-- privacy result
-- autonomy result
-- emergency gate result
-- required human approval
-- current human approval state
+The core flow remains:
 
-This gate does not execute an action. It only decides whether execution would be permitted and returns a structured result such as:
+HUMAN OVERSIGHT -> PARMAR -> AI / RULES / SIMULATOR -> INDEPENDENT SAFETY CHECKS -> HUMAN DECISION -> FINAL AUTHORIZATION
 
-```python
-{
-    "status": "READY_FOR_ACTION",
-    "state": "APPROVED",
-    "execution_allowed": True,
-    "human_approval_required": True,
-    "human_approval": "APPROVED",
-    "reason": "The action has explicit human approval and passed the safety review gate.",
-    "decision_id": "..."
-}
-```
+This means PARMAR does not act as an unrestricted autonomous agent. It explains, evaluates, blocks, and requires explicit approval.
 
-The enforcement gate is separate from the dashboard UI. Even if the UI is bypassed or a caller tries to skip the approval flow, the enforcement gate still evaluates the runtime decision and blocks progression unless the approval requirements are met.
+## UI and VOKI
 
-The action boundary is deliberately constrained to a permission check only. It does not execute a real-world action or access any actual device data.
+The interface is a serious governance dashboard with:
 
-## Phone awareness module
+- futuristic dark styling
+- animated PARMAR core
+- live pipeline
+- risk center
+- approval center
+- explainability panel
+- scenario simulator
+- audit panel
+- phone-awareness simulation
+- language-select architecture for English, Hindi, and Hinglish
 
-The new phone-awareness layer is designed for privacy-safe, local-only awareness signals. It does not access real device APIs, password stores, private messages, photos, contacts, microphone, camera, or location data unless a future feature explicitly adds it and the user grants permission.
+VOKI is visual/state-only and never controls authorization or execution.
 
-Permissions are explicit and revocable. PARMAR never silently takes a consequential action on behalf of the user.
+## Phone awareness
 
-## Run the project
+Phone awareness is strictly simulated and local. It does not access real device microphones, cameras, contacts, location, photos, or messages. It only works with fake or simulated data and respects permission state.
+
+## Safety enforcement
+
+The enforcement gate is fail-closed:
+
+- missing safety input blocks execution
+- malformed safety results block execution
+- missing approval blocks execution
+- unsafe actions are not treated as safe
+
+This is enforced before any action boundary is considered.
+
+## Local run
 
 ```bash
 cd /workspaces/PARMAR-v1
-PYTHONPATH=/workspaces/PARMAR-v1 python -m pytest PARMAR/tests/test_pipeline.py PARMAR/tests/test_phone_awareness.py
-PYTHONPATH=/workspaces/PARMAR-v1 python PARMAR/main.py
+PYTHONPATH=/workspaces/PARMAR-v1 python PARMAR/main.py --ui
 PYTHONPATH=/workspaces/PARMAR-v1 python PARMAR/main.py --demo-phone
+PYTHONPATH=/workspaces/PARMAR-v1 pytest -q PARMAR/tests
 ```
 
-The app will prompt for a request and show the complete PARMAR evaluation flow with mandatory human approval for riskier actions.
+## Limitations
+
+- no real-world action execution
+- no live surveillance access
+- no unrestricted network requests or shell execution
+- no credential storage
+- no autonomous device control
+
+## What is real vs simulated
+
+Real:
+- intent analysis
+- risk evaluation
+- conflict detection
+- mediation
+- privacy/autonomy/emergency checks
+- enforcement gate
+- local dashboard
+- audit logging
+
+Simulated:
+- phone awareness events
+- local AI demo provider
+- UI scenarios
+- VOKI presentation state
+

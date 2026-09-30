@@ -87,3 +87,42 @@ def test_dashboard_approval_flow_reject(tmp_path):
     outcome = dashboard.handle_human_decision(result, "reject", "human rejected")
     assert outcome["human_decision"] == "REJECTED"
     assert "REJECTED" in outcome["decision"]["approval_message"]
+
+
+def test_fail_closed_when_safety_input_missing():
+    from PARMAR.safety.enforcement_gate import CentralEnforcementGate
+
+    result = CentralEnforcementGate().evaluate_decision(
+        {"risk": {"risk_level": "high"}, "decision": {"requires_human_approval": True}, "requires_human_approval": True},
+        privacy_result=None,
+        autonomy_result=None,
+        emergency_result=None,
+        human_approval=None,
+    )
+    assert result["execution_allowed"] is False
+    assert result["status"] in {"BLOCKED", "HUMAN_APPROVAL_REQUIRED"}
+
+
+def test_fail_closed_when_safety_result_malformed():
+    from PARMAR.safety.enforcement_gate import CentralEnforcementGate
+
+    malformed = {"allow_execution": "yes"}
+    result = CentralEnforcementGate().evaluate_decision(
+        {"risk": {"risk_level": "critical"}, "decision": {"requires_human_approval": True}, "requires_human_approval": True},
+        privacy_result=malformed,
+        autonomy_result={"allow_execution": True},
+        emergency_result={"allow_execution": True},
+        human_approval="APPROVED",
+    )
+    assert result["execution_allowed"] is False
+    assert result["status"] in {"BLOCKED", "HUMAN_APPROVAL_REQUIRED"}
+
+
+def test_language_choice_does_not_change_safety_decision():
+    from PARMAR.interface.ui_adapter import PARMARUIAdapter
+
+    english = PARMARUIAdapter.analyze_request("Share employee medical records with a third-party contractor")
+    hindi = PARMARUIAdapter.analyze_request("कर्मचारी की मेडिकल रिकॉर्ड तीसरे पक्ष के ठेकेदार को साझा करें")
+    assert english["status"] == hindi["status"]
+    assert english["human_approval_required"] is True
+    assert hindi["human_approval_required"] is True

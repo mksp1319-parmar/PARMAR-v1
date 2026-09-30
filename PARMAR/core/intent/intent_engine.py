@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from PARMAR.core.language_support import contains_any_keyword, normalize_text
+
 
 class IntentEngine:
     """Classify the basic intent of a human or AI request."""
@@ -16,29 +18,32 @@ class IntentEngine:
                 "summary": "No request provided.",
             }
 
-        normalized = text.lower()
+        normalized = normalize_text(text)
 
-        if any(keyword in normalized for keyword in [
+        if contains_any_keyword(normalized, [
             "send", "share", "transfer", "vendor", "third-party", "customer data",
-            "personal data", "medical records", "export data", "sensitive information"
+            "personal data", "medical records", "export data", "sensitive information",
+            "साझा", "भेजना", "मेडिकल रिकॉर्ड", "तृतीय पक्ष", "जानकारी"
         ]):
             intent = "data_sharing"
-        elif any(keyword in normalized for keyword in [
+        elif contains_any_keyword(normalized, [
             "delete", "destroy", "wipe", "erase", "disable backups", "remove database",
-            "kill process", "delete system"
+            "kill process", "delete system", "डिलीट", "मिटाना", "हटाना"
         ]):
             intent = "destructive_action"
-        elif any(keyword in normalized for keyword in [
+        elif contains_any_keyword(normalized, [
             "buy", "purchase", "loan", "transfer money", "invest", "financial", "expense",
-            "budget", "pay out"
+            "budget", "pay out", "धन", "पेमेंट"
         ]):
             intent = "financial_action"
-        elif any(keyword in normalized for keyword in [
-            "disable", "override", "bypass", "remove consent", "take control", "decision-making rights"
+        elif contains_any_keyword(normalized, [
+            "disable", "override", "bypass", "remove consent", "take control", "decision-making rights",
+            "अक्षम", "नियंत्रण", "स्वीकृति" 
         ]):
             intent = "autonomy_violation"
-        elif any(keyword in normalized for keyword in [
-            "leak", "exfiltrate", "collect", "spy", "infiltrate", "unapproved access"
+        elif contains_any_keyword(normalized, [
+            "leak", "exfiltrate", "collect", "spy", "infiltrate", "unapproved access",
+            "लीक", "गोपनीय", "अनुमति" 
         ]):
             intent = "privacy_violation"
         else:

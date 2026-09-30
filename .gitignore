@@ -60,5 +60,7 @@ site/
 
 # Local runtime artifacts
 logs/
+PARMAR/audit/decision_log.jsonl
+test-results/
 *.sqlite3
 *.db

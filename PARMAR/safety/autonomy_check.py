@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+from PARMAR.core.language_support import contains_any_keyword, normalize_text
+
 
 class AutonomyCheck:
     """Prevent proposals that override human agency or independent decision-making."""
 
     def evaluate(self, request_text: str) -> dict:
-        text = (request_text or "").lower()
+        text = normalize_text(request_text)
         autonomy_keywords = [
             "disable user choice", "disable a user's decision-making rights", "override",
             "bypass approval", "remove decision-making rights", "decision-making rights",
-            "automatic consent", "take control", "without permission", "disable"
+            "automatic consent", "take control", "without permission", "disable",
+            "स्वतंत्रता", "स्वीकृति", "अनुमति", "नियंत्रण", "अक्षम"
         ]
-        if any(keyword in text for keyword in autonomy_keywords):
+        if contains_any_keyword(text, autonomy_keywords):
             return {
                 "allow_execution": False,
                 "status": "BLOCKED",
