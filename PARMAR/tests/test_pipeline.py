@@ -1,9 +1,12 @@
+import pytest
+
 from PARMAR.core.conflict.conflict_detector import ConflictDetector
 from PARMAR.core.decision.decision_engine import DecisionEngine
 from PARMAR.core.intent.intent_engine import IntentEngine
 from PARMAR.core.mediation.mediation_engine import MediationEngine
 from PARMAR.core.risk.risk_engine import RiskEngine
 from PARMAR.interface.dashboard import TerminalDashboard
+from PARMAR.interface.ui_adapter import PARMARUIAdapter
 from PARMAR.safety.autonomy_check import AutonomyCheck
 from PARMAR.safety.emergency_gate import EmergencyGate
 from PARMAR.safety.privacy_check import PrivacyCheck
@@ -19,6 +22,34 @@ def test_risk_engine_assesses_risk_and_reasons():
     result = RiskEngine().evaluate("Delete the production database and exfiltrate customer records")
     assert result["risk_level"] in {"medium", "high", "critical"}
     assert result["reasons"]
+
+
+def test_informational_photosynthesis_question_is_not_a_privacy_match():
+    request = "  WHAT is PHOTOSYNTHESIS?  "
+    risk = RiskEngine().evaluate(request)
+    review = PARMARUIAdapter.analyze_request(request)
+
+    assert risk["category_flags"]["privacy"] is False
+    assert risk["risk_level"] == "low"
+    assert review["privacy"]["status"] == "PASS"
+    assert review["enforcement"]["execution_allowed"] is True
+    assert review["status"] == "SAFE"
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "Photos, contacts.",
+        "The PHOTOS of the customer were exposed.",
+        "  customer photos   were shared  ",
+        "रिपोर्ट में मेडिकल रिकॉर्ड शामिल हैं।",
+    ],
+)
+def test_genuine_privacy_terms_still_match_with_boundaries(phrase):
+    result = RiskEngine().evaluate(phrase)
+
+    assert result["category_flags"]["privacy"] is True
+    assert result["risk_level"] == "high"
 
 
 def test_conflict_detector_flags_human_rule_conflict():

@@ -17,20 +17,29 @@
           </span>
         </a>
 
+        <button class="nav-item new-chat-nav" type="button" data-section="chat" data-nav-key="new-chat" data-action="new-chat" aria-label="New Chat" title="New Chat"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></span><span>New Chat</span></button>
         <div class="nav-label">Workspace</div>
         <nav class="nav" aria-label="Main navigation">
-          <button class="nav-item active" data-section="home"><span class="nav-mark" aria-hidden="true">01</span><span>Overview</span></button>
-          <button class="nav-item" data-section="chat"><span class="nav-mark" aria-hidden="true">02</span><span>Conversation</span></button>
-          <button class="nav-item" data-section="safety"><span class="nav-mark" aria-hidden="true">03</span><span>Safety review</span></button>
-          <button class="nav-item" data-section="simulator"><span class="nav-mark" aria-hidden="true">04</span><span>Scenarios</span></button>
-          <button class="nav-item" data-section="phone"><span class="nav-mark" aria-hidden="true">05</span><span>Phone awareness</span></button>
-          <button class="nav-item" data-section="audit"><span class="nav-mark" aria-hidden="true">06</span><span>Activity</span></button>
+          <button class="nav-item active" data-section="chat" data-nav-key="chat" aria-label="Chats / History" title="Chats / History"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 5.75h14a1.25 1.25 0 0 1 1.25 1.25v8A1.25 1.25 0 0 1 19 16.25H10l-4.5 3v-3.1A1.25 1.25 0 0 1 4.25 15V7A1.25 1.25 0 0 1 5.5 5.75Z" /><path d="M8 10h8M8 13h5" /></svg></span><span>Chats / History</span></button>
+          <button class="nav-item" data-section="home" data-nav-key="home" aria-label="PARMAR Core" title="PARMAR Core"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><circle cx="12" cy="12" r="4.75" /><circle cx="12" cy="12" r="1.25" /></svg></span><span>PARMAR Core</span></button>
+          <button class="nav-item" data-section="safety" aria-label="Risk & Safety" title="Risk & Safety"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span><span>Risk &amp; Safety</span></button>
+          <button class="nav-item" data-section="simulator" aria-label="Simulation" title="Simulation"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.25 7.25A2.25 2.25 0 0 1 7.5 5h9A2.25 2.25 0 0 1 18.75 7.25v9.5A2.25 2.25 0 0 1 16.5 19h-9a2.25 2.25 0 0 1-2.25-2.25Z" /><path d="m10 9 5 3-5 3Z" /></svg></span><span>Simulation</span></button>
+          <button class="nav-item" data-section="memory" aria-label="Memory" title="Memory"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6.25 5.5A1.75 1.75 0 0 1 8 3.75h10v16.5H8a1.75 1.75 0 0 1-1.75-1.75Z" /><path d="M6.25 17.25A2.75 2.75 0 0 1 9 14.5h9M10 8h4" /></svg></span><span>Memory</span></button>
+          <button class="nav-item" data-section="tools" aria-label="Tools / Plugins" title="Tools / Plugins"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8.5 5.25v5.5M15.5 5.25v5.5M7 10.75h10v2.5A5 5 0 0 1 12 18.25v2M7 7.25h10" /></svg></span><span>Tools / Plugins</span></button>
+          <button class="nav-item" data-section="system" aria-label="System Status" title="System Status"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.75 12h3l2-5 4.5 10 2.25-5h4.75" /></svg></span><span>System Status</span></button>
+          <button class="nav-item" data-section="settings" aria-label="Settings" title="Settings"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="m19.2 13.8 1 1.7-2 2-1.7-1a7.5 7.5 0 0 1-1.5.6l-.5 1.9h-3l-.5-1.9a7.5 7.5 0 0 1-1.5-.6l-1.7 1-2-2 1-1.7a7.5 7.5 0 0 1-.6-1.8l-1.9-.5v-3l1.9-.5a7.5 7.5 0 0 1 .6-1.5l-1-1.7 2-2 1.7 1a7.5 7.5 0 0 1 1.5-.6l.5-1.9h3l.5 1.9a7.5 7.5 0 0 1 1.5.6l1.7-1 2 2-1 1.7a7.5 7.5 0 0 1 .6 1.5l1.9.5v3l-1.9.5a7.5 7.5 0 0 1-.6 1.8Z" /></svg></span><span>Settings</span></button>
         </nav>
 
+        <div class="sidebar-modules">
+          <div class="sidebar-section-label">Modules</div>
+          <button class="nav-item" data-section="phone" aria-label="Phone Awareness" title="Phone Awareness"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="7" y="3.75" width="10" height="16.5" rx="1.75" /><path d="M10 6.5h4M11 17.5h2" /></svg></span><span>Phone Awareness</span></button>
+          <button class="nav-item" data-section="audit" aria-label="Activity" title="Activity"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 18.25V11M10 18.25V5.75M16 18.25v-8M22 18.25V8" /></svg></span><span>Activity</span></button>
+        </div>
+
         <div class="sidebar-lower">
-          <div class="sidebar-section-label">Recent sessions</div>
+          <div class="sidebar-section-label">Recent</div>
+          <p class="history-status" id="history-status" role="status" aria-live="polite" hidden></p>
           <ul class="history-list" id="history-list"></ul>
-          <button class="settings-link nav-item" data-section="settings"><span class="nav-mark" aria-hidden="true">07</span><span>Preferences</span></button>
           <div class="authority-note"><span class="authority-dot"></span><span>Human authority<br /><strong>Always retained</strong></span></div>
         </div>
       </aside>
@@ -38,7 +47,7 @@
       <div class="main-panel">
         <header class="topbar">
           <div class="topbar-left">
-            <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Open navigation" aria-expanded="false"><span></span><span></span></button>
+            <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar" title="Toggle sidebar"><span></span><span></span></button>
             <div class="mobile-brand"><span class="brand-title">PARMAR</span><span class="brand-subtitle">Governance interface</span></div>
             <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Overview</span></div>
           </div>
@@ -116,6 +125,23 @@
             <div class="view-heading"><div><span class="eyebrow">A considered conversation</span><h1 id="chat-title">Talk it through.</h1></div><p>Ask for perspective. PARMAR reviews requests through its existing safety pipeline before responding.</p></div>
             <section class="conversation-surface" aria-label="PARMAR conversation">
               <div class="conversation-topline"><span class="presence-small" aria-hidden="true">P</span><span>PARMAR</span><span class="conversation-divider"></span><span>Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
+              <section class="chat-voki" id="chat-voki" data-state="IDLE" aria-label="PARMAR VOKI assistant">
+                <div class="chat-voki-toolbar">
+                  <div class="chat-voki-identity"><span class="chat-voki-status-mark" aria-hidden="true"></span><div><strong>PARMAR VOKI</strong><span id="voki-chat-state" role="status" aria-live="polite">Idle</span></div></div>
+                  <span class="chat-voki-note" id="voki-chat-note">Text input only. No microphone access.</span>
+                  <div class="chat-voki-controls">
+                    <label class="voki-voice-control" for="voki-voice-toggle"><span id="voki-voice-label">Voice off</span><input id="voki-voice-toggle" type="checkbox" aria-describedby="voki-voice-status" /></label>
+                    <button class="voki-visibility-control" id="voki-visibility-toggle" type="button" aria-expanded="true" aria-controls="voki-avatar-stage">Minimize</button>
+                  </div>
+                </div>
+                <div class="chat-voki-voice-status" id="voki-voice-status">Browser speech is off.</div>
+                <div class="chat-voki-stage" id="voki-avatar-stage" aria-hidden="true">
+                  <div class="chat-voki-visual">
+                    <div class="chat-voki-orb"><span class="chat-voki-orb-ring ring-a"></span><span class="chat-voki-orb-ring ring-b"></span><span class="chat-voki-orb-node node-a"></span><span class="chat-voki-orb-node node-b"></span><span class="chat-voki-orb-center">P</span></div>
+                    <div class="chat-voki-audio-wave"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+                  </div>
+                </div>
+              </section>
               <div class="chat-thread" id="chat-thread" aria-live="polite" aria-relevant="additions"></div>
               <div class="chat-composer">
                 <label class="sr-only" for="chat-input">Message PARMAR</label>
@@ -165,6 +191,35 @@
           <section class="section-view" data-section="audit" id="section-audit" aria-labelledby="activity-title">
             <div class="view-heading"><div><span class="eyebrow">Local interface activity</span><h1 id="activity-title">Activity</h1></div><p>A compact view of recent interface review events.</p></div>
             <section class="activity-surface"><div class="section-title-row"><h2>Recent activity</h2><span>Stored in this browser</span></div><div class="audit-list" id="audit-list-secondary" aria-live="polite"></div></section>
+          </section>
+
+          <section class="section-view" data-section="memory" id="section-memory" aria-labelledby="memory-title">
+            <div class="view-heading"><div><span class="eyebrow">User-managed context</span><h1 id="memory-title">Memory</h1></div><p>Save only the notes you choose. PARMAR never builds memories from chat automatically.</p></div>
+            <section class="memory-preferences" aria-label="Memory preferences">
+              <div><strong>Use saved notes in chat</strong><p id="memory-enabled-description">Memory is off. Saved notes will not be included in chat requests.</p></div>
+              <label class="memory-toggle" for="memory-enabled-toggle"><span id="memory-enabled-label">Disabled</span><input id="memory-enabled-toggle" type="checkbox" aria-describedby="memory-enabled-description" /></label>
+            </section>
+            <p class="memory-privacy-note">Only notes you save manually are stored in this browser. When enabled, they travel in <code>ChatContext.memory</code> to the configured chat provider. The built-in local demo receives this context but ignores it; another provider must explicitly consume it. Do not save passwords, tokens, private keys, or other secrets.</p>
+            <form class="memory-composer" id="memory-form">
+              <label for="memory-entry-input">Add a memory</label>
+              <textarea id="memory-entry-input" rows="3" maxlength="400" placeholder="For example: I prefer concise summaries with a short list of options."></textarea>
+              <div class="memory-composer-footer"><span id="memory-feedback" role="status" aria-live="polite">Only notes you explicitly save are stored.</span><button class="primary-btn" type="submit"><span>Save memory</span></button></div>
+            </form>
+            <section class="memory-list-section" aria-labelledby="memory-list-title">
+              <div class="memory-list-heading"><div><h2 id="memory-list-title">Saved memories</h2><span id="memory-count">0 saved</span></div><button class="secondary-btn" id="memory-clear-all" type="button" disabled>Clear all memories</button></div>
+              <ul class="memory-list" id="memory-list" aria-live="polite"></ul>
+              <div class="memory-empty" id="memory-empty"><span class="memory-empty-mark" aria-hidden="true">M</span><strong>No memories saved</strong><p>Any note you save will appear here. Chat history is not copied into memory.</p></div>
+            </section>
+          </section>
+
+          <section class="section-view" data-section="tools" id="section-tools" aria-labelledby="tools-title">
+            <div class="view-heading"><div><span class="eyebrow">Extensions</span><h1 id="tools-title">Tools / Plugins</h1></div><p>Optional tools remain outside this demo’s active request flow.</p></div>
+            <section class="feature-placeholder"><span class="placeholder-mark" aria-hidden="true">T</span><div><strong>No tools configured</strong><p>PARMAR’s existing safety review remains unchanged.</p></div></section>
+          </section>
+
+          <section class="section-view" data-section="system" id="section-system" aria-labelledby="system-title">
+            <div class="view-heading"><div><span class="eyebrow">Local interface</span><h1 id="system-title">System Status</h1></div><p>This view reports only the current browser interface state.</p></div>
+            <section class="feature-placeholder"><span class="placeholder-mark status-mark" aria-hidden="true"></span><div><strong>Interface ready</strong><p>Backend health is not monitored from this view.</p></div></section>
           </section>
 
           <section class="section-view" data-section="settings" id="section-settings" aria-labelledby="settings-title">

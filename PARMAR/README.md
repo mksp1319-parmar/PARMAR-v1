@@ -1,3 +1,18 @@
+# PARMAR Chat Providers
+
+The chat path is PARMAR analysis and enforcement -> `ChatContext` -> provider readiness -> external authorization (for non-local providers) -> `AIOrchestrator` capability matching -> `ChatRouter` / selected adapter -> untrusted response -> PARMAR response handling. Safety decisions remain PARMAR's authority; provider text cannot approve, execute actions, alter policy, or modify memory.
+
+PARMAR is an orchestration layer, not the owner of third-party AI systems. Provider/model configuration depends on actual server-side settings; readiness inspection does not test reachability. No universal “best AI” ranking is used. `SINGLE_PROVIDER` remains the default. The opt-in `VERIFIED_MULTI_MODEL` execution method accepts two to three registered, independent candidates and runs them sequentially once each with copies of the same sanitized task/context. “Verified” means only deterministic PARMAR-side exact/normalized text agreement; it is not proof of correctness. Disagreement returns candidates without selecting a winner. Partial success is not verified, and failures are normalized. Non-local multi-model execution requires both the explicit authorization policy and `PARMAR_VERIFIED_MULTI_MODEL_EXTERNAL_ENABLED`; this phase uses injected fake providers only and makes no real inference calls.
+
+`GET /api/providers` exposes safe configuration/readiness metadata only. Configuration presence does not mean reachability and does not authorize external use. The server-side external authorization allow-list defaults to deny and is separate from PARMAR safety approval. External verified multi-model execution requires both explicit mode authorization and the global feature guard. Legacy `/api/chat` requests remain single-provider; only an explicit `orchestration_mode: "VERIFIED_MULTI_MODEL"` opts in. Client payloads cannot set endpoint URLs, model IDs, credentials, or adapters.
+
+Implemented adapters are `LocalDemoProvider`, generic `HTTPChatProvider`, `OpenAIChatProvider`, `GeminiChatProvider`, and `ClaudeChatProvider`. The local demo is the deterministic default and makes no network request. Adapters are implemented and fake-transport tested, but this repository contains no provider credentials and no external provider is configured.
+
+Set `PARMAR_CHAT_PROVIDER` to `local-demo`, `http-json`, `openai`, `gemini`, or `claude`. Empty/unset means `local-demo`; unknown or incomplete explicit configuration fails safely and never falls back to another provider.
+
+For `http-json`, set `PARMAR_CHAT_ENDPOINT`, `PARMAR_CHAT_MODEL`, and `PARMAR_CHAT_API_KEY`. For `openai`, set `PARMAR_OPENAI_MODEL` and `PARMAR_OPENAI_API_KEY`; `PARMAR_OPENAI_ENDPOINT` is optional. For `gemini`, set `PARMAR_GEMINI_MODEL` and `PARMAR_GEMINI_API_KEY`; `PARMAR_GEMINI_ENDPOINT` is optional. For `claude`, set `PARMAR_CLAUDE_MODEL` and `PARMAR_CLAUDE_API_KEY`; `PARMAR_CLAUDE_ENDPOINT` is optional. `PARMAR_CHAT_TIMEOUT_SECONDS` is shared (default 30, maximum 120).
+
+Credentials are read from environment variables, sent only in provider authentication headers, and excluded from prompt/context/response handling. Real provider access requires the user's own credentials and may incur charges. No SDK dependencies were added.
 # PARMAR V1
 
 PARMAR — Predictive AI-Risk Mediation & Autonomous Reasoning

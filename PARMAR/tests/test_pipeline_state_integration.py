@@ -391,7 +391,7 @@ def test_analyze_lifecycle_payload_is_safe_and_additive(monkeypatch, tmp_path):
     assert raw_request not in repr(result["lifecycle"])
 
 
-def test_http_approval_flow_uses_dashboard_and_preserves_pending_state(monkeypatch, tmp_path):
+def test_text_only_approval_adapter_cannot_complete_pending_review(monkeypatch, tmp_path):
     _adapter_dashboard(
         monkeypatch,
         tmp_path,
@@ -406,9 +406,10 @@ def test_http_approval_flow_uses_dashboard_and_preserves_pending_state(monkeypat
     assert result["status"] == "APPROVAL_REQUIRED"
     assert result["lifecycle"]["current_state"] == LifecycleState.WAITING_FOR_HUMAN.value
     assert result["enforcement"]["execution_allowed"] is False
+    assert result["approval_error"] == "PENDING_REVIEW_REQUIRED"
 
 
-def test_http_approval_flow_maps_rejection_to_blocked(monkeypatch, tmp_path):
+def test_text_only_rejection_does_not_mutate_pending_review(monkeypatch, tmp_path):
     _adapter_dashboard(
         monkeypatch,
         tmp_path,
@@ -420,12 +421,12 @@ def test_http_approval_flow_maps_rejection_to_blocked(monkeypatch, tmp_path):
 
     result = PARMARUIAdapter.process_human_decision("Review this request", "REJECT")
 
-    assert result["status"] == "BLOCKED"
-    assert result["lifecycle"]["current_state"] == LifecycleState.BLOCKED.value
+    assert result["status"] == "APPROVAL_REQUIRED"
+    assert result["lifecycle"]["current_state"] == LifecycleState.WAITING_FOR_HUMAN.value
     assert result["enforcement"]["execution_allowed"] is False
 
 
-def test_http_approval_cannot_turn_blocked_enforcement_into_safe_response(monkeypatch, tmp_path):
+def test_text_only_approval_cannot_turn_blocked_enforcement_into_safe_response(monkeypatch, tmp_path):
     _adapter_dashboard(
         monkeypatch,
         tmp_path,
@@ -437,13 +438,12 @@ def test_http_approval_cannot_turn_blocked_enforcement_into_safe_response(monkey
 
     result = PARMARUIAdapter.process_human_decision("Review this request", "APPROVE")
 
-    assert result["decision"]["human_approval_status"] == "APPROVED"
-    assert result["lifecycle"]["current_state"] == LifecycleState.BLOCKED.value
+    assert result["lifecycle"]["current_state"] == LifecycleState.WAITING_FOR_HUMAN.value
     assert result["enforcement"]["execution_allowed"] is False
     assert result["action_boundary"]["execution_allowed"] is False
 
 
-def test_http_approval_only_reaches_safe_response_after_allowed_gate(monkeypatch, tmp_path):
+def test_text_only_approval_cannot_complete_even_when_gate_would_allow(monkeypatch, tmp_path):
     _adapter_dashboard(
         monkeypatch,
         tmp_path,
@@ -455,9 +455,9 @@ def test_http_approval_only_reaches_safe_response_after_allowed_gate(monkeypatch
 
     result = PARMARUIAdapter.process_human_decision("Review this request", "APPROVE")
 
-    assert result["status"] == "APPROVED"
-    assert result["lifecycle"]["current_state"] == LifecycleState.SAFE_RESPONSE.value
-    assert result["enforcement"]["execution_allowed"] is True
+    assert result["status"] == "APPROVAL_REQUIRED"
+    assert result["lifecycle"]["current_state"] == LifecycleState.WAITING_FOR_HUMAN.value
+    assert result["enforcement"]["execution_allowed"] is False
 
 
 def test_safety_pass_without_completion_does_not_expose_safe_response(monkeypatch, tmp_path):

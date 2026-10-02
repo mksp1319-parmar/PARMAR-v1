@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
+import re
+
 from PARMAR.core.language_support import contains_any_keyword, normalize_text
+
+
+def _contains_privacy_term(text: str, keywords: list[str]) -> bool:
+    """Match normalized privacy terms as complete Unicode words or phrases."""
+    return any(
+        re.search(rf"(?<!\w){re.escape(normalize_text(keyword))}(?!\w)", text)
+        for keyword in keywords
+        if normalize_text(keyword)
+    )
 
 
 class RiskEngine:
@@ -29,7 +40,11 @@ class RiskEngine:
         risk_flags = {}
 
         for category, keywords in categories.items():
-            match = contains_any_keyword(text, keywords)
+            match = (
+                _contains_privacy_term(text, keywords)
+                if category == "privacy"
+                else contains_any_keyword(text, keywords)
+            )
             risk_flags[category] = match
             if match:
                 reasons.append(f"{category} risk detected: proposal includes indicators such as {', '.join(keywords[:3])}.")

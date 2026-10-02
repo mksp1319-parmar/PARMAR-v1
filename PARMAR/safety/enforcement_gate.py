@@ -90,6 +90,16 @@ class CentralEnforcementGate:
         human_approval: str | None = None,
     ) -> dict[str, Any]:
         decision_id = str(uuid4())
+        if not isinstance(decision, dict):
+            return {
+                "status": EnforcementState.BLOCKED,
+                "state": EnforcementState.BLOCKED,
+                "execution_allowed": False,
+                "human_approval_required": True,
+                "human_approval": self._normalize_approval(human_approval),
+                "reason": "Fail-closed: the decision record is malformed.",
+                "decision_id": decision_id,
+            }
         risk_level = str(
             (decision.get("risk") or {}).get("risk_level")
             or decision.get("risk_level")
@@ -97,6 +107,16 @@ class CentralEnforcementGate:
         ).lower()
 
         decision_record = decision.get("decision") or decision
+        if not isinstance(decision_record, dict):
+            return {
+                "status": EnforcementState.BLOCKED,
+                "state": EnforcementState.BLOCKED,
+                "execution_allowed": False,
+                "human_approval_required": True,
+                "human_approval": self._normalize_approval(human_approval),
+                "reason": "Fail-closed: the decision record is malformed.",
+                "decision_id": decision_id,
+            }
         requires_human_approval = bool(
             decision_record.get("requires_human_approval")
             or decision.get("requires_human_approval")

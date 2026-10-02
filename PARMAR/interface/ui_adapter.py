@@ -22,6 +22,12 @@ from PARMAR.state import StateSnapshot
 class PARMARUIAdapter:
     """Bridge the existing safety pipeline to the futuristic UI state model."""
 
+    POLICY_RULES = (
+        "No external sharing of personal data without approval",
+        "No destructive action without explicit human sign-off",
+        "Human agency must remain intact",
+    )
+
     STAGES = [
         "INPUT",
         "INTENT",
@@ -152,11 +158,7 @@ class PARMARUIAdapter:
         summary = dashboard.run_pipeline(
             request_text,
             human_interests=["privacy", "autonomy", "safety"],
-            rules=[
-                "No external sharing of personal data without approval",
-                "No destructive action without explicit human sign-off",
-                "Human agency must remain intact",
-            ],
+            rules=list(cls.POLICY_RULES),
         )
         lifecycle_snapshot = dashboard.lifecycle_snapshot
 
@@ -250,9 +252,32 @@ class PARMARUIAdapter:
         decision: str,
         language: str = "en",
     ) -> dict[str, Any]:
-        response, dashboard, summary = cls.analyze_request_with_dashboard(request_text, language)
-        if dashboard is None or summary is None:
+        response = cls.analyze_request(request_text, language)
+        if response.get("status") != "APPROVAL_REQUIRED":
             return response
+        response["status"] = "APPROVAL_REQUIRED"
+        response["message"] = "A pending server-side review is required before a human decision can be recorded."
+        response["approval_error"] = "PENDING_REVIEW_REQUIRED"
+        response["enforcement"] = {
+            "execution_allowed": False,
+            "status": "HUMAN_APPROVAL_REQUIRED",
+            "reason": "No server-side pending review was supplied.",
+        }
+        response["action_boundary"] = {
+            "execution_allowed": False,
+            "status": "ACTION_BOUNDARY_DENIED",
+        }
+        return response
+
+    @classmethod
+    def apply_pending_human_decision(
+        cls,
+        response: dict[str, Any],
+        dashboard: TerminalDashboard,
+        summary: dict[str, Any],
+        decision: str,
+    ) -> dict[str, Any]:
+        """Apply a decision to the exact server-held review that produced it."""
         approval_pending = (
             summary.get("enforcement", {}).get("status") == "HUMAN_APPROVAL_REQUIRED"
         )

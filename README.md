@@ -55,6 +55,44 @@ The enforcement gate is fail-closed:
 This is enforced before any action boundary is considered.
 
 ## Local run
+## Provider architecture
+
+Provider flow:
+
+PARMAR analysis and enforcement -> `ChatContext` -> provider readiness -> external authorization (for non-local providers) -> `AIOrchestrator` capability matching -> `ChatRouter` / selected adapter -> untrusted candidate -> PARMAR response validation
+
+PARMAR is an orchestration layer, not the owner of third-party AI systems. `ProviderModelRegistry` records provider/model capability metadata such as modalities, locality, configuration availability, authorization, health, and optional cost/latency/context metadata. Availability is based on provider configuration or an explicitly registered adapter; unconfigured systems are not advertised as available. New compatible adapters can register capabilities without changing the deterministic routing algorithm.
+
+Routing uses explicit provider selection when available; otherwise it prefers the configured provider and keeps `local-demo` as the default when no provider is configured. An unavailable explicit or configured provider fails closed rather than silently switching. There is no universal “best AI” ranking. External providers are considered only when configured and authorized.
+
+`SINGLE_PROVIDER` remains the default chat mode. The opt-in service execution method supports `VERIFIED_MULTI_MODEL` with at least two and at most three registered, eligible candidates. Candidates run sequentially in provider/model order, once each, with the same sanitized task and independent copies of the approved `ChatContext`; adapters are responsible for their configured per-call timeout. The executor has no retries, recursion, or provider-created sub-agents and rejects candidates that share an adapter instance. Candidate outputs are bounded and validated against the existing `ChatResponse` contract. PARMAR classifies exact/normalized text agreement, disagreement, partial success, total failure, or validation failure. Disagreement never selects a winner, and agreement is not proof of correctness.
+
+`VERIFIED_MULTI_MODEL` has no frontend control; `/api/chat` accepts it only when explicitly supplied. Non-local multi-model execution requires both explicit authorization and `PARMAR_VERIFIED_MULTI_MODEL_EXTERNAL_ENABLED=true`, and remains disabled by default. Future real-provider activation requires reviewed external execution policy, bounded adapter timeouts, and additional tests. This phase tests execution only with injected fakes; it makes no real inference calls.
+
+`LocalDemoProvider` is the deterministic default and makes no network request. `HTTPChatProvider` implements the generic PARMAR JSON contract. `OpenAIChatProvider`, `GeminiChatProvider`, and `ClaudeChatProvider` implement their providers' JSON APIs behind the same `generate(prompt, context=...)` contract. All adapters are registered, but no external provider is configured by this repository.
+
+Select providers with `PARMAR_CHAT_PROVIDER`: `local-demo`, `http-json`, `openai`, `gemini`, or `claude`. An unset or empty value selects `local-demo`. An unknown provider or incomplete/invalid configuration fails as `PROVIDER_UNAVAILABLE`; it does not silently select another provider. A configured external adapter still requires separate server-side authorization before a provider request.
+
+Configuration variables:
+
+| Provider | Required variables | Optional endpoint |
+| --- | --- | --- |
+| `http-json` | `PARMAR_CHAT_ENDPOINT`, `PARMAR_CHAT_MODEL`, `PARMAR_CHAT_API_KEY` | Endpoint is required |
+| `openai` | `PARMAR_OPENAI_MODEL`, `PARMAR_OPENAI_API_KEY` | `PARMAR_OPENAI_ENDPOINT` defaults to `https://api.openai.com/v1/chat/completions` |
+| `gemini` | `PARMAR_GEMINI_MODEL`, `PARMAR_GEMINI_API_KEY` | `PARMAR_GEMINI_ENDPOINT` defaults to Google's `v1beta` API base |
+| `claude` | `PARMAR_CLAUDE_MODEL`, `PARMAR_CLAUDE_API_KEY` | `PARMAR_CLAUDE_ENDPOINT` defaults to `https://api.anthropic.com/v1/messages` |
+
+`PARMAR_CHAT_TIMEOUT_SECONDS` configures a shared request timeout (default 30, maximum 120). Vendor adapters use provider-specific authentication headers. Credentials are read only from environment variables; they are not put in prompts, `ChatContext`, logs, or API responses. External access requires the user's own provider credentials and may incur provider charges.
+
+`GET /api/providers` returns allow-listed configuration metadata only: provider ID/type, safe model ID where possible, capability/modality metadata, whether required configuration is present, credential-presence boolean, authorization status, and orchestration eligibility. It never returns endpoint values, credentials, headers, or environment values. `NOT_CHECKED` reachability means no ping, DNS lookup, or provider request was made. “Configured” does not mean reachable.
+
+Provider configuration is not external authorization. The injectable server-side `ExternalAuthorization` policy defaults to deny and must separately allow the provider, capability, and execution mode. Local demo remains the default and needs no external authorization. For `/api/chat`, legacy `{message, language}` requests remain single-provider; multi-model mode is requested only with `"orchestration_mode": "VERIFIED_MULTI_MODEL"`. The client cannot configure credentials, endpoints, models, or adapters. External verified multi-model execution requires both the authorization policy and `PARMAR_VERIFIED_MULTI_MODEL_EXTERNAL_ENABLED`; it remains disabled by default. No frontend provider selector or credential input exists.
+
+Environment variables are the existing configuration source. `.env` files are ignored by Git but are not automatically loaded by PARMAR; use a protected runtime environment. Never send credentials through the chat client or expose them in logs, screenshots, source code, or commits.
+
+Each adapter forwards the existing structured PARMAR context. The provider response is untrusted: it cannot approve requests, grant permissions, execute tools, modify memory, or change safety decisions. PARMAR analysis and enforcement remain authoritative and run before orchestration or routing. Credentials remain in provider adapters and never enter `ChatContext`, prompts, frontend responses, or audit logs.
+
+## Local run
 
 ```bash
 cd /workspaces/PARMAR-v1
@@ -67,8 +105,8 @@ PYTHONPATH=/workspaces/PARMAR-v1 pytest -q PARMAR/tests
 
 - no real-world action execution
 - no live surveillance access
-- no unrestricted network requests or shell execution
-- no credential storage
+- no unrestricted network requests or shell execution; external chat calls require explicit provider selection and configuration
+- no credential persistence; external credentials are read from environment variables only
 - no autonomous device control
 
 ## What is real vs simulated

@@ -249,9 +249,9 @@ class TerminalDashboard:
                 "decision": result["decision"],
                 "requires_human_approval": result["decision"].get("requires_human_approval", False),
             },
-            privacy_result=result.get("privacy", {"allow_execution": True}),
-            autonomy_result=result.get("autonomy", {"allow_execution": True}),
-            emergency_result=result.get("emergency_gate", {"allow_execution": True}),
+            privacy_result=result.get("privacy"),
+            autonomy_result=result.get("autonomy"),
+            emergency_result=result.get("emergency_gate"),
             human_approval=human_status,
         )
         result["action_boundary"] = ActionBoundary().evaluate(result["enforcement"])
