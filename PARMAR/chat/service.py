@@ -6,13 +6,32 @@ import re
 import json
 from typing import Any
 
+from PARMAR.audit.decision_logs import DecisionLogManager
 from PARMAR.chat.context import ChatContext, sanitize_provider_text, sanitize_recent_messages
 from PARMAR.chat.models import ChatResponse
 from PARMAR.chat.orchestration import AIOrchestrator, SINGLE_PROVIDER, VERIFIED_MULTI_MODEL
 from PARMAR.chat.readiness import ExternalAuthorization
+from PARMAR.chat.response_safety import (
+    BLOCK,
+    NOT_CHECKED,
+    PASS,
+    REVIEW,
+    UNCERTAIN,
+    ResponseSafetyResult,
+    ResponseSafetyValidator,
+)
 from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.task_routing import infer_task_capability
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
+
+_RESPONSE_STATUS = {
+    PASS: "RESPONSE_VALIDATED",
+    REVIEW: "RESPONSE_REVIEW_REQUIRED",
+    BLOCK: "RESPONSE_BLOCKED",
+    UNCERTAIN: "RESPONSE_UNCERTAIN",
+    NOT_CHECKED: "RESPONSE_NOT_CHECKED",
+}
+_SUPPRESSED_RESPONSE_STATES = {BLOCK, UNCERTAIN, NOT_CHECKED}
 
 
 class ChatService:
@@ -31,6 +50,8 @@ class ChatService:
         )
         if orchestrator is not None and external_authorization is not None:
             self.orchestrator.external_authorization = external_authorization
+        self.response_safety_validator = ResponseSafetyValidator()
+        self.logger = DecisionLogManager()
 
     @staticmethod
     def _provider_label(value: object) -> str:
@@ -52,6 +73,7 @@ class ChatService:
         status: str,
         message: str,
         routing: dict[str, Any] | None = None,
+        response_safety: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         response = {
             "safe": None,
@@ -61,7 +83,7 @@ class ChatService:
             "provider_error": True,
             "analysis": analysis,
             "request_safety": ChatService._request_safety(analysis),
-            "response_safety": ChatService._response_safety("NOT_GENERATED"),
+            "response_safety": response_safety or ResponseSafetyValidator.not_checked("NO_OUTPUT").public_payload(),
         }
         if routing is not None:
             response["routing"] = routing
@@ -76,14 +98,6 @@ class ChatService:
             "risk_level": analysis.get("risk", {}).get("risk_level"),
             "enforcement_status": enforcement.get("status", "UNKNOWN"),
             "execution_allowed": enforcement.get("execution_allowed") is True,
-        }
-
-    @staticmethod
-    def _response_safety(status: str) -> dict[str, Any]:
-        return {
-            "status": status,
-            "safe": None,
-            "reason": "PARMAR does not currently validate provider output for safety.",
         }
 
     @staticmethod
@@ -109,6 +123,101 @@ class ChatService:
             + current_message
         )
 
+    @staticmethod
+    def _not_checked(reason_code: str) -> ResponseSafetyResult:
+        return ResponseSafetyValidator.not_checked(reason_code)
+
+    def _validate_response(
+        self,
+        content: object,
+        *,
+        request_text: object,
+        language: object,
+        provider: object,
+        decision_id: object,
+    ) -> ResponseSafetyResult:
+        try:
+            result = self.response_safety_validator.validate(
+                content,
+                request_text=request_text,
+                language=language,
+            )
+            if type(result) is not ResponseSafetyResult:
+                result = self._not_checked("VALIDATOR_FAILURE")
+        except Exception:
+            result = self._not_checked("VALIDATOR_FAILURE")
+
+        output_char_count = len(content) if isinstance(content, str) else 0
+        try:
+            self.logger.log_response_validation(
+                decision_id=decision_id,
+                provider=self._provider_label(provider),
+                result=result,
+                output_char_count=output_char_count,
+            )
+        except Exception:
+            return self._not_checked("AUDIT_FAILURE")
+        return result
+
+    @staticmethod
+    def _response_message(status: str) -> str:
+        return {
+            BLOCK: "PARMAR withheld the provider response after a response policy check.",
+            UNCERTAIN: "PARMAR withheld the provider response because its checks could not resolve a concern.",
+            NOT_CHECKED: "PARMAR could not validate the provider response, so the generated text was withheld.",
+        }.get(status, "")
+
+    @staticmethod
+    def _response_decision_id(analysis: dict[str, Any]) -> str | None:
+        return analysis.get("enforcement", {}).get("decision_id")
+
+    @classmethod
+    def _public_orchestration(
+        cls,
+        orchestration: Any,
+        validations: list[ResponseSafetyResult] | None = None,
+    ) -> dict[str, Any]:
+        payload = orchestration.public_payload()
+        if validations is None:
+            return payload
+        for candidate_payload, validation in zip(payload.get("candidates", []), validations):
+            candidate_payload["response_safety"] = validation.public_payload()
+            if validation.status in _SUPPRESSED_RESPONSE_STATES:
+                candidate_payload["content"] = None
+                candidate_payload["output"] = None
+        return payload
+
+    @staticmethod
+    def _aggregate_response_safety(
+        validations: list[ResponseSafetyResult],
+    ) -> ResponseSafetyResult:
+        if not validations:
+            return ResponseSafetyValidator.not_checked("NO_OUTPUT")
+        statuses = {result.status for result in validations}
+        if BLOCK in statuses:
+            status = BLOCK
+        elif UNCERTAIN in statuses:
+            status = UNCERTAIN
+        elif NOT_CHECKED in statuses:
+            status = NOT_CHECKED
+        elif REVIEW in statuses:
+            status = REVIEW
+        else:
+            status = PASS
+        reasons = tuple(dict.fromkeys(code for result in validations for code in result.reason_codes))[:8]
+        checks = tuple(dict.fromkeys(code for result in validations for code in result.checks_run))
+        return ResponseSafetyResult(status, reasons, checks)
+
+    @staticmethod
+    def _chat_response_status(safety: ResponseSafetyResult) -> str:
+        return _RESPONSE_STATUS[safety.status]
+
+    @classmethod
+    def _visible_response_text(cls, content: str, safety: ResponseSafetyResult) -> str:
+        if safety.status in _SUPPRESSED_RESPONSE_STATES:
+            return cls._response_message(safety.status)
+        return sanitize_provider_text(content.strip())
+
     def respond(
         self,
         prompt: str,
@@ -133,7 +242,7 @@ class ChatService:
                 "provider": self._provider_label(getattr(getattr(self.router, "provider", None), "name", None)),
                 "analysis": public_analysis,
                 "request_safety": self._request_safety(public_analysis),
-                "response_safety": self._response_safety("NOT_GENERATED"),
+                "response_safety": self._not_checked("NO_OUTPUT").public_payload(),
             }
 
         decision = analysis.get("decision", {})
@@ -160,7 +269,22 @@ class ChatService:
                 provider_context,
                 capability=capability,
             )
-            outcome = orchestration.outcome
+            candidate_validations = []
+            for candidate in orchestration.candidates:
+                if candidate.output is None:
+                    reason_code = "PROVIDER_RESPONSE_INVALID" if candidate.validation_status == "INVALID" else "NO_OUTPUT"
+                    candidate_validations.append(self._not_checked(reason_code))
+                    continue
+                candidate_validations.append(self._validate_response(
+                    candidate.output,
+                    request_text=prompt,
+                    language=provider_context.language,
+                    provider=candidate.provider_id,
+                    decision_id=self._response_decision_id(public_analysis),
+                ))
+
+            response_safety = self._aggregate_response_safety(candidate_validations)
+            has_output = any(candidate.output is not None for candidate in orchestration.candidates)
             messages = {
                 "VERIFIED_AGREEMENT": "Candidate outputs matched under deterministic text normalization. Agreement is not proof of correctness.",
                 "VERIFIED_DISAGREEMENT": "Independent candidate outputs differed. PARMAR did not choose a winner; review them cautiously.",
@@ -170,19 +294,23 @@ class ChatService:
                 "EXECUTION_DISABLED": "Multi-model execution is disabled for one or more selected providers.",
                 "EXECUTION_REJECTED": orchestration.failure_reason or "Multi-model execution was not performed.",
             }
+            if response_safety.status in _SUPPRESSED_RESPONSE_STATES and has_output:
+                message = self._response_message(response_safety.status)
+            elif response_safety.status == REVIEW:
+                message = "Candidate responses require human review; agreement is not proof of correctness."
+            else:
+                message = messages.get(orchestration.outcome, "Multi-model execution did not produce a verified result.")
             response = {
                 "safe": None,
-                "status": "RESPONSE_UNVALIDATED" if any(item.output is not None for item in orchestration.candidates) else outcome,
-                "message": messages.get(outcome, "Multi-model execution did not produce a verified result."),
+                "status": self._chat_response_status(response_safety) if has_output else orchestration.outcome,
+                "message": message,
                 "provider": "multi-model",
                 "analysis": public_analysis,
                 "request_safety": self._request_safety(public_analysis),
-                "response_safety": self._response_safety(
-                    "NOT_VALIDATED" if any(item.output is not None for item in orchestration.candidates) else "NOT_GENERATED"
-                ),
-                "orchestration": orchestration.public_payload(),
+                "response_safety": response_safety.public_payload(),
+                "orchestration": self._public_orchestration(orchestration, candidate_validations),
             }
-            if outcome in {"ALL_FAILED", "VALIDATION_FAILED", "EXECUTION_DISABLED", "EXECUTION_REJECTED"}:
+            if orchestration.outcome in {"ALL_FAILED", "VALIDATION_FAILED", "EXECUTION_DISABLED", "EXECUTION_REJECTED"}:
                 response["provider_error"] = True
             return response
 
@@ -204,11 +332,10 @@ class ChatService:
                 routing.public_payload() if routing else None,
             )
             response["provider"] = self._provider_label(orchestration.selected_provider)
-            response["orchestration"] = orchestration.public_payload()
+            response["orchestration"] = self._public_orchestration(orchestration)
             return response
 
         result = orchestration.response
-
         if (
             not isinstance(result, ChatResponse)
             or not isinstance(result.provider, str)
@@ -223,24 +350,33 @@ class ChatService:
                 "PROVIDER_INVALID_RESPONSE",
                 "The configured provider returned an invalid or empty response. PARMAR took no action.",
                 routing.with_failure("PROVIDER_INVALID_RESPONSE").public_payload(),
+                response_safety=self._not_checked("PROVIDER_RESPONSE_INVALID").public_payload(),
             )
-            orchestration_payload = orchestration.public_payload()
+            orchestration_payload = self._public_orchestration(orchestration)
             orchestration_payload["failure_reason"] = "The configured provider returned an invalid or empty response."
             orchestration_payload["failure_state"] = "PROVIDER_INVALID_RESPONSE"
             for candidate in orchestration_payload["candidates"]:
                 candidate["status"] = "INVALID_RESPONSE"
+                candidate["content"] = None
                 candidate["output"] = None
             response["orchestration"] = orchestration_payload
             return response
 
+        response_safety = self._validate_response(
+            result.content,
+            request_text=prompt,
+            language=provider_context.language,
+            provider=result.provider,
+            decision_id=self._response_decision_id(public_analysis),
+        )
         return {
             "safe": None,
-            "status": "RESPONSE_UNVALIDATED",
-            "message": sanitize_provider_text(result.content.strip()),
+            "status": self._chat_response_status(response_safety),
+            "message": self._visible_response_text(result.content, response_safety),
             "provider": self._provider_label(result.provider),
             "analysis": public_analysis,
             "request_safety": self._request_safety(public_analysis),
-            "response_safety": self._response_safety("NOT_VALIDATED"),
+            "response_safety": response_safety.public_payload(),
             "routing": routing.public_payload() if routing else None,
-            "orchestration": orchestration.public_payload(),
+            "orchestration": self._public_orchestration(orchestration, [response_safety]),
         }

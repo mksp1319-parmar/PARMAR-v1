@@ -100,14 +100,37 @@ class CentralEnforcementGate:
                 "reason": "Fail-closed: the decision record is malformed.",
                 "decision_id": decision_id,
             }
-        risk_level = str(
-            (decision.get("risk") or {}).get("risk_level")
-            or decision.get("risk_level")
-            or "low"
-        ).lower()
+        risk_data = decision.get("risk")
+        if risk_data is not None and not isinstance(risk_data, dict):
+            return {
+                "status": EnforcementState.BLOCKED,
+                "state": EnforcementState.BLOCKED,
+                "execution_allowed": False,
+                "human_approval_required": True,
+                "human_approval": self._normalize_approval(human_approval),
+                "reason": "Fail-closed: the risk record is malformed.",
+                "decision_id": decision_id,
+            }
+        raw_risk_level = (risk_data or {}).get("risk_level") or decision.get("risk_level")
+        if not isinstance(raw_risk_level, str) or raw_risk_level.strip().lower() not in {
+            "low", "medium", "high", "critical",
+        }:
+            return {
+                "status": EnforcementState.BLOCKED,
+                "state": EnforcementState.BLOCKED,
+                "execution_allowed": False,
+                "human_approval_required": True,
+                "human_approval": self._normalize_approval(human_approval),
+                "reason": "Fail-closed: a recognized risk level is required.",
+                "decision_id": decision_id,
+            }
+        risk_level = raw_risk_level.strip().lower()
 
-        decision_record = decision.get("decision") or decision
-        if not isinstance(decision_record, dict):
+        decision_record = decision.get("decision", decision)
+        if (
+            not isinstance(decision_record, dict)
+            or ("decision" in decision and "requires_human_approval" not in decision_record)
+        ):
             return {
                 "status": EnforcementState.BLOCKED,
                 "state": EnforcementState.BLOCKED,
@@ -117,12 +140,26 @@ class CentralEnforcementGate:
                 "reason": "Fail-closed: the decision record is malformed.",
                 "decision_id": decision_id,
             }
-        requires_human_approval = bool(
-            decision_record.get("requires_human_approval")
-            or decision.get("requires_human_approval")
-            or decision.get("human_approval_required")
-            or (risk_level in {"medium", "high", "critical"})
-        )
+        approval_requirements = [
+            record[key]
+            for record, key in (
+                (decision_record, "requires_human_approval"),
+                (decision, "requires_human_approval"),
+                (decision, "human_approval_required"),
+            )
+            if key in record
+        ]
+        if not approval_requirements or any(not isinstance(value, bool) for value in approval_requirements):
+            return {
+                "status": EnforcementState.BLOCKED,
+                "state": EnforcementState.BLOCKED,
+                "execution_allowed": False,
+                "human_approval_required": True,
+                "human_approval": self._normalize_approval(human_approval),
+                "reason": "Fail-closed: an explicit human-approval requirement is required.",
+                "decision_id": decision_id,
+            }
+        requires_human_approval = any(approval_requirements) or risk_level in {"medium", "high", "critical"}
 
         privacy_ok = self._valid_allow_execution(privacy_result)
         autonomy_ok = self._valid_allow_execution(autonomy_result)

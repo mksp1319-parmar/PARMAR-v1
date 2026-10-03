@@ -21,6 +21,7 @@
         <div class="nav-label">Workspace</div>
         <nav class="nav" aria-label="Main navigation">
           <button class="nav-item active" data-section="chat" data-nav-key="chat" aria-label="Chats / History" title="Chats / History"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 5.75h14a1.25 1.25 0 0 1 1.25 1.25v8A1.25 1.25 0 0 1 19 16.25H10l-4.5 3v-3.1A1.25 1.25 0 0 1 4.25 15V7A1.25 1.25 0 0 1 5.5 5.75Z" /><path d="M8 10h8M8 13h5" /></svg></span><span>Chats / History</span></button>
+          <button class="nav-item" type="button" data-nav-key="research" data-action="research" aria-label="Search / Research" title="Search / Research"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.1" /><path d="m15.3 15.3 4.2 4.2M8.5 10.8h4.6M10.8 8.5v4.6" /></svg></span><span>Search / Research</span></button>
           <button class="nav-item" data-section="home" data-nav-key="home" aria-label="PARMAR Core" title="PARMAR Core"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><circle cx="12" cy="12" r="4.75" /><circle cx="12" cy="12" r="1.25" /></svg></span><span>PARMAR Core</span></button>
           <button class="nav-item" data-section="safety" aria-label="Risk & Safety" title="Risk & Safety"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span><span>Risk &amp; Safety</span></button>
           <button class="nav-item" data-section="simulator" aria-label="Simulation" title="Simulation"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.25 7.25A2.25 2.25 0 0 1 7.5 5h9A2.25 2.25 0 0 1 18.75 7.25v9.5A2.25 2.25 0 0 1 16.5 19h-9a2.25 2.25 0 0 1-2.25-2.25Z" /><path d="m10 9 5 3-5 3Z" /></svg></span><span>Simulation</span></button>
@@ -52,8 +53,10 @@
             <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Overview</span></div>
           </div>
           <div class="header-controls">
+            <button class="research-toggle" id="research-toggle" type="button" aria-label="Open Research workspace" aria-expanded="false" aria-controls="research-workspace" title="Open Research"><span aria-hidden="true">⌕</span><span>Research</span></button>
             <div class="status-pill status-safe" id="status-pill" aria-live="polite">READY</div>
             <div class="human-pill"><span class="human-mark" aria-hidden="true">+</span> Human in control</div>
+            <button class="new-session-btn auth-logout-btn" id="logout-btn" type="button" hidden>Sign out</button>
             <button class="new-session-btn" id="new-session-btn"><span aria-hidden="true">+</span> New session</button>
           </div>
         </header>
@@ -66,14 +69,14 @@
               <p>Bring a decision, proposal, or question. PARMAR will surface the relevant risks and keep the final say with you.</p>
             </div>
 
-            <section class="home-presence" aria-label="PARMAR VOKI status">
+            <section class="home-presence" aria-label="PARMAR Vokki status">
               <div class="presence-backdrop" aria-hidden="true"><span></span><span></span><span></span></div>
               <div class="presence-status"><span class="mini-dot" id="mini-dot"></span><span id="voki-state" aria-live="polite">IDLE</span></div>
               <div class="voki-stage" aria-live="polite">
                 <div class="halo halo-one"></div>
                 <div class="halo halo-two"></div>
                 <div class="halo halo-three"></div>
-                <button class="parmar-core idle" id="parmar-core" type="button" aria-label="VOKI, PARMAR's visual assistant. Activate for a subtle response.">
+                <button class="parmar-core idle" id="parmar-core" type="button" aria-label="Vokki, PARMAR's visual assistant. Activate for a subtle response.">
                   <span class="core-ring ring-one" aria-hidden="true"></span>
                   <span class="core-ring ring-two" aria-hidden="true"></span>
                   <span class="core-ring ring-three" aria-hidden="true"></span>
@@ -82,7 +85,7 @@
                   <span class="voki-face" aria-hidden="true"><span class="eye left"></span><span class="eye right"></span><span class="mouth"></span></span>
                 </button>
               </div>
-              <div class="presence-caption"><span class="caption-kicker">PARMAR VOKI</span><span class="caption-divider"></span><span>Present, not in control</span></div>
+              <div class="presence-caption"><span class="caption-kicker">PARMAR Vokki</span><span class="caption-divider"></span><span>Present, not in control</span></div>
             </section>
 
             <section class="home-interaction" aria-label="Start a PARMAR review">
@@ -103,7 +106,7 @@
                 <textarea id="request-input" rows="3" placeholder="Tell PARMAR what you’re considering…"></textarea>
                 <button id="analyze-btn" class="primary-btn" type="button"><span>Review request</span><span class="button-arrow" aria-hidden="true">↗</span></button>
               </div>
-              <div class="interaction-footnote"><span>Safety review only</span><span class="footnote-divider"></span><span>No action is taken on your behalf</span><button class="wake-btn" id="wake-btn" type="button">About VOKI</button></div>
+              <div class="interaction-footnote"><span>Safety review only</span><span class="footnote-divider"></span><span>No action is taken on your behalf</span><button class="wake-btn" id="wake-btn" type="button">About Vokki</button></div>
             </section>
 
             <section class="home-summary" aria-label="Current review context">
@@ -124,10 +127,11 @@
           <section class="section-view" data-section="chat" id="section-chat" aria-labelledby="chat-title">
             <div class="view-heading"><div><span class="eyebrow">A considered conversation</span><h1 id="chat-title">Talk it through.</h1></div><p>Ask for perspective. PARMAR reviews requests through its existing safety pipeline before responding.</p></div>
             <section class="conversation-surface" aria-label="PARMAR conversation">
-              <div class="conversation-topline"><span class="presence-small" aria-hidden="true">P</span><span>PARMAR</span><span class="conversation-divider"></span><span>Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
-              <section class="chat-voki" id="chat-voki" data-state="IDLE" aria-label="PARMAR VOKI assistant">
+              <div class="conversation-topline"><span class="presence-small" aria-hidden="true">P</span><span>PARMAR</span><span class="conversation-divider"></span><span id="chat-mode-label">Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
+              <p class="history-status" id="auth-status" role="status" aria-live="polite" hidden></p>
+              <section class="chat-voki" id="chat-voki" data-state="IDLE" data-voice-active="false" aria-label="PARMAR Vokki assistant">
                 <div class="chat-voki-toolbar">
-                  <div class="chat-voki-identity"><span class="chat-voki-status-mark" aria-hidden="true"></span><div><strong>PARMAR VOKI</strong><span id="voki-chat-state" role="status" aria-live="polite">Idle</span></div></div>
+                  <div class="chat-voki-identity"><span class="chat-voki-status-mark" aria-hidden="true"></span><div><strong>PARMAR Vokki</strong><span id="voki-chat-state" role="status" aria-live="polite">Idle</span></div></div>
                   <span class="chat-voki-note" id="voki-chat-note">Text input only. No microphone access.</span>
                   <div class="chat-voki-controls">
                     <label class="voki-voice-control" for="voki-voice-toggle"><span id="voki-voice-label">Voice off</span><input id="voki-voice-toggle" type="checkbox" aria-describedby="voki-voice-status" /></label>
@@ -196,10 +200,10 @@
           <section class="section-view" data-section="memory" id="section-memory" aria-labelledby="memory-title">
             <div class="view-heading"><div><span class="eyebrow">User-managed context</span><h1 id="memory-title">Memory</h1></div><p>Save only the notes you choose. PARMAR never builds memories from chat automatically.</p></div>
             <section class="memory-preferences" aria-label="Memory preferences">
-              <div><strong>Use saved notes in chat</strong><p id="memory-enabled-description">Memory is off. Saved notes will not be included in chat requests.</p></div>
+              <div><strong id="memory-storage-title">Local-demo memory preference</strong><p id="memory-enabled-description">Local-demo notes stay in this browser.</p></div>
               <label class="memory-toggle" for="memory-enabled-toggle"><span id="memory-enabled-label">Disabled</span><input id="memory-enabled-toggle" type="checkbox" aria-describedby="memory-enabled-description" /></label>
             </section>
-            <p class="memory-privacy-note">Only notes you save manually are stored in this browser. When enabled, they travel in <code>ChatContext.memory</code> to the configured chat provider. The built-in local demo receives this context but ignores it; another provider must explicitly consume it. Do not save passwords, tokens, private keys, or other secrets.</p>
+            <p class="memory-privacy-note" id="memory-privacy-note">Authenticated notes are stored on the server only after explicit consent and an explicit Save action. Relevant consented notes may be used as untrusted context in authenticated chat; if an external provider is selected and authorized, matched notes may be included in its request. Local-demo notes remain in this browser. Do not save passwords, tokens, private keys, or other secrets.</p>
             <form class="memory-composer" id="memory-form">
               <label for="memory-entry-input">Add a memory</label>
               <textarea id="memory-entry-input" rows="3" maxlength="400" placeholder="For example: I prefer concise summaries with a short list of options."></textarea>
@@ -236,6 +240,92 @@
         </main>
         <footer class="workspace-footer"><span>PARMAR</span><span>Safety review, never automatic authority.</span><span id="outcome-footer">Human-led</span></footer>
       </div>
+
+      <aside class="research-workspace" id="research-workspace" aria-labelledby="research-title" tabindex="-1" data-research-state="disconnected">
+        <header class="research-header">
+          <div class="research-heading-copy">
+            <span class="research-kicker"><span aria-hidden="true">P</span> PARMAR RESEARCH</span>
+            <h2 id="research-title">Research</h2>
+            <p>Evidence and synthesis, alongside your conversation.</p>
+          </div>
+          <button class="research-close" id="research-close" type="button" aria-label="Close Research workspace" title="Close Research">×</button>
+        </header>
+
+        <div class="research-conversation-link"><span class="research-link-mark" aria-hidden="true"></span><span>Linked to the current conversation</span></div>
+
+        <section class="research-query" aria-labelledby="research-query-title">
+          <div class="research-section-heading">
+            <h3 id="research-query-title">Research question</h3>
+            <span class="research-unavailable-tag">Unavailable</span>
+          </div>
+          <label class="sr-only" for="research-query-input">Research question</label>
+          <div class="research-query-control">
+            <input id="research-query-input" type="search" placeholder="Search is not connected" disabled />
+            <button type="button" aria-label="Start research" disabled>↗</button>
+          </div>
+          <p class="research-supporting-copy">A search provider is not connected. PARMAR will not claim to search the web or return live sources.</p>
+        </section>
+
+        <section class="research-progress" aria-labelledby="research-progress-title" aria-describedby="research-progress-description" data-state="not-started">
+          <div class="research-section-heading">
+            <h3 id="research-progress-title">Research path</h3>
+            <span class="research-state-label"><span aria-hidden="true"></span> Not started</span>
+          </div>
+          <p id="research-progress-description" class="sr-only">No research has started because search is unavailable.</p>
+          <ol class="research-stages">
+            <li data-stage-state="empty"><span class="research-stage-marker" aria-hidden="true"></span><strong>Question</strong><small>Not sent to search</small></li>
+            <li data-stage-state="unavailable"><span class="research-stage-marker" aria-hidden="true"></span><strong>Search</strong><small>Disconnected</small></li>
+            <li data-stage-state="empty"><span class="research-stage-marker" aria-hidden="true"></span><strong>Sources</strong><small>None available</small></li>
+            <li data-stage-state="empty"><span class="research-stage-marker" aria-hidden="true"></span><strong>Synthesis</strong><small>Not available</small></li>
+          </ol>
+        </section>
+
+        <section class="research-synthesis" aria-labelledby="research-synthesis-title" data-state="empty">
+          <div class="research-section-heading">
+            <h3 id="research-synthesis-title">Synthesis</h3>
+            <span class="research-evidence-count">0 references</span>
+          </div>
+          <div class="research-empty-state">
+            <strong>No source-backed answer yet</strong>
+            <p>Answers in chat are not presented as web research. A synthesis will appear here only when evidence is available.</p>
+          </div>
+        </section>
+
+        <section class="research-sources" aria-labelledby="research-sources-title" data-state="empty">
+          <div class="research-section-heading">
+            <h3 id="research-sources-title">Sources <span class="research-citation-key" aria-label="Citation reference">[ ]</span></h3>
+            <span class="research-evidence-count">0</span>
+          </div>
+          <p class="research-empty-copy">Source titles, domains, previews, and source types will be shown here when a provider returns them. Nothing has been researched for this conversation.</p>
+          <ol class="research-source-list" aria-label="Research sources" aria-live="polite"></ol>
+        </section>
+
+        <section class="research-related" aria-labelledby="research-related-title">
+          <div class="research-section-heading"><h3 id="research-related-title">Related discoveries</h3></div>
+          <p class="research-empty-copy">Related questions will appear after source-backed research is available.</p>
+        </section>
+
+        <section class="research-news" aria-labelledby="research-news-title" data-state="not-available">
+          <div class="research-section-heading">
+            <h3 id="research-news-title">Recent information</h3>
+            <span class="research-unavailable-tag">No live feed</span>
+          </div>
+          <p class="research-empty-copy">Live news is not connected. No current headlines are shown.</p>
+        </section>
+
+        <template id="research-source-template">
+          <li class="research-source">
+            <div class="research-source-meta"><span class="research-source-type"></span><span class="research-source-domain"></span></div>
+            <h4 class="research-source-title"></h4>
+            <p class="research-source-preview"></p>
+            <div class="research-source-actions">
+              <span class="research-source-citation"></span>
+              <button class="research-source-select" type="button" aria-pressed="false">Select</button>
+              <button class="research-source-open" type="button">Open source</button>
+            </div>
+          </li>
+        </template>
+      </aside>
     </div>
     <script src="/static/app.js"></script>
   </body>

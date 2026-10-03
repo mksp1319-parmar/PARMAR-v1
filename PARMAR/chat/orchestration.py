@@ -580,6 +580,21 @@ class AIOrchestrator:
                         "CAPABILITY_UNAVAILABLE",
                     )
             elif not eligible:
+                supports_requested = any(
+                    model.available
+                    and model.configured
+                    and model.supports(capability, input_modality, output_modality)
+                    for model in all_models
+                )
+                if supports_requested:
+                    return self._failure(
+                        mode,
+                        None,
+                        None,
+                        capability,
+                        "Registered providers support the requested capability but failed eligibility gates.",
+                        "NO_ELIGIBLE_AI_PLUGIN",
+                    )
                 return self._failure(mode, None, None, capability, "No configured provider offers the requested capability.", "CAPABILITY_UNAVAILABLE")
 
         eligible = tuple(sorted(

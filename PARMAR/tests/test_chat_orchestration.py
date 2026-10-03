@@ -280,10 +280,10 @@ def test_provider_output_cannot_change_parmar_safety_decision():
     response = service.respond("Plan a team lunch.")
 
     assert response["analysis"]["status"] == "SAFE"
-    assert response["status"] == "RESPONSE_UNVALIDATED"
+    assert response["status"] == "RESPONSE_REVIEW_REQUIRED"
     assert response["request_safety"]["safe"] is True
     assert response["safe"] is None
-    assert response["response_safety"]["status"] == "NOT_VALIDATED"
+    assert response["response_safety"]["status"] == "REVIEW"
     assert "Approved" in response["message"]
 
 
@@ -541,10 +541,10 @@ def test_provider_cannot_change_safety_state_or_claim_another_identity():
     response = service.respond("Plan a team lunch.", orchestration_mode=VERIFIED_MULTI_MODEL)
 
     assert response["analysis"]["status"] == "SAFE"
-    assert response["status"] == "RESPONSE_UNVALIDATED"
+    assert response["status"] == "RESPONSE_VALIDATED"
     assert response["request_safety"]["safe"] is True
     assert response["safe"] is None
-    assert response["response_safety"]["status"] == "NOT_VALIDATED"
+    assert response["response_safety"]["status"] == "PASS"
     assert response["orchestration"]["outcome"] == "VERIFIED_AGREEMENT"
     assert [candidate["provider"] for candidate in response["orchestration"]["candidates"]] == [
         "model-a", "model-b"

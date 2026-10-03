@@ -1,3 +1,5 @@
+import pytest
+
 from PARMAR.safety.enforcement_gate import CentralEnforcementGate
 
 
@@ -76,3 +78,30 @@ def test_direct_caller_can_not_skip_ui_protection():
     result = gate.evaluate_decision(decision, privacy_result=decision["privacy"], autonomy_result=decision["autonomy"], emergency_result=decision["emergency_gate"], human_approval=None)
     assert result["execution_allowed"] is False
     assert result["status"] == "HUMAN_APPROVAL_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        {"decision": {"requires_human_approval": False}},
+        {"risk": {"risk_level": "low"}},
+        {"risk": {"risk_level": "low"}, "decision": {}, "requires_human_approval": False},
+        {
+            "risk": {"risk_level": "low"},
+            "decision": {"requires_human_approval": False},
+            "requires_human_approval": True,
+        },
+        {"risk": "low", "decision": {"requires_human_approval": False}},
+        {"risk": {"risk_level": "unknown"}, "decision": {"requires_human_approval": False}},
+    ],
+)
+def test_missing_or_malformed_decision_data_cannot_be_execution_approved(decision):
+    result = CentralEnforcementGate().evaluate_decision(
+        decision,
+        privacy_result={"allow_execution": True},
+        autonomy_result={"allow_execution": True},
+        emergency_result={"allow_execution": True},
+    )
+
+    assert result["execution_allowed"] is False
+    assert result["status"] in {"BLOCKED", "HUMAN_APPROVAL_REQUIRED"}

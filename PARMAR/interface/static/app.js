@@ -1,11 +1,20 @@
 const STORAGE_KEYS = {
-  sessions: 'parmar-sessions-v1',
+  localDemoSessions: 'parmar-sessions-v1',
   settings: 'parmar-settings-v1',
   audit: 'parmar-audit-v1',
   memories: 'parmar-memories-v1',
 };
 const MAX_SAVED_MEMORIES = 25;
 const PROVIDER_IDS = new Set(['local-demo', 'openai', 'gemini', 'claude', 'http-json']);
+const RESPONSE_SAFETY_STATES = new Set(['PASS', 'REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
+const SUPPRESSED_RESPONSE_SAFETY_STATES = new Set(['BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
+const responseSafetyLabels = {
+  PASS: 'No configured response issue detected; factual accuracy is not verified.',
+  REVIEW: 'Response needs human review; this is not an approval.',
+  BLOCK: 'Response withheld by PARMAR policy checks.',
+  UNCERTAIN: 'Response withheld because checks were inconclusive.',
+  NOT_CHECKED: 'Response was not checked and is not shown.',
+};
 let historyStorageUnavailable = false;
 const sensitiveMemoryPatterns = [
   /\b(?:password|passwd|pwd|passcode|secret|credential|api[\s_-]?key|access[\s_-]?token|refresh[\s_-]?token|auth(?:entication)?[\s_-]?token|client[\s_-]?secret)\b\s*(?:is|[:=])\s*\S+/i,
@@ -33,12 +42,68 @@ function sanitizeStoredValue(value) {
   return value;
 }
 
+function responseSafetyStatus(result) {
+  if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'response_safety')) return null;
+  const status = result.response_safety?.status;
+  if (RESPONSE_SAFETY_STATES.has(status)) return status;
+  return 'NOT_CHECKED';
+}
+
+function responseSafetyMessage(status) {
+  return {
+    BLOCK: 'PARMAR withheld the provider response after a response policy check.',
+    UNCERTAIN: 'PARMAR withheld the provider response because its checks could not resolve a concern.',
+    NOT_CHECKED: 'PARMAR could not validate the provider response, so the generated text was withheld.',
+  }[status] || 'PARMAR withheld the provider response.';
+}
+
+function safeChatReply(result) {
+  const status = responseSafetyStatus(result) || 'NOT_CHECKED';
+  const message = typeof result?.message === 'string' ? result.message : '';
+  if (status === 'NOT_CHECKED' && ['BLOCKED', 'APPROVAL_REQUIRED'].includes(result?.analysis?.status)) {
+    const requestMessage = result.analysis.message;
+    return typeof requestMessage === 'string'
+      ? sanitizeSensitiveText(requestMessage).trim()
+      : responseSafetyMessage(status);
+  }
+  if (SUPPRESSED_RESPONSE_SAFETY_STATES.has(status)) {
+    return responseSafetyMessage(status);
+  }
+  return sanitizeSensitiveText(message).trim();
+}
+
+function suppressCandidateContent(value) {
+  if (Array.isArray(value)) return value.map(suppressCandidateContent);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (key === 'candidates' && Array.isArray(item)) {
+      return [key, item.map((candidate) => ({
+        ...suppressCandidateContent(candidate),
+        content: null,
+        output: null,
+      }))];
+    }
+    return [key, suppressCandidateContent(item)];
+  }));
+}
+
+function sanitizeResponseForHistory(result) {
+  let stored = sanitizeStoredValue(result);
+  const status = responseSafetyStatus(result) ?? (typeof result?.provider === 'string' ? 'NOT_CHECKED' : null);
+  if (!SUPPRESSED_RESPONSE_SAFETY_STATES.has(status)) return stored;
+  stored = suppressCandidateContent(stored);
+  if (stored && typeof stored === 'object') {
+    stored.message = safeChatReply(result);
+  }
+  return stored;
+}
+
 function containsSensitiveMemory(text) {
   return sensitiveMemoryPatterns.some((pattern) => pattern.test(text));
 }
 
 function loadSessions() {
-  const stored = readJson(STORAGE_KEYS.sessions, []);
+  const stored = readJson(STORAGE_KEYS.localDemoSessions, []);
   if (!Array.isArray(stored)) {
     historyStorageUnavailable = true;
     return [];
@@ -91,11 +156,14 @@ const lifecyclePresentation = {
 
 const vokiChatPresentation = {
   IDLE: { label: 'Idle', note: 'Ready when you are.' },
-  LISTENING: { label: 'Listening', note: 'Listening to text input only. No microphone access.' },
+  LISTENING: { label: 'Listening', note: 'Following your text input. No microphone access.' },
   THINKING: { label: 'Thinking', note: 'Waiting for PARMAR’s response.' },
-  SPEAKING: { label: 'Speaking', note: 'Reading the returned response aloud.' },
-  PAUSED: { label: 'Review paused', note: 'Safety review requires human attention. Voice playback is off.' },
-  ERROR: { label: 'Unavailable', note: 'Voice or chat is unavailable. Text chat remains ready.' },
+  RESPONDING: { label: 'Responding', note: 'PARMAR’s validated response is available.' },
+  APPROVAL_REQUIRED: { label: 'Approval required', note: 'PARMAR requires a human decision. Vokki cannot approve it.' },
+  BLOCKED: { label: 'Blocked', note: 'PARMAR withheld this request or response under its safety checks.' },
+  REVIEW: { label: 'Review required', note: 'PARMAR’s response needs human review; this is not an approval.' },
+  ERROR: { label: 'Unavailable', note: 'PARMAR could not complete the request. No result was received.' },
+  LOCAL_DEMO: { label: 'Local demo', note: 'Local-demo mode is active. PARMAR safety controls remain in force.' },
 };
 
 const legacyStatusLifecycle = {
@@ -149,6 +217,9 @@ const dom = {
   newSessionBtn: document.getElementById('new-session-btn'),
   sidebar: document.getElementById('sidebar'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
+  researchPanel: document.getElementById('research-workspace'),
+  researchToggle: document.getElementById('research-toggle'),
+  researchClose: document.getElementById('research-close'),
   chatThread: document.getElementById('chat-thread'),
   chatInput: document.getElementById('chat-input'),
   chatSubmit: document.getElementById('chat-submit'),
@@ -163,8 +234,10 @@ const dom = {
   memoryEnabledToggle: document.getElementById('memory-enabled-toggle'),
   memoryEnabledLabel: document.getElementById('memory-enabled-label'),
   memoryEnabledDescription: document.getElementById('memory-enabled-description'),
+  memoryPrivacyNote: document.getElementById('memory-privacy-note'),
   memoryForm: document.getElementById('memory-form'),
   memoryInput: document.getElementById('memory-entry-input'),
+  memorySaveBtn: document.querySelector('#memory-form button[type="submit"]'),
   memoryFeedback: document.getElementById('memory-feedback'),
   memoryList: document.getElementById('memory-list'),
   memoryCount: document.getElementById('memory-count'),
@@ -179,6 +252,9 @@ const dom = {
   vokiState: document.getElementById('voki-state'),
   providerStatus: document.getElementById('provider-status'),
   settingsProvider: document.getElementById('settings-provider'),
+  logoutBtn: document.getElementById('logout-btn'),
+  authStatus: document.getElementById('auth-status'),
+  chatModeLabel: document.getElementById('chat-mode-label'),
   phonePermissionToggle: document.getElementById('phone-permission-toggle'),
   simulatePhoneSafe: document.getElementById('simulate-phone-safe'),
   simulatePhoneRisk: document.getElementById('simulate-phone-risk'),
@@ -187,11 +263,18 @@ const dom = {
 };
 
 const state = {
-  sessions: loadSessions(),
-  audit: loadAudit(),
-  memories: loadMemories(),
+  sessions: [],
+  localDemoSessions: [],
+  audit: [],
+  memories: [],
+  memoryConsent: false,
   settings: loadSettings(),
   currentSessionId: null,
+  conversationId: null,
+  authMode: 'checking',
+  csrfToken: null,
+  authEpoch: 0,
+  serverConversationIds: new Set(),
   pendingApprovalId: null,
   requestSequence: 0,
   requestInFlight: false,
@@ -204,7 +287,7 @@ function readJson(key, fallback) {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : fallback;
   } catch (_error) {
-    if (key === STORAGE_KEYS.sessions) historyStorageUnavailable = true;
+    if (key === STORAGE_KEYS.localDemoSessions) historyStorageUnavailable = true;
     return fallback;
   }
 }
@@ -233,6 +316,7 @@ function loadMemories() {
 }
 
 function persistMemories(memories) {
+  if (state.authMode !== 'anonymous') return false;
   try {
     localStorage.setItem(STORAGE_KEYS.memories, JSON.stringify(memories));
     return true;
@@ -261,7 +345,7 @@ function setRequestPending(pending) {
 }
 
 function beginRequest() {
-  if (state.requestInFlight) return null;
+  if (state.requestInFlight || state.authMode === 'checking' || state.logoutInProgress) return null;
   state.requestSequence += 1;
   setRequestPending(true);
   return state.requestSequence;
@@ -275,6 +359,218 @@ function finishRequest(requestId) {
 function invalidatePendingRequest() {
   state.requestSequence += 1;
   setRequestPending(false);
+}
+
+function apiRequest(path, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  const headers = { ...(options.headers || {}) };
+  if (state.authMode === 'authenticated' && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    if (!state.csrfToken) {
+      return Promise.reject(new Error('Authenticated request is missing its CSRF token'));
+    }
+    headers['X-CSRF-Token'] = state.csrfToken;
+  }
+  return fetch(path, { ...options, headers }).then(async (response) => {
+    if (state.authMode === 'authenticated' && [401, 403, 404].includes(response.status)) {
+      await refreshAuthenticationState({ expired: true, broadcast: true });
+    }
+    return response;
+  });
+}
+
+function notifyOtherTabs(reason) {
+  const message = { type: 'authentication-ended', reason, timestamp: Date.now() };
+  if (state.authChannel) {
+    state.authChannel.postMessage(message);
+    return;
+  }
+  try {
+    localStorage.setItem('parmar-auth-notification', JSON.stringify(message));
+  } catch (_error) {
+    // This fallback is a notification only; the server remains authoritative.
+  }
+}
+
+function clearAuthenticatedState(message, { broadcast = false } = {}) {
+  if (state.authMode === 'authenticated' || state.authMode === 'checking') {
+    invalidatePendingRequest();
+    state.authEpoch += 1;
+    state.authMode = 'anonymous';
+    state.csrfToken = null;
+    state.conversationId = null;
+    state.currentSessionId = null;
+    state.sessions = [];
+    state.pendingApprovalId = null;
+    state.serverConversationIds.clear();
+    state.localDemoSessions = loadSessions();
+    state.sessions = state.localDemoSessions;
+    state.memories = loadMemories();
+    state.memoryConsent = false;
+    state.currentSessionId = state.sessions[0]?.id || null;
+    state.audit = loadAudit();
+    if (dom.chatModeLabel) dom.chatModeLabel.textContent = 'Local demo';
+    if (dom.authStatus) {
+      dom.authStatus.hidden = !message;
+      dom.authStatus.textContent = message || '';
+    }
+    renderHistory();
+    renderSessionMessages();
+    renderAuditEntries();
+    renderMemories();
+    resetReviewState(message);
+    stopVokiSpeech('LOCAL_DEMO');
+    selectSection(state.currentSessionId ? 'chat' : 'home');
+    if (dom.logoutBtn) dom.logoutBtn.hidden = true;
+    if (broadcast) notifyOtherTabs('session-ended');
+  }
+}
+
+async function refreshAuthenticationState({ expired = false, broadcast = false } = {}) {
+  try {
+    const response = await fetch('/api/session', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Session status is unavailable');
+    const payload = await response.json();
+    if (payload?.authenticated === true && typeof payload.csrf_token === 'string') {
+      const enteringAuthenticated = state.authMode !== 'authenticated';
+      if (enteringAuthenticated) {
+        invalidatePendingRequest();
+        state.authEpoch += 1;
+        stopVokiSpeech('IDLE');
+        state.sessions = [];
+        state.memories = [];
+        state.memoryConsent = false;
+        state.currentSessionId = null;
+        state.conversationId = null;
+        state.pendingApprovalId = null;
+        state.serverConversationIds.clear();
+        state.audit = [];
+        state.memories = [];
+        state.memoryConsent = false;
+      }
+      state.authMode = 'authenticated';
+      state.csrfToken = payload.csrf_token;
+      state.localDemoSessions = loadSessions();
+      renderHistory();
+      renderSessionMessages();
+      renderAuditEntries();
+      renderMemories();
+      if (enteringAuthenticated) await refreshAuthenticatedMemories();
+      if (state.authMode !== 'authenticated') return false;
+      if (dom.chatModeLabel) dom.chatModeLabel.textContent = 'Authenticated session';
+      if (dom.authStatus) dom.authStatus.hidden = true;
+      if (dom.logoutBtn) dom.logoutBtn.hidden = false;
+      return true;
+    }
+    if (state.authMode !== 'anonymous') {
+      clearAuthenticatedState(
+        expired ? 'Your authenticated session expired. You are now using local demo mode.' : '',
+        { broadcast },
+      );
+    }
+    return false;
+  } catch (_error) {
+    if (state.authMode === 'checking') {
+      state.authMode = 'anonymous';
+      stopVokiSpeech('LOCAL_DEMO');
+      state.localDemoSessions = loadSessions();
+      state.sessions = state.localDemoSessions;
+      state.memories = loadMemories();
+      state.memoryConsent = false;
+      state.audit = loadAudit();
+      renderHistory();
+      renderSessionMessages();
+      renderAuditEntries();
+      renderMemories();
+      state.currentSessionId = state.sessions[0]?.id || null;
+      if (state.currentSessionId) renderSessionMessages();
+      selectSection(state.currentSessionId ? 'chat' : 'home');
+    } else if (expired) {
+      clearAuthenticatedState(
+        'Your authenticated session could not be verified. You are now using local demo mode.',
+        { broadcast: true },
+      );
+    }
+
+    if (dom.logoutBtn) dom.logoutBtn.hidden = state.authMode !== 'authenticated';
+    return false;
+  }
+}
+
+async function refreshAuthenticatedMemories() {
+  const epoch = state.authEpoch;
+  try {
+    const response = await apiRequest('/api/memory', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Authenticated memory could not be loaded');
+    const payload = await response.json();
+    if (
+      epoch !== state.authEpoch
+      || state.authMode !== 'authenticated'
+      || typeof payload?.consent !== 'boolean'
+      || !Array.isArray(payload.memories)
+    ) return;
+    state.memoryConsent = payload.consent;
+    state.memories = payload.memories
+      .filter((record) => record
+        && typeof record.memory_id === 'string'
+        && typeof record.content === 'string')
+      .map((record) => ({
+        id: record.memory_id,
+        text: record.content,
+        createdAt: record.created_at,
+        updatedAt: record.updated_at,
+        provenance: record.provenance,
+      }));
+    renderMemories();
+  } catch (_error) {
+    if (epoch === state.authEpoch && state.authMode === 'authenticated') {
+      setMemoryFeedback('Server memory is unavailable. No browser memory was substituted.', true);
+    }
+  }
+}
+
+async function setAuthenticatedMemoryConsent(granted) {
+  if (state.authMode !== 'authenticated') return;
+  try {
+    const response = await apiRequest('/api/memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'consent', granted }),
+    });
+    if (!response.ok) throw new Error('Memory consent update was refused');
+    const result = await response.json();
+    if (state.authMode !== 'authenticated' || typeof result?.consent !== 'boolean') return;
+    state.memoryConsent = result.consent;
+    setMemoryFeedback(result.consent
+      ? 'Server memory consent is on. Saving still requires an explicit Save action.'
+      : 'Server memory consent was revoked. Existing notes remain available for review or deletion.');
+    renderMemories();
+  } catch (_error) {
+    if (dom.memoryEnabledToggle) dom.memoryEnabledToggle.checked = state.memoryConsent;
+    setMemoryFeedback('Could not update server memory consent.', true);
+  }
+}
+
+function configureCrossTabAuthentication() {
+  if ('BroadcastChannel' in window) {
+    state.authChannel = new BroadcastChannel('parmar-auth-state');
+    state.authChannel.addEventListener('message', (event) => {
+      if (event.data?.type === 'authentication-ended') {
+        refreshAuthenticationState({ expired: true });
+      }
+    });
+  }
+  window.addEventListener('storage', (event) => {
+    if (event.key !== 'parmar-auth-notification' || !event.newValue) return;
+    let notification;
+    try {
+      notification = JSON.parse(event.newValue);
+    } catch (_error) {
+      return;
+    }
+    if (notification?.type === 'authentication-ended') {
+      refreshAuthenticationState({ expired: true });
+    }
+  });
 }
 
 function applySettings() {
@@ -353,11 +649,21 @@ function chatVokiResponseState(result) {
   const responseStatus = normalizeStatus(result?.status);
   if (result?.provider_error || responseStatus.startsWith('PROVIDER_')) return 'ERROR';
 
-  const safetyStatus = normalizeStatus(result?.analysis?.status || responseStatus);
-  if (['BLOCKED', 'APPROVAL_REQUIRED', 'REJECTED', 'WAITING_FOR_HUMAN'].includes(safetyStatus)) {
-    return 'PAUSED';
-  }
-  return null;
+  const analysis = result?.analysis || result;
+  const requestStatus = normalizeStatus(analysis?.status || responseStatus);
+  const lifecycleState = normalizeStatus(analysis?.lifecycle?.current_state);
+  if (
+    requestStatus === 'APPROVAL_REQUIRED'
+    || lifecycleState === 'WAITING_FOR_HUMAN'
+    || analysis?.decision?.requires_human_approval === true
+  ) return 'APPROVAL_REQUIRED';
+  if (['BLOCKED', 'REJECTED'].includes(requestStatus) || lifecycleState === 'BLOCKED') return 'BLOCKED';
+
+  const safetyStatus = responseSafetyStatus(result) || 'NOT_CHECKED';
+  if (safetyStatus === 'REVIEW') return 'REVIEW';
+  if (safetyStatus !== 'PASS') return 'BLOCKED';
+  if (String(result?.provider || '').toLowerCase() === 'local-demo') return 'LOCAL_DEMO';
+  return 'RESPONDING';
 }
 
 function speechSynthesisAvailable() {
@@ -386,16 +692,17 @@ function syncVokiControls() {
 function stopVokiSpeech(nextState = 'IDLE') {
   state.vokiSpeechToken += 1;
   if (speechSynthesisAvailable()) window.speechSynthesis.cancel();
+  if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
   setChatVokiState(nextState);
 }
 
-function speakVokiResponse(text) {
+function speakVokiResponse(text, responseState) {
   if (!state.settings.vokiVoiceEnabled) {
-    setChatVokiState('IDLE');
+    setChatVokiState(responseState);
     return;
   }
   if (!speechSynthesisAvailable()) {
-    setChatVokiState('ERROR');
+    setChatVokiState(responseState);
     syncVokiControls();
     return;
   }
@@ -405,19 +712,29 @@ function speakVokiResponse(text) {
   utterance.lang = state.settings.language === 'hi' ? 'hi-IN' : state.settings.language === 'mix' ? 'en-IN' : 'en-US';
   utterance.rate = 0.96;
   utterance.onstart = () => {
-    if (speechToken === state.vokiSpeechToken) setChatVokiState('SPEAKING');
+    if (speechToken === state.vokiSpeechToken) {
+      if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'true';
+      setChatVokiState('RESPONDING');
+    }
   };
   utterance.onend = () => {
-    if (speechToken === state.vokiSpeechToken) setChatVokiState('IDLE');
+    if (speechToken === state.vokiSpeechToken) {
+      if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
+      setChatVokiState(responseState === 'LOCAL_DEMO' ? 'LOCAL_DEMO' : 'IDLE');
+    }
   };
   utterance.onerror = () => {
-    if (speechToken === state.vokiSpeechToken) setChatVokiState('ERROR');
+    if (speechToken === state.vokiSpeechToken) {
+      if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
+      setChatVokiState('ERROR');
+    }
   };
 
   try {
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   } catch (_error) {
+    if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
     setChatVokiState('ERROR');
   }
 }
@@ -463,6 +780,21 @@ function syncSidebarToggle() {
   const isExpanded = !document.body.classList.contains('sidebar-collapsed');
   dom.sidebarToggle.setAttribute('aria-expanded', String(isExpanded));
   dom.sidebarToggle.setAttribute('aria-label', isExpanded ? 'Collapse navigation' : 'Expand navigation');
+}
+
+function setResearchOpen(open, restoreFocus = false) {
+  const wasOpen = document.body.classList.contains('research-open');
+  const isOpen = Boolean(open) && window.innerWidth <= 1100;
+  document.body.classList.toggle('research-open', isOpen);
+  dom.researchToggle?.setAttribute('aria-expanded', String(isOpen));
+  dom.researchToggle?.setAttribute('aria-label', isOpen ? 'Close Research workspace' : 'Open Research workspace');
+  if (isOpen) {
+    document.body.classList.remove('sidebar-open');
+    syncSidebarToggle();
+    dom.researchClose?.focus({ preventScroll: true });
+  } else if (wasOpen && restoreFocus) {
+    dom.researchToggle?.focus({ preventScroll: true });
+  }
 }
 
 function selectSection(sectionName, navKey = sectionName) {
@@ -522,13 +854,17 @@ function createSession() {
 }
 
 function persistedSessionList() {
+  if (state.authMode === 'authenticated') {
+    renderHistory();
+    return false;
+  }
   state.sessions = sanitizeStoredValue(state.sessions);
   if (historyStorageUnavailable) {
     renderHistory();
     return false;
   }
   try {
-    localStorage.setItem(STORAGE_KEYS.sessions, JSON.stringify(state.sessions));
+    localStorage.setItem(STORAGE_KEYS.localDemoSessions, JSON.stringify(state.sessions));
     return true;
   } catch (_error) {
     historyStorageUnavailable = true;
@@ -545,13 +881,35 @@ function setMemoryFeedback(message, isError = false) {
 
 function renderMemories() {
   const memories = state.memories;
-  const enabled = Boolean(state.settings.memoryEnabled);
+  const authenticated = state.authMode === 'authenticated';
+  const enabled = authenticated ? state.memoryConsent : Boolean(state.settings.memoryEnabled);
+  if (dom.memoryPrivacyNote) {
+    const base = 'Relevant consented server notes may be used as untrusted context in authenticated chat and cannot control PARMAR safety or approvals.';
+    const externalProvider = state.settings.provider !== 'local-demo';
+    dom.memoryPrivacyNote.textContent = authenticated
+      ? `${base} ${externalProvider
+        ? 'The selected provider is external; if it is authorized for this request, matched notes may be included in its request.'
+        : 'The selected provider is local demo; notes are not sent to an external provider in this request.'} Local-demo notes remain in this browser. Do not save passwords, tokens, private keys, or other secrets.`
+      : 'Authenticated notes stay on the server. Local-demo notes stay in this browser and are not added to chat. Do not save passwords, tokens, private keys, or other secrets.';
+  }
   if (dom.memoryEnabledToggle) dom.memoryEnabledToggle.checked = enabled;
+  if (dom.memoryEnabledToggle) dom.memoryEnabledToggle.disabled = state.authMode === 'checking';
+  if (dom.memorySaveBtn) {
+    dom.memorySaveBtn.disabled = state.authMode === 'checking' || (authenticated && !state.memoryConsent);
+  }
   if (dom.memoryEnabledLabel) dom.memoryEnabledLabel.textContent = enabled ? 'Enabled' : 'Disabled';
+  const memoryTitle = document.getElementById('memory-storage-title');
+  if (memoryTitle) {
+    memoryTitle.textContent = authenticated
+      ? 'Consent to store server memories'
+      : 'Local-demo memory preference';
+  }
   if (dom.memoryEnabledDescription) {
-    dom.memoryEnabledDescription.textContent = enabled
-      ? 'Memory is on. Saved notes will be included in chat context.'
-      : 'Memory is off. Saved notes will not be included in chat requests.';
+    dom.memoryEnabledDescription.textContent = authenticated
+      ? enabled
+        ? 'You consented to storing notes on this server. Relevant notes may be used as untrusted chat context.'
+        : 'Server memory storage is off. Give consent before saving or updating notes.'
+      : 'Local-demo notes stay in this browser and are not added to chat.';
   }
   if (dom.memoryCount) dom.memoryCount.textContent = `${memories.length} saved ${memories.length === 1 ? 'memory' : 'memories'}`;
   if (dom.memoryClearAll) dom.memoryClearAll.disabled = memories.length === 0;
@@ -576,6 +934,14 @@ function renderMemories() {
       details.appendChild(created);
     }
 
+    const actions = document.createElement('div');
+    actions.className = 'memory-item-actions';
+    const edit = document.createElement('button');
+    edit.className = 'memory-delete';
+    edit.type = 'button';
+    edit.textContent = 'Edit';
+    edit.title = 'Edit this memory';
+    edit.addEventListener('click', () => editMemory(memory.id));
     const remove = document.createElement('button');
     remove.className = 'memory-delete';
     remove.type = 'button';
@@ -583,18 +949,23 @@ function renderMemories() {
     remove.title = 'Delete this memory';
     remove.setAttribute('aria-label', `Delete memory: ${memory.text.slice(0, 80)}`);
     remove.addEventListener('click', () => deleteMemory(memory.id));
+    actions.append(edit, remove);
 
     const body = document.createElement('div');
     body.className = 'memory-item-body';
     body.append(text, details);
-    item.append(body, remove);
+    item.append(body, actions);
     return item;
   });
   dom.memoryList.replaceChildren(...items);
 }
 
-function addMemory(event) {
+async function addMemory(event) {
   event.preventDefault();
+  if (state.authMode === 'checking') {
+    setMemoryFeedback('Checking session before saving memory.', true);
+    return;
+  }
   const text = (dom.memoryInput?.value || '').trim();
   if (!text) {
     setMemoryFeedback('Enter a note before saving.', true);
@@ -607,6 +978,30 @@ function addMemory(event) {
   }
   if (containsSensitiveMemory(text)) {
     setMemoryFeedback('This looks like a credential or secret. It was not saved.', true);
+    return;
+  }
+  if (state.authMode === 'authenticated') {
+    if (!state.memoryConsent) {
+      setMemoryFeedback('Give explicit server memory consent before saving a note.', true);
+      return;
+    }
+    try {
+      const response = await apiRequest('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save', content: text }),
+      });
+      if (!response.ok) {
+        setMemoryFeedback('The server refused this memory. Check consent and try again.', true);
+        return;
+      }
+      if (state.authMode !== 'authenticated') return;
+      if (dom.memoryInput) dom.memoryInput.value = '';
+      setMemoryFeedback('Memory saved to your authenticated account.');
+      await refreshAuthenticatedMemories();
+    } catch (_error) {
+      setMemoryFeedback('Server memory is unavailable. The note was not saved locally.', true);
+    }
     return;
   }
   if (state.memories.length >= MAX_SAVED_MEMORIES) {
@@ -634,7 +1029,70 @@ function addMemory(event) {
   renderMemories();
 }
 
-function deleteMemory(memoryId) {
+async function editMemory(memoryId) {
+  if (state.authMode === 'checking') return;
+  const current = state.memories.find((memory) => memory.id === memoryId);
+  if (!current) return;
+  const content = window.prompt('Edit this saved memory', current.text);
+  if (content === null) return;
+  const text = content.trim();
+  if (!text || text.length > 400 || containsSensitiveMemory(text)) {
+    setMemoryFeedback('Memory must contain 1 to 400 characters and cannot contain obvious credentials.', true);
+    return;
+  }
+  if (state.authMode === 'authenticated') {
+    if (!state.memoryConsent) {
+      setMemoryFeedback('Give explicit server memory consent before updating a note.', true);
+      return;
+    }
+    try {
+      const response = await apiRequest('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update', memory_id: memoryId, content: text }),
+      });
+      if (!response.ok) {
+        setMemoryFeedback('The server refused this update. Check consent and try again.', true);
+        return;
+      }
+      setMemoryFeedback('Memory updated on the server.');
+      await refreshAuthenticatedMemories();
+    } catch (_error) {
+      setMemoryFeedback('Server memory is unavailable. The note was not changed.', true);
+    }
+    return;
+  }
+  const nextMemories = state.memories.map((memory) => (
+    memory.id === memoryId ? { ...memory, text, updatedAt: new Date().toISOString() } : memory
+  ));
+  if (!persistMemories(nextMemories)) {
+    setMemoryFeedback('Could not update browser storage. Try again.', true);
+    return;
+  }
+  state.memories = nextMemories;
+  renderMemories();
+}
+
+async function deleteMemory(memoryId) {
+  if (state.authMode === 'checking') return;
+  if (state.authMode === 'authenticated') {
+    try {
+      const response = await apiRequest('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', memory_id: memoryId }),
+      });
+      if (!response.ok) {
+        setMemoryFeedback('Memory could not be deleted.', true);
+        return;
+      }
+      setMemoryFeedback('Memory deleted from the server.');
+      await refreshAuthenticatedMemories();
+    } catch (_error) {
+      setMemoryFeedback('Server memory is unavailable. The note was not deleted.', true);
+    }
+    return;
+  }
   const nextMemories = state.memories.filter((memory) => memory.id !== memoryId);
   if (nextMemories.length === state.memories.length) return;
   if (!persistMemories(nextMemories)) {
@@ -646,9 +1104,18 @@ function deleteMemory(memoryId) {
   renderMemories();
 }
 
-function clearAllMemories() {
+async function clearAllMemories() {
+  if (state.authMode === 'checking') return;
   if (!state.memories.length) return;
-  if (!window.confirm('Delete all saved memories from this browser? This cannot be undone.')) return;
+  const storageLocation = state.authMode === 'authenticated' ? 'server' : 'this browser';
+  if (!window.confirm(`Delete all saved memories from ${storageLocation}? This cannot be undone.`)) return;
+  if (state.authMode === 'authenticated') {
+    for (const memory of [...state.memories]) {
+      await deleteMemory(memory.id);
+      if (state.authMode !== 'authenticated') return;
+    }
+    return;
+  }
   if (!persistMemories([])) {
     setMemoryFeedback('Could not update browser storage. Try again.', true);
     return;
@@ -658,14 +1125,12 @@ function clearAllMemories() {
   renderMemories();
 }
 
-function activeMemoryContext() {
-  if (!state.settings.memoryEnabled) return [];
-  return state.memories.map((memory) => memory.text);
-}
-
 function renderHistory() {
   if (!dom.historyList) return;
   const conversations = state.sessions
+    .filter((session) => (
+      state.authMode !== 'authenticated' || state.serverConversationIds.has(session.id)
+    ))
     .filter((session) => session.messages.length > 0)
     .sort((first, second) => Number(second.updatedAt || 0) - Number(first.updatedAt || 0));
 
@@ -680,9 +1145,11 @@ function renderHistory() {
   if (!conversations.length) {
     const empty = document.createElement('li');
     empty.className = 'history-empty';
-    empty.textContent = historyStorageUnavailable
-      ? 'Saved conversations cannot be displayed.'
-      : 'No conversations yet.';
+    empty.textContent = state.authMode === 'authenticated'
+      ? 'Server conversation history is not available in this view yet.'
+      : historyStorageUnavailable
+        ? 'Saved conversations cannot be displayed.'
+        : 'No conversations yet.';
     dom.historyList.appendChild(empty);
     return;
   }
@@ -701,22 +1168,31 @@ function renderHistory() {
     const titleElement = document.createElement('span');
     titleElement.textContent = String(title).slice(0, 56);
     const dateElement = document.createElement('small');
-    const updatedAt = Number(session.updatedAt || session.createdAt);
-    dateElement.textContent = Number.isFinite(updatedAt)
-      ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(updatedAt))
-      : 'Saved locally';
+    if (state.authMode === 'authenticated') {
+      dateElement.textContent = 'Server conversation';
+    } else {
+      const updatedAt = Number(session.updatedAt || session.createdAt);
+      dateElement.textContent = Number.isFinite(updatedAt)
+        ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(updatedAt))
+        : 'Saved locally';
+    }
     button.append(titleElement, dateElement);
     button.addEventListener('click', () => {
       const selected = state.sessions.find((entry) => entry.id === button.dataset.sessionId);
       if (!selected) return;
+      invalidatePendingRequest();
       state.currentSessionId = selected.id;
+      state.conversationId = state.authMode === 'authenticated' ? selected.id : null;
+      state.pendingApprovalId = null;
       if (dom.chatInput) dom.chatInput.value = '';
       resizeChatInput();
       const lastUserMessage = [...selected.messages].reverse().find((message) => message.role === 'user');
       if (dom.requestInput) dom.requestInput.value = lastUserMessage?.text || '';
       renderSessionMessages();
       const latestAssistant = [...selected.messages].reverse().find((message) => message.role === 'assistant');
-      if (!latestAssistant?.analysis || !updateState(latestAssistant.analysis)) {
+      if (state.authMode === 'authenticated') {
+        resetReviewState('Conversation selected. PARMAR will review your next request.');
+      } else if (!latestAssistant?.analysis || !updateState(latestAssistant.analysis)) {
         resetReviewState('Conversation selected. No saved safety review is available.');
       }
       renderHistory();
@@ -858,7 +1334,7 @@ function appendThinkingIndicator() {
   return message;
 }
 
-function renderSessionMessages() {
+function renderSessionMessages(animateLatest = false) {
   if (!dom.chatThread) return;
   const session = state.sessions.find((entry) => entry.id === state.currentSessionId);
   dom.chatThread.replaceChildren();
@@ -868,10 +1344,11 @@ function renderSessionMessages() {
     return;
   }
 
-  session.messages.forEach((message) => {
+  session.messages.forEach((message, index) => {
     const role = message.role === 'assistant' ? 'assistant' : 'user';
     const wrapper = document.createElement('div');
     wrapper.className = `message ${role}`;
+    if (animateLatest && index === session.messages.length - 1) wrapper.classList.add('message-entering');
     wrapper.setAttribute('role', 'group');
     wrapper.setAttribute('aria-label', `${role === 'assistant' ? 'PARMAR' : 'Your'} message`);
 
@@ -898,10 +1375,12 @@ function renderSessionMessages() {
     bubble.className = 'message-bubble';
     bubble.textContent = String(message.text ?? '');
 
-    if (role === 'assistant' && message.analysis?.response_safety?.status === 'NOT_VALIDATED') {
+    const safetyStatus = role === 'assistant' ? responseSafetyStatus(message.analysis) : null;
+    if (safetyStatus) {
       const safetyNote = document.createElement('small');
       safetyNote.className = 'response-safety-note';
-      safetyNote.textContent = 'Provider response not safety-validated';
+      safetyNote.dataset.status = safetyStatus;
+      safetyNote.textContent = responseSafetyLabels[safetyStatus];
       content.appendChild(safetyNote);
     }
 
@@ -927,8 +1406,13 @@ function appendMessageToSession(sessionId, role, text, analysis) {
   if (!session) return false;
   const firstUserMessage = role === 'user'
     && !session.messages.some((message) => message.role === 'user');
-  const safeText = sanitizeSensitiveText(text);
-  const entry = { role, text: safeText, analysis: sanitizeStoredValue(analysis), timestamp: new Date().toISOString() };
+  const safetyStatus = role === 'assistant'
+    ? responseSafetyStatus(analysis) ?? (typeof analysis?.provider === 'string' ? 'NOT_CHECKED' : null)
+    : null;
+  const suppressed = SUPPRESSED_RESPONSE_SAFETY_STATES.has(safetyStatus);
+  const safeText = sanitizeSensitiveText(suppressed ? safeChatReply(analysis) : text);
+  const storedAnalysis = role === 'assistant' ? sanitizeResponseForHistory(analysis) : sanitizeStoredValue(analysis);
+  const entry = { role, text: safeText, analysis: storedAnalysis, timestamp: new Date().toISOString() };
   session.messages.push(entry);
   session.updatedAt = Date.now();
   if (firstUserMessage) {
@@ -937,7 +1421,7 @@ function appendMessageToSession(sessionId, role, text, analysis) {
   if (role === 'assistant') session.status = analysis?.status || 'READY';
   persistedSessionList();
   renderHistory();
-  if (session.id === state.currentSessionId) renderSessionMessages();
+  if (session.id === state.currentSessionId) renderSessionMessages(true);
   return true;
 }
 
@@ -964,7 +1448,9 @@ function addAuditEntry(request, status, riskLevel, message) {
     timestamp: new Date().toISOString(),
   };
   state.audit = [entry, ...state.audit].slice(0, 12);
-  localStorage.setItem(STORAGE_KEYS.audit, JSON.stringify(state.audit));
+  if (state.authMode !== 'authenticated') {
+    localStorage.setItem(STORAGE_KEYS.audit, JSON.stringify(state.audit));
+  }
   renderAuditEntries();
 }
 
@@ -1144,7 +1630,7 @@ function resolveResultShape(result) {
   };
 }
 
-function updateState(result) {
+function updateState(result, scenarioSimulation = false) {
   const analysis = result?.analysis || result;
   const lifecycleState = String(analysis?.lifecycle?.current_state || result?.lifecycle?.current_state || '').toUpperCase();
   const resultStatus = String(analysis?.status || result?.status || '').toUpperCase();
@@ -1157,7 +1643,7 @@ function updateState(result) {
     && typeof enforcement.execution_allowed === 'boolean';
   if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)
     || (!hasLifecycle && !supportedResultStatuses.has(resultStatus))
-    || (!hasLifecycle && !hasEnforcement)) {
+    || (!hasLifecycle && !hasEnforcement && !scenarioSimulation)) {
     return false;
   }
 
@@ -1219,7 +1705,7 @@ async function analyzeRequest() {
   if (dom.statusMessage) dom.statusMessage.textContent = 'Request sent. Waiting for PARMAR’s response.';
 
   try {
-    const response = await fetch('/api/analyze', {
+    const response = await apiRequest('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ request, language: state.settings.language }),
@@ -1252,7 +1738,7 @@ async function submitDecision(decision) {
   const sessionId = ensureCurrentSession().id;
 
   try {
-    const response = await fetch('/api/approval', {
+    const response = await apiRequest('/api/approval', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approval_id: state.pendingApprovalId, decision }),
@@ -1279,45 +1765,108 @@ async function submitDecision(decision) {
   }
 }
 
+async function logoutAuthenticatedSession() {
+  if (state.authMode !== 'authenticated' || state.logoutInProgress) return;
+  state.logoutInProgress = true;
+  invalidatePendingRequest();
+  if (dom.logoutBtn) dom.logoutBtn.disabled = true;
+  let logoutConfirmed = false;
+  try {
+    const response = await apiRequest('/api/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    logoutConfirmed = response.ok;
+  } catch (_error) {
+    logoutConfirmed = false;
+  } finally {
+    state.logoutInProgress = false;
+    clearAuthenticatedState(
+      logoutConfirmed
+        ? 'Signed out. Your local demo conversations remain available.'
+        : 'Logout could not be confirmed. Authenticated data was cleared from this view.',
+      { broadcast: true },
+    );
+    if (dom.logoutBtn) dom.logoutBtn.disabled = false;
+  }
+}
+
 async function submitChatMessage() {
   const text = (dom.chatInput?.value || '').trim();
   if (!text) return;
   const requestId = beginRequest();
   if (requestId === null) return;
 
-  const currentSession = ensureCurrentSession();
-  const sessionId = currentSession.id;
-  const recentMessages = currentSession.messages.slice(-12)
-    .map((message) => ({ role: message.role, content: message.text }));
+  const authenticated = state.authMode === 'authenticated';
+  const authEpoch = state.authEpoch;
+  const requestedConversationId = authenticated ? state.conversationId : null;
+  let currentSession = authenticated
+    ? state.sessions.find((session) => session.id === requestedConversationId)
+    : ensureCurrentSession();
+  let sessionId = currentSession?.id || null;
   stopVokiSpeech('THINKING');
-  appendMessageToSession(sessionId, 'user', text, {});
+  if (!authenticated || currentSession) {
+    appendMessageToSession(sessionId, 'user', text, {});
+  }
   if (dom.chatInput) dom.chatInput.value = '';
   resizeChatInput();
   const thinkingMessage = appendThinkingIndicator();
   if (dom.statusMessage) dom.statusMessage.textContent = 'Message sent. Waiting for PARMAR’s response.';
 
   try {
-    const memory = activeMemoryContext();
-    const context = {
-      ...(memory.length ? { memory } : {}),
-      ...(recentMessages.length ? { recent_messages: recentMessages } : {}),
-    };
-    const response = await fetch('/api/chat', {
+    const context = authenticated
+      ? {}
+      : {
+        ...(currentSession?.messages.length
+          ? { recent_messages: currentSession.messages.slice(-12).map((message) => ({
+            role: message.role,
+            content: message.text,
+          })) }
+          : {}),
+      };
+    const response = await apiRequest('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: text,
         language: state.settings.language,
+        ...(requestedConversationId ? { conversation_id: requestedConversationId } : {}),
         ...(Object.keys(context).length ? { context } : {}),
       }),
     });
     if (!response.ok) throw new Error('Chat request failed');
     const result = await response.json();
-    if (requestId !== state.requestSequence) return;
-    const reply = typeof result?.message === 'string' ? sanitizeSensitiveText(result.message).trim() : '';
+    if (requestId !== state.requestSequence || authEpoch !== state.authEpoch) return;
+    if (authenticated && (
+      state.authMode !== 'authenticated'
+      || state.conversationId !== requestedConversationId
+      || typeof result.conversation_id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(result.conversation_id)
+      || (requestedConversationId && result.conversation_id !== requestedConversationId)
+    )) {
+      throw new TypeError('Invalid authenticated conversation response');
+    }
+    const reply = safeChatReply(result);
     if (!reply) throw new TypeError('Invalid chat response');
+    if (authenticated && !currentSession) {
+      const conversationId = result.conversation_id;
+      state.conversationId = conversationId;
+      state.currentSessionId = conversationId;
+      state.serverConversationIds.add(conversationId);
+      currentSession = {
+        id: conversationId,
+        title: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [],
+      };
+      state.sessions.unshift(currentSession);
+      sessionId = conversationId;
+      appendMessageToSession(sessionId, 'user', text, {});
+    }
     if (state.currentSessionId !== sessionId) {
-      appendMessageToSession(sessionId, 'assistant', reply, result);
+      if (!authenticated && sessionId) appendMessageToSession(sessionId, 'assistant', reply, result);
       return;
     }
     if (!result.provider_error) {
@@ -1326,12 +1875,17 @@ async function submitChatMessage() {
       persistSettings();
       if (dom.providerStatus) dom.providerStatus.textContent = provider;
       if (dom.settingsProvider) dom.settingsProvider.textContent = provider;
+      renderMemories();
     }
     if (!updateState(result.analysis || result)) throw new TypeError('Invalid chat response');
+    if (authenticated) state.serverConversationIds.add(result.conversation_id);
     appendMessageToSession(sessionId, 'assistant', reply, result);
     const vokiResponseState = chatVokiResponseState(result);
-    if (vokiResponseState) setChatVokiState(vokiResponseState);
-    else speakVokiResponse(reply);
+    if (vokiResponseState === 'RESPONDING' || vokiResponseState === 'LOCAL_DEMO') {
+      speakVokiResponse(reply, vokiResponseState);
+    } else {
+      setChatVokiState(vokiResponseState);
+    }
     dom.requestInput.value = text;
   } catch {
     if (requestId !== state.requestSequence) return;
@@ -1339,7 +1893,9 @@ async function submitChatMessage() {
       showRequestUnavailable('The chat service could not respond. No decision result was received.');
       setChatVokiState('ERROR');
     }
-    appendMessageToSession(sessionId, 'assistant', 'The chat service could not respond. Please try again.', { status: 'UNAVAILABLE' });
+    if (sessionId) {
+      appendMessageToSession(sessionId, 'assistant', 'The chat service could not respond. Please try again.', { status: 'UNAVAILABLE' });
+    }
   } finally {
     thinkingMessage.remove();
     finishRequest(requestId);
@@ -1353,9 +1909,8 @@ async function loadScenarios() {
     const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : [];
 
     const options = scenarios.map((scenario) => {
-      const value = scenario.proposed_ai_action || scenario.simulated_user_intent || scenario.description || scenario.scenario_id || '';
       const label = scenario.description || scenario.scenario_id || 'Scenario';
-      return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+      return `<option value="${escapeHtml(scenario.scenario_id || '')}">${escapeHtml(label)}</option>`;
     }).join('');
 
     if (dom.simulatorSelect) dom.simulatorSelect.innerHTML = options || '<option value="">No scenarios</option>';
@@ -1366,11 +1921,40 @@ async function loadScenarios() {
   }
 }
 
+async function evaluateScenario(select) {
+  const scenarioId = select?.value || '';
+  if (!scenarioId) return;
+  const requestId = beginRequest();
+  if (requestId === null) return;
+  if (dom.statusMessage) dom.statusMessage.textContent = 'Scenario evaluation in progress.';
+
+  try {
+    const response = await apiRequest('/api/scenarios/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario_id: scenarioId }),
+    });
+    if (!response.ok) throw new Error('Scenario evaluation failed');
+    const payload = await response.json();
+    if (requestId !== state.requestSequence) return;
+    if (!payload?.evaluation || !updateState(payload.result, true)) throw new TypeError('Invalid scenario evaluation response');
+    const { expected_parmar_behavior: expected, actual_behavior: actual, passed } = payload.evaluation;
+    if (dom.statusMessage) {
+      dom.statusMessage.textContent = `Scenario ${passed ? 'matched' : 'did not match'} expected policy. Expected ${expected}; actual ${actual}.`;
+    }
+    if (dom.requestInput) dom.requestInput.value = payload.result.request;
+  } catch {
+    if (requestId === state.requestSequence) showRequestUnavailable('Scenario evaluation could not complete. No result was received.');
+  } finally {
+    finishRequest(requestId);
+  }
+}
+
 async function togglePhonePermission(enabled) {
   state.settings.phonePermission = enabled;
   persistSettings();
   try {
-    const response = await fetch('/api/phone', {
+    const response = await apiRequest('/api/phone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'toggle_permission', enabled }),
@@ -1397,7 +1981,7 @@ async function runPhoneSimulation(mode) {
     : { event_type: 'battery_low', source: 'simulated', permission_required: false, permission_granted: true, requested_data: ['battery_level'] };
 
   try {
-    const response = await fetch('/api/phone', {
+    const response = await apiRequest('/api/phone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'simulate_event', event: payload }),
@@ -1426,6 +2010,12 @@ function bindEvents() {
         selectSection('chat', 'new-chat');
         return;
       }
+      if (button.dataset.action === 'research') {
+        selectSection('chat', 'research');
+        if (window.innerWidth <= 1100) setResearchOpen(true);
+        else dom.researchPanel?.focus({ preventScroll: true });
+        return;
+      }
       selectSection(button.dataset.section, button.dataset.navKey || button.dataset.section);
     });
   });
@@ -1433,6 +2023,7 @@ function bindEvents() {
   if (dom.sidebarToggle) {
     dom.sidebarToggle.addEventListener('click', () => {
       if (window.innerWidth <= 920) {
+        setResearchOpen(false);
         document.body.classList.toggle('sidebar-open');
       } else {
         document.body.classList.toggle('sidebar-collapsed');
@@ -1441,19 +2032,35 @@ function bindEvents() {
     });
   }
 
-  window.addEventListener('resize', syncSidebarToggle);
+  dom.researchToggle?.addEventListener('click', () => {
+    setResearchOpen(!document.body.classList.contains('research-open'));
+  });
+  dom.researchClose?.addEventListener('click', () => setResearchOpen(false, true));
+
+  window.addEventListener('resize', () => {
+    syncSidebarToggle();
+    if (window.innerWidth > 1100) setResearchOpen(false);
+  });
 
   document.addEventListener('pointerdown', (event) => {
-    if (!document.body.classList.contains('sidebar-open')) return;
-    if (dom.sidebar?.contains(event.target) || dom.sidebarToggle?.contains(event.target)) return;
-    document.body.classList.remove('sidebar-open');
-    syncSidebarToggle();
+    if (document.body.classList.contains('sidebar-open')) {
+      if (dom.sidebar?.contains(event.target) || dom.sidebarToggle?.contains(event.target)) return;
+      document.body.classList.remove('sidebar-open');
+      syncSidebarToggle();
+    }
+    if (document.body.classList.contains('research-open')) {
+      if (dom.researchPanel?.contains(event.target) || dom.researchToggle?.contains(event.target)) return;
+      setResearchOpen(false);
+    }
   });
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && document.body.classList.contains('sidebar-open')) {
-      document.body.classList.remove('sidebar-open');
-      syncSidebarToggle();
+    if (event.key === 'Escape') {
+      if (document.body.classList.contains('sidebar-open')) {
+        document.body.classList.remove('sidebar-open');
+        syncSidebarToggle();
+      }
+      if (document.body.classList.contains('research-open')) setResearchOpen(false, true);
     }
   });
 
@@ -1535,20 +2142,14 @@ function bindEvents() {
 
   if (dom.runScenario) {
     dom.runScenario.addEventListener('click', () => {
-      const selected = dom.simulatorSelect?.value || '';
-      if (!selected) return;
-      dom.requestInput.value = selected;
-      analyzeRequest();
+      evaluateScenario(dom.simulatorSelect);
     });
   }
 
   if (dom.runScenarioSecondary) {
     dom.runScenarioSecondary.addEventListener('click', () => {
-      const selected = dom.simulatorSelectSecondary?.value || '';
-      if (!selected) return;
-      dom.requestInput.value = selected;
       selectSection('home');
-      analyzeRequest();
+      evaluateScenario(dom.simulatorSelectSecondary);
     });
   }
 
@@ -1596,12 +2197,16 @@ function bindEvents() {
 
   if (dom.memoryEnabledToggle) {
     dom.memoryEnabledToggle.addEventListener('change', () => {
+      if (state.authMode === 'authenticated') {
+        setAuthenticatedMemoryConsent(Boolean(dom.memoryEnabledToggle.checked));
+        return;
+      }
       state.settings.memoryEnabled = Boolean(dom.memoryEnabledToggle.checked);
       persistSettings();
       renderMemories();
       setMemoryFeedback(state.settings.memoryEnabled
-        ? 'Saved notes will be included in chat context.'
-        : 'Memory is off. Saved notes will not be included in chat requests.');
+        ? 'Local memory preference enabled. Notes remain in this browser and are not added to chat.'
+        : 'Local memory preference disabled.');
     });
   }
 
@@ -1613,8 +2218,11 @@ function bindEvents() {
       invalidatePendingRequest();
       stopVokiSpeech('IDLE');
       state.currentSessionId = null;
-      ensureCurrentSession();
+      state.conversationId = null;
+      state.pendingApprovalId = null;
+      if (state.authMode !== 'authenticated') ensureCurrentSession();
       renderSessionMessages();
+      renderHistory();
       selectSection('chat', 'chat');
       if (dom.requestInput) dom.requestInput.value = '';
       if (dom.chatInput) dom.chatInput.value = '';
@@ -1637,6 +2245,10 @@ function bindEvents() {
       if (dom.systemState) dom.systemState.textContent = 'READY';
       if (dom.statusMessage) dom.statusMessage.textContent = 'PARMAR is ready for a request.';
     });
+  }
+
+  if (dom.logoutBtn) {
+    dom.logoutBtn.addEventListener('click', logoutAuthenticatedSession);
   }
 
   if (dom.wakeBtn) {
@@ -1683,7 +2295,7 @@ function bindEvents() {
 }
 
 function initialize() {
-  state.currentSessionId = state.sessions[0]?.id || null;
+  state.currentSessionId = null;
   renderHistory();
   renderSessionMessages();
   renderMemories();
@@ -1693,11 +2305,13 @@ function initialize() {
   bindEvents();
   applySettings();
   setVokiState('IDLE');
-  setChatVokiState('IDLE');
+  setChatVokiState(state.settings.provider === 'local-demo' ? 'LOCAL_DEMO' : 'IDLE');
   syncVokiControls();
   syncVokiVisibility();
   syncSidebarToggle();
-  selectSection(state.currentSessionId ? 'chat' : 'home');
+  selectSection('home');
+  configureCrossTabAuthentication();
+  refreshAuthenticationState();
 }
 
 initialize();

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 
-MAX_MEMORY_ENTRIES = 25
+MAX_MEMORY_ENTRIES = 5
 MAX_MEMORY_ENTRY_LENGTH = 400
+MAX_MEMORY_CONTEXT_LENGTH = 1200
+MAX_CONTEXT_ENTRIES = 25
+MAX_CONTEXT_TOTAL_LENGTH = MAX_CONTEXT_ENTRIES * MAX_MEMORY_ENTRY_LENGTH
 MAX_RECENT_MESSAGES = 12
 MAX_RECENT_MESSAGE_LENGTH = 4000
 MAX_RECENT_CONTEXT_LENGTH = 12000
@@ -40,12 +44,13 @@ def sanitize_provider_text(text: str) -> str:
     return sanitized
 
 
-def _safe_memory_entries(memory: object) -> list[str]:
-    if not isinstance(memory, list):
+def _safe_context_entries(values: object, *, limit: int, total_length: int) -> list[str]:
+    if not isinstance(values, list):
         return []
 
     entries: list[str] = []
-    for entry in memory:
+    remaining = total_length
+    for entry in values[:limit]:
         if not isinstance(entry, str):
             continue
         cleaned = entry.strip()
@@ -53,8 +58,11 @@ def _safe_memory_entries(memory: object) -> list[str]:
             continue
         if any(pattern.search(cleaned) for pattern in _SENSITIVE_MEMORY_PATTERNS):
             continue
+        if len(cleaned) > remaining:
+            continue
         entries.append(cleaned)
-        if len(entries) == MAX_MEMORY_ENTRIES:
+        remaining -= len(cleaned)
+        if len(entries) == limit or remaining == 0:
             break
     return entries
 
@@ -88,6 +96,9 @@ def sanitize_recent_messages(messages: object) -> list[dict[str, str]]:
 
 @dataclass
 class ChatContext:
+    """Structured chat data; saved memory is always untrusted user-owned context."""
+
+    memory_trust: ClassVar[str] = "untrusted_user_owned_data"
     language: str = "en"
     persona: str = "neutral"
     memory: list[str] = field(default_factory=list)
@@ -102,6 +113,18 @@ class ChatContext:
     def __post_init__(self) -> None:
         self.language = sanitize_provider_text(self.language)[:32] if isinstance(self.language, str) else "en"
         self.persona = sanitize_provider_text(self.persona)[:80] if isinstance(self.persona, str) else "neutral"
-        self.memory = _safe_memory_entries(self.memory)
-        self.policy_rules = _safe_memory_entries(self.policy_rules)
-        self.required_permissions = _safe_memory_entries(self.required_permissions)
+        self.memory = _safe_context_entries(
+            self.memory,
+            limit=MAX_MEMORY_ENTRIES,
+            total_length=MAX_MEMORY_CONTEXT_LENGTH,
+        )
+        self.policy_rules = _safe_context_entries(
+            self.policy_rules,
+            limit=MAX_CONTEXT_ENTRIES,
+            total_length=MAX_CONTEXT_TOTAL_LENGTH,
+        )
+        self.required_permissions = _safe_context_entries(
+            self.required_permissions,
+            limit=MAX_CONTEXT_ENTRIES,
+            total_length=MAX_CONTEXT_TOTAL_LENGTH,
+        )
