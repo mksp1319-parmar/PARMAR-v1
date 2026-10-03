@@ -17,6 +17,10 @@ from .providers import (
 )
 
 EXTERNAL_MULTI_MODEL_ENV = "PARMAR_VERIFIED_MULTI_MODEL_EXTERNAL_ENABLED"
+EXTERNAL_CHAT_ENABLED_ENV = "PARMAR_EXTERNAL_CHAT_ENABLED"
+EXTERNAL_CHAT_ALLOWED_PROVIDERS_ENV = "PARMAR_EXTERNAL_CHAT_ALLOWED_PROVIDERS"
+EXTERNAL_CHAT_ALLOWED_CAPABILITIES_ENV = "PARMAR_EXTERNAL_CHAT_ALLOWED_CAPABILITIES"
+EXTERNAL_CHAT_ALLOW_SINGLE_PROVIDER_ENV = "PARMAR_EXTERNAL_CHAT_ALLOW_SINGLE_PROVIDER"
 SINGLE_PROVIDER_EXTERNAL = "SINGLE_PROVIDER_EXTERNAL"
 VERIFIED_MULTI_MODEL_EXTERNAL = "VERIFIED_MULTI_MODEL_EXTERNAL"
 LOCAL_FREE = "LOCAL_FREE"
@@ -62,6 +66,16 @@ _PROVIDER_ENV_REQUIREMENTS = {
         "endpoint_optional": True,
     },
 }
+_EXTERNAL_AUTHORIZATION_CAPABILITIES = frozenset({
+    "text_generation",
+    "reasoning",
+    "code_generation",
+    "summarization",
+    "translation",
+    "structured_output",
+    "verification",
+    "image_analysis",
+})
 
 
 @dataclass(frozen=True)
@@ -286,6 +300,62 @@ class ExternalAuthorization:
         if mode == VERIFIED_MULTI_MODEL_EXTERNAL and self.allow_verified_multi_model:
             return AuthorizationDecision("EXTERNAL_AUTHORIZED", True)
         return AuthorizationDecision("EXTERNAL_MODE_NOT_ALLOWED", False)
+
+
+def external_authorization_from_environment(
+    environ: Mapping[str, str] | None = None,
+) -> ExternalAuthorization:
+    """Build a strict server-side authorization policy; malformed settings deny all."""
+    values = os.environ if environ is None else environ
+
+    def parse_boolean(name: str) -> bool | None:
+        value = values.get(name)
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+        return None
+
+    def parse_allowlist(name: str, valid_values: frozenset[str]) -> frozenset[str] | None:
+        value = values.get(name)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        entries = [entry.strip().lower() for entry in value.split(",")]
+        if any(not entry or entry not in valid_values for entry in entries):
+            return None
+        return frozenset(entries)
+
+    enabled = parse_boolean(EXTERNAL_CHAT_ENABLED_ENV)
+    if enabled is not True:
+        return ExternalAuthorization()
+
+    allow_single_provider = parse_boolean(EXTERNAL_CHAT_ALLOW_SINGLE_PROVIDER_ENV)
+    external_providers = frozenset(PROVIDER_REGISTRY) - {"local-demo"}
+    allowed_providers = parse_allowlist(
+        EXTERNAL_CHAT_ALLOWED_PROVIDERS_ENV,
+        external_providers,
+    )
+    allowed_capabilities = parse_allowlist(
+        EXTERNAL_CHAT_ALLOWED_CAPABILITIES_ENV,
+        _EXTERNAL_AUTHORIZATION_CAPABILITIES,
+    )
+    if (
+        allow_single_provider is None
+        or allowed_providers is None
+        or allowed_capabilities is None
+    ):
+        return ExternalAuthorization()
+
+    return ExternalAuthorization(
+        enabled=True,
+        allowed_providers=allowed_providers,
+        allowed_capabilities=allowed_capabilities,
+        allow_single_provider=allow_single_provider,
+        allow_verified_multi_model=False,
+    )
 
 
 @dataclass(frozen=True)

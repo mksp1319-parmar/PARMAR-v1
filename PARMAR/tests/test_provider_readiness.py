@@ -5,11 +5,23 @@ from types import SimpleNamespace
 import pytest
 
 from PARMAR.chat.providers import PROVIDER_ENV
-from PARMAR.chat.readiness import ExternalAuthorization, ProviderConfigurationRegistry
+from PARMAR.chat.readiness import (
+    ExternalAuthorization,
+    ProviderConfigurationRegistry,
+    external_authorization_from_environment,
+)
 from PARMAR.chat.models import ChatResponse
 from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.service import ChatService
 from PARMAR.interface.futuristic_app import PARMARRequestHandler
+
+
+EXTERNAL_AUTH_ENV = {
+    "PARMAR_EXTERNAL_CHAT_ENABLED": "true",
+    "PARMAR_EXTERNAL_CHAT_ALLOWED_PROVIDERS": "openai",
+    "PARMAR_EXTERNAL_CHAT_ALLOWED_CAPABILITIES": "text_generation",
+    "PARMAR_EXTERNAL_CHAT_ALLOW_SINGLE_PROVIDER": "true",
+}
 
 
 def test_local_demo_is_default_and_has_local_readiness_without_external_configuration():
@@ -191,10 +203,70 @@ def test_authorization_denies_unknown_provider_and_unknown_locality():
     assert authorization.evaluate("openai", "text_generation", "UNKNOWN").outcome == "EXTERNAL_MODE_NOT_ALLOWED"
 
 
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {},
+        {"PARMAR_EXTERNAL_CHAT_ENABLED": "true"},
+        {**EXTERNAL_AUTH_ENV, "PARMAR_EXTERNAL_CHAT_ENABLED": "false"},
+        {**EXTERNAL_AUTH_ENV, "PARMAR_EXTERNAL_CHAT_ENABLED": "sometimes"},
+        {**EXTERNAL_AUTH_ENV, "PARMAR_EXTERNAL_CHAT_ALLOW_SINGLE_PROVIDER": "yes"},
+        {**EXTERNAL_AUTH_ENV, "PARMAR_EXTERNAL_CHAT_ALLOWED_PROVIDERS": "openai,unknown"},
+        {**EXTERNAL_AUTH_ENV, "PARMAR_EXTERNAL_CHAT_ALLOWED_CAPABILITIES": "text_generation,admin"},
+    ],
+)
+def test_external_authorization_environment_fails_closed(environment):
+    policy = external_authorization_from_environment(environment)
+
+    assert policy.evaluate("openai", "text_generation", "SINGLE_PROVIDER_EXTERNAL").authorized is False
+    assert policy.evaluate("openai", "text_generation", "VERIFIED_MULTI_MODEL_EXTERNAL").authorized is False
+
+
+def test_external_authorization_environment_builds_only_explicit_single_provider_allowlist():
+    policy = external_authorization_from_environment({
+        **EXTERNAL_AUTH_ENV,
+        "PARMAR_EXTERNAL_CHAT_ALLOWED_PROVIDERS": " OPENAI, gemini ",
+        "PARMAR_EXTERNAL_CHAT_ALLOWED_CAPABILITIES": "text_generation, reasoning",
+    })
+
+    assert policy.enabled is True
+    assert policy.allowed_providers == frozenset({"openai", "gemini"})
+    assert policy.allowed_capabilities == frozenset({"text_generation", "reasoning"})
+    assert policy.allow_single_provider is True
+    assert policy.allow_verified_multi_model is False
+    assert policy.evaluate("openai", "text_generation", "SINGLE_PROVIDER_EXTERNAL").authorized is True
+    assert policy.evaluate("claude", "text_generation", "SINGLE_PROVIDER_EXTERNAL").authorized is False
+    assert policy.evaluate("openai", "code_generation", "SINGLE_PROVIDER_EXTERNAL").authorized is False
+    assert policy.evaluate("openai", "text_generation", "VERIFIED_MULTI_MODEL_EXTERNAL").authorized is False
+
+
+def test_external_authorization_single_provider_disabled_stays_denied():
+    policy = external_authorization_from_environment({
+        **EXTERNAL_AUTH_ENV,
+        "PARMAR_EXTERNAL_CHAT_ALLOW_SINGLE_PROVIDER": "false",
+    })
+
+    assert policy.enabled is True
+    assert policy.evaluate("openai", "text_generation", "SINGLE_PROVIDER_EXTERNAL").authorized is False
+
+
 def test_chat_api_ignores_client_credentials_urls_and_adapter_payload_fields(monkeypatch):
     captured = {}
+    server_authorization = ExternalAuthorization(
+        enabled=True,
+        allowed_providers=frozenset({"openai"}),
+        allowed_capabilities=frozenset({"text_generation"}),
+        allow_single_provider=True,
+    )
+    monkeypatch.setattr(
+        "PARMAR.interface.futuristic_app.EXTERNAL_AUTHORIZATION",
+        server_authorization,
+    )
 
     class CapturingChatService:
+        def __init__(self, external_authorization=None):
+            captured["external_authorization"] = external_authorization
+
         def respond(self, prompt, context=None, selected_provider=None, orchestration_mode="SINGLE_PROVIDER"):
             captured.update(prompt=prompt, context=context, selected_provider=selected_provider, mode=orchestration_mode)
             return {"message": "received"}
@@ -208,6 +280,9 @@ def test_chat_api_ignores_client_credentials_urls_and_adapter_payload_fields(mon
         "api_key": secret,
         "authorization": f"Bearer {secret}",
         "endpoint": "https://attacker.example/endpoint",
+        "model": "attacker-model",
+        "headers": {"X-Authorization": secret},
+        "external_authorization": {"enabled": True, "allowed_providers": ["attacker"]},
         "adapter": {"generate": "arbitrary code"},
     }
     body = json.dumps(payload).encode()
@@ -226,6 +301,33 @@ def test_chat_api_ignores_client_credentials_urls_and_adapter_payload_fields(mon
     assert captured["prompt"] == payload["message"]
     assert secret not in repr(captured)
     assert "attacker.example" not in repr(captured)
+    assert captured["external_authorization"] is server_authorization
+
+
+def test_provider_readiness_uses_the_shared_server_authorization(monkeypatch):
+    monkeypatch.setenv(PROVIDER_ENV, "openai")
+    monkeypatch.setenv("PARMAR_OPENAI_MODEL", "readiness-model")
+    monkeypatch.setenv("PARMAR_OPENAI_API_KEY", "readiness-secret")
+    server_authorization = external_authorization_from_environment(EXTERNAL_AUTH_ENV)
+    monkeypatch.setattr(
+        "PARMAR.interface.futuristic_app.EXTERNAL_AUTHORIZATION",
+        server_authorization,
+    )
+    response = {}
+    request = SimpleNamespace(
+        path="/api/providers",
+        _send_json=lambda status, result: response.update(status=status, result=result),
+    )
+
+    PARMARRequestHandler.do_GET(request)
+
+    openai = next(item for item in response["result"]["providers"] if item["id"] == "openai")
+    assert response["status"] == 200
+    assert openai["authorized"] is True
+    assert openai["authorization_status"] == "EXTERNAL_AUTHORIZED"
+    assert openai["status"] == "PAID_BLOCKED"
+    assert openai["single_provider_eligible"] is False
+    assert "readiness-secret" not in repr(response)
 
 
 class FakeExternalProvider:
