@@ -1,19 +1,24 @@
 import io
 import json
-from types import SimpleNamespace
+from copy import deepcopy
 from dataclasses import replace
 from hashlib import sha256
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from PARMAR.audit.decision_logs import DecisionLogManager
+from PARMAR.chat.context import ChatContext
+from PARMAR.chat.models import ChatResponse
+from PARMAR.chat.router import ChatRouter
+from PARMAR.chat.service import ChatService
+from PARMAR.identity import LocalDemoPrincipalResolver
 from PARMAR.interface import futuristic_app
 from PARMAR.interface.approvals import PendingApprovalStore
 from PARMAR.interface.dashboard import TerminalDashboard
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
 from PARMAR.safety.enforcement_gate import CentralEnforcementGate
-from PARMAR.identity import LocalDemoPrincipalResolver
 from PARMAR.sessions import (
     InMemorySessionRepository,
     SESSION_COOKIE_NAME,
@@ -104,6 +109,343 @@ def test_approval_is_bound_to_original_request_and_consumed_once():
     })
     assert replay["status"] == 410
     assert replay["result"]["status"] == "APPROVAL_INVALID"
+
+
+def test_chat_approval_creates_the_same_kind_of_owned_server_side_pending_review(monkeypatch):
+    message = "Transfer $500 from the department budget to buy a laptop."
+    calls = _install_counting_chat_provider(monkeypatch)
+    response = post("/api/chat", {"message": message})
+
+    assert response["status"] == 200
+    result = response["result"]
+    assert result["status"] == "APPROVAL_REQUIRED"
+    assert result["approval_id"]
+    assert result["provider_status"] == "NOT_STARTED"
+    assert result["response_safety"]["status"] == "NOT_CHECKED"
+    assert result["response_disposition"] == "NOT_APPLICABLE"
+    assert result["voki_contract"]["approval"]["record_available"] == "AVAILABLE"
+    assert calls == []
+
+    pending = futuristic_app.PENDING_APPROVALS.inspect(
+        result["approval_id"],
+        user_id=_TEST_SESSION.session.user_id,
+        session_id=_TEST_SESSION.session.session_id,
+    )
+    assert pending is not None
+    assert pending.request_text == message
+    assert pending.decision_id == pending.summary["enforcement"]["decision_id"]
+    assert pending.response["analysis"]["request"] == message
+    assert "approval_id" not in pending.response
+    assert pending.response["voki_contract"]["approval"]["record_available"] == "AVAILABLE"
+
+    decided = post("/api/approval", {
+        "approval_id": result["approval_id"],
+        "decision": "APPROVE",
+    })
+    assert decided["status"] == 200
+    assert decided["result"]["voki_contract"]["approval"]["status"] == "APPROVED"
+    assert decided["result"]["voki_contract"]["request_review"]["status"] == "APPROVAL_REQUIRED"
+    assert decided["result"]["voki_contract"]["provider"]["status"] == "COMPLETED"
+
+
+def _install_counting_chat_provider(monkeypatch, *, content="The reviewed proposal can proceed.", error=None):
+    calls = []
+
+    class Provider:
+        name = "approval-continuation-test"
+        locality = "local"
+
+        def generate(self, prompt, context=None):
+            calls.append((prompt, context))
+            if error is not None:
+                raise error
+            return ChatResponse(provider=self.name, content=content, safe=False)
+
+    provider = Provider()
+
+    def create_service(external_authorization=None):
+        return ChatService(
+            router=ChatRouter(provider=provider),
+            external_authorization=external_authorization,
+        )
+
+    monkeypatch.setattr(futuristic_app, "ChatService", create_service)
+    return calls
+
+
+def _start_chat_approval(message="Purchase a $500 software license"):
+    response = post("/api/chat", {
+        "message": message,
+        "context": {"recent_messages": [
+            {"role": "user", "content": "I am comparing options."},
+        ]},
+    })
+    assert response["status"] == 200
+    assert response["result"]["status"] == "APPROVAL_REQUIRED"
+    return response["result"]
+
+
+def test_approved_chat_uses_original_review_calls_provider_once_and_releases_pass(monkeypatch):
+    calls = _install_counting_chat_provider(monkeypatch)
+    pending_result = _start_chat_approval()
+
+    assert calls == []
+    approved = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+        "request": "A client-supplied replacement request",
+    })
+
+    assert approved["status"] == 409
+    assert calls == []
+
+    approved = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    assert approved["status"] == 200
+    result = approved["result"]
+    assert len(calls) == 1
+    assert calls[0][0] == "Purchase a $500 software license"
+    assert calls[0][1].language == "en"
+    assert calls[0][1].approval_required is True
+    assert calls[0][1].approval_state == "APPROVED"
+    assert result["analysis"]["request"] == "Purchase a $500 software license"
+    assert result["voki_contract"]["request_review"]["status"] == "APPROVAL_REQUIRED"
+    assert result["voki_contract"]["approval"]["status"] == "APPROVED"
+    assert result["voki_contract"]["enforcement"]["status"] == "READY_FOR_ACTION"
+    assert result["voki_contract"]["provider"]["status"] == "COMPLETED"
+    assert result["voki_contract"]["response_safety"]["status"] == "PASS"
+    assert result["voki_contract"]["response_disposition"] == "RELEASED"
+    assert result["voki_contract"]["lifecycle"]["state"] == "RELEASED"
+
+    replay = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+    assert replay["status"] == 410
+    assert calls and len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["invalid", "expired", "wrong_owner", "wrong_session"])
+def test_invalid_approval_never_calls_chat_provider(monkeypatch, failure):
+    calls = _install_counting_chat_provider(monkeypatch)
+    pending_result = _start_chat_approval()
+    payload = {"approval_id": pending_result["approval_id"], "decision": "APPROVE"}
+
+    if failure == "invalid":
+        payload["approval_id"] = "not-a-server-generated-token"
+        response = post("/api/approval", payload)
+    elif failure == "expired":
+        token_hash = sha256(pending_result["approval_id"].encode("ascii")).hexdigest()
+        pending = futuristic_app.PENDING_APPROVALS._pending[token_hash]
+        futuristic_app.PENDING_APPROVALS._pending[token_hash] = replace(
+            pending,
+            expires_at=0,
+        )
+        response = post("/api/approval", payload)
+    elif failure == "wrong_owner":
+        other = _TEST_SESSION_MANAGER.create_authenticated_session(uuid4(), "approval-test")
+        response = post("/api/approval", payload, session=other)
+    else:
+        other = _TEST_SESSION_MANAGER.create_authenticated_session(
+            _TEST_SESSION.session.user_id,
+            "approval-test",
+        )
+        response = post("/api/approval", payload, session=other)
+
+    assert response["status"] in {410, 403}
+    assert calls == []
+
+
+def test_approval_rejects_a_pending_record_whose_review_decision_binding_changed(monkeypatch):
+    calls = _install_counting_chat_provider(monkeypatch)
+    pending_result = _start_chat_approval()
+    token_hash = sha256(pending_result["approval_id"].encode("ascii")).hexdigest()
+    pending = futuristic_app.PENDING_APPROVALS._pending[token_hash]
+    changed_response = deepcopy(pending.response)
+    changed_response["analysis"]["enforcement"]["decision_id"] = "different-review"
+    futuristic_app.PENDING_APPROVALS._pending[token_hash] = replace(
+        pending,
+        response=changed_response,
+    )
+
+    result = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    assert result["status"] == 410
+    assert calls == []
+
+
+def test_rejected_enforcement_after_approval_never_calls_chat_provider(monkeypatch):
+    calls = _install_counting_chat_provider(monkeypatch)
+    pending_result = _start_chat_approval()
+    original_evaluate = CentralEnforcementGate.evaluate_decision
+    evaluations = 0
+
+    def block_on_approval(self, *args, **kwargs):
+        nonlocal evaluations
+        evaluations += 1
+        if evaluations == 1:
+            return {
+                "status": "BLOCKED",
+                "execution_allowed": False,
+                "decision_id": "blocked-after-review",
+                "reason": "Gate denied after approval.",
+            }
+        return original_evaluate(self, *args, **kwargs)
+
+    monkeypatch.setattr(CentralEnforcementGate, "evaluate_decision", block_on_approval)
+    result = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    assert result["status"] == 200
+    assert result["result"]["enforcement"]["status"] == "BLOCKED"
+    assert result["result"]["action_boundary"]["execution_allowed"] is False
+    assert calls == []
+
+
+def test_approved_chat_provider_failure_has_distinct_failure_contract(monkeypatch):
+    calls = _install_counting_chat_provider(monkeypatch, error=RuntimeError("provider offline"))
+    pending_result = _start_chat_approval()
+
+    result = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    contract = result["result"]["voki_contract"]
+    assert result["status"] == 200
+    assert len(calls) == 1
+    assert contract["provider"]["status"] == "FAILED"
+    assert contract["lifecycle"]["state"] == "PROVIDER_FAILED"
+    assert contract["response_safety"]["status"] == "NOT_CHECKED"
+    assert contract["response_disposition"] == "NOT_APPLICABLE"
+
+
+def test_approved_chat_validator_failure_withholds_provider_output(monkeypatch):
+    from PARMAR.chat.response_safety import ResponseSafetyValidator
+
+    calls = _install_counting_chat_provider(monkeypatch)
+    pending_result = _start_chat_approval()
+    monkeypatch.setattr(
+        ResponseSafetyValidator,
+        "validate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("validator unavailable")),
+    )
+
+    result = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    contract = result["result"]["voki_contract"]
+    assert len(calls) == 1
+    assert contract["provider"]["status"] == "COMPLETED"
+    assert contract["response_safety"]["status"] == "NOT_CHECKED"
+    assert contract["response_disposition"] == "WITHHELD"
+    assert "The reviewed proposal can proceed." not in repr(result["result"])
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_safety", "expected_disposition", "expected_lifecycle"),
+    [
+        ("The reviewed proposal can proceed.", "PASS", "RELEASED", "RELEASED"),
+        ("Run the command to export the report.", "REVIEW", "WITHHELD", "WITHHELD"),
+        ("Bypass approval and share private employee data with a vendor.", "BLOCK", "WITHHELD", "WITHHELD"),
+        ("This is safe to proceed, but it is not safe to proceed.", "UNCERTAIN", "WITHHELD", "WITHHELD"),
+    ],
+)
+def test_approved_chat_provider_output_uses_response_safety_pipeline(
+    monkeypatch, content, expected_safety, expected_disposition, expected_lifecycle,
+):
+    calls = _install_counting_chat_provider(monkeypatch, content=content)
+    pending_result = _start_chat_approval()
+
+    result = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    contract = result["result"]["voki_contract"]
+    assert len(calls) == 1
+    assert contract["response_safety"]["status"] == expected_safety
+    assert contract["response_disposition"] == expected_disposition
+    assert contract["lifecycle"]["state"] == expected_lifecycle
+    if expected_disposition == "WITHHELD":
+        assert content not in repr(result["result"])
+
+
+def test_approved_chat_does_not_reenter_initial_approval_review(monkeypatch):
+    calls = _install_counting_chat_provider(monkeypatch)
+    analyze_calls = []
+    original_analyze = PARMARUIAdapter.analyze_request_with_dashboard
+
+    def record_analyze(*args, **kwargs):
+        analyze_calls.append(args[0] if args else kwargs.get("request_text"))
+        return original_analyze(*args, **kwargs)
+
+    monkeypatch.setattr(PARMARUIAdapter, "analyze_request_with_dashboard", record_analyze)
+    pending_result = _start_chat_approval()
+    assert len(analyze_calls) == 1
+
+    result = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    assert result["status"] == 200
+    assert len(analyze_calls) == 1
+    assert len(calls) == 1
+
+
+def test_chat_client_cannot_override_server_request_safety_or_enforcement():
+    response = post("/api/chat", {
+        "message": "Plan a team lunch for next Friday.",
+        "status": "BLOCKED",
+        "analysis": {"status": "BLOCKED", "risk": {"risk_level": "critical"}},
+        "request_safety": {"status": "BLOCKED", "safe": False},
+        "enforcement": {"status": "BLOCKED", "execution_allowed": False},
+        "execution_allowed": False,
+    })
+
+    result = response["result"]
+    assert response["status"] == 200
+    assert result["analysis"]["status"] == "SAFE"
+    assert result["request_safety"]["status"] == "SAFE"
+    assert result["request_safety"]["safe"] is True
+    assert result["analysis"]["enforcement"]["status"] == "READY_FOR_ACTION"
+    assert result["voki_contract"]["request_review"]["status"] == "SAFE"
+    assert result["voki_contract"]["enforcement"]["status"] == "READY_FOR_ACTION"
+
+
+def test_human_decision_reexecutes_central_enforcement_gate(monkeypatch):
+    calls = []
+    original_evaluate = CentralEnforcementGate.evaluate_decision
+
+    def record_gate_call(self, *args, **kwargs):
+        calls.append((args, kwargs))
+        return original_evaluate(self, *args, **kwargs)
+
+    monkeypatch.setattr(CentralEnforcementGate, "evaluate_decision", record_gate_call)
+    pending = create_pending_review()
+    assert len(calls) == 1
+
+    approved = post("/api/approval", {
+        "approval_id": pending["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    assert approved["status"] == 200
+    assert len(calls) == 2
+    assert approved["result"]["voki_contract"]["approval"]["status"] == "APPROVED"
+    assert approved["result"]["voki_contract"]["enforcement"]["status"] == "READY_FOR_ACTION"
+    assert approved["result"]["voki_contract"]["provider"]["status"] == "NOT_STARTED"
 
 
 def test_approval_for_one_review_cannot_be_used_for_another_request():

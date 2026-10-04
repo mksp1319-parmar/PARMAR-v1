@@ -28,15 +28,15 @@ def test_normal_lifecycle_transitions(start, end):
     assert machine.transition(end).current_state is end
 
 
-def test_risk_check_can_map_authoritative_ready_outcome_to_safe_response():
+def test_risk_check_maps_permission_without_claiming_a_response_was_released():
     machine = _machine_at_risk_check()
 
     snapshot = machine.apply_enforcement_result(
         {"status": "READY_FOR_ACTION", "execution_allowed": True},
-        response_completed=True,
     )
 
-    assert snapshot.current_state is LifecycleState.SAFE_RESPONSE
+    assert snapshot.current_state is LifecycleState.ENFORCEMENT_ALLOWED
+    assert snapshot.current_state is not LifecycleState.RELEASED
 
 
 def test_risk_check_can_map_human_approval_requirement():
@@ -69,16 +69,15 @@ def test_risk_check_can_map_blocked_outcome():
     assert snapshot.current_state is LifecycleState.BLOCKED
 
 
-def test_waiting_for_human_can_map_approved_completed_response():
+def test_waiting_for_human_maps_approval_to_permission_not_release():
     machine = _machine_at_risk_check()
     machine.apply_enforcement_result({"status": "HUMAN_APPROVAL_REQUIRED"})
 
     snapshot = machine.apply_enforcement_result(
         {"status": "READY_FOR_ACTION", "execution_allowed": True, "human_approval": "APPROVED"},
-        response_completed=True,
     )
 
-    assert snapshot.current_state is LifecycleState.SAFE_RESPONSE
+    assert snapshot.current_state is LifecycleState.ENFORCEMENT_ALLOWED
 
 
 def test_waiting_for_human_can_map_rejection():
@@ -90,14 +89,11 @@ def test_waiting_for_human_can_map_rejection():
     assert snapshot.current_state is LifecycleState.BLOCKED
 
 
-@pytest.mark.parametrize("terminal_state", [LifecycleState.SAFE_RESPONSE, LifecycleState.BLOCKED])
+@pytest.mark.parametrize("terminal_state", [LifecycleState.ENFORCEMENT_ALLOWED, LifecycleState.BLOCKED])
 def test_terminal_lifecycle_returns_to_idle(terminal_state):
     machine = _machine_at_risk_check()
-    if terminal_state is LifecycleState.SAFE_RESPONSE:
-        machine.apply_enforcement_result(
-            {"status": "READY_FOR_ACTION", "execution_allowed": True},
-            response_completed=True,
-        )
+    if terminal_state is LifecycleState.ENFORCEMENT_ALLOWED:
+        machine.apply_enforcement_result({"status": "READY_FOR_ACTION", "execution_allowed": True})
     else:
         machine.apply_enforcement_result({"status": "BLOCKED"})
 
@@ -114,39 +110,59 @@ def test_arbitrary_transition_is_rejected_without_mutating_state():
     assert machine.snapshot is before
 
 
-def test_terminal_transition_requires_authoritative_enforcement_outcome():
+def test_permission_transition_requires_authoritative_enforcement_outcome():
     machine = _machine_at_risk_check()
 
     with pytest.raises(InvalidTransitionError):
-        machine.transition(LifecycleState.SAFE_RESPONSE, response_completed=True)
+        machine.transition(LifecycleState.ENFORCEMENT_ALLOWED)
 
     assert machine.snapshot.current_state is LifecycleState.RISK_CHECK
 
 
-def test_intermediate_pass_does_not_infer_safe_response():
+def test_enforcement_permission_must_be_followed_by_provider_and_response_safety():
     machine = _machine_at_risk_check()
-    before = machine.snapshot
+    permission = machine.apply_enforcement_result({"status": "READY_FOR_ACTION", "execution_allowed": True})
+    assert permission.current_state is LifecycleState.ENFORCEMENT_ALLOWED
+    assert machine.transition(LifecycleState.PROVIDER).current_state is LifecycleState.PROVIDER
+    assert machine.transition(LifecycleState.RESPONSE_SAFETY).current_state is LifecycleState.RESPONSE_SAFETY
+    assert machine.transition(
+        LifecycleState.RELEASED,
+        response_safety_result={"status": "PASS"},
+    ).current_state is LifecycleState.RELEASED
 
-    result = machine.apply_enforcement_result({"status": "READY_FOR_ACTION", "execution_allowed": True})
 
-    assert result is before
-    assert machine.snapshot.current_state is LifecycleState.RISK_CHECK
+@pytest.mark.parametrize("status", ["REVIEW", "BLOCK", "UNCERTAIN", "NOT_CHECKED"])
+def test_nonpass_response_safety_can_only_enter_withheld(status):
+    machine = _machine_at_risk_check()
+    machine.apply_enforcement_result({"status": "READY_FOR_ACTION", "execution_allowed": True})
+    machine.transition(LifecycleState.PROVIDER)
+    machine.transition(LifecycleState.RESPONSE_SAFETY)
+
+    with pytest.raises(InvalidTransitionError):
+        machine.transition(
+            LifecycleState.RELEASED,
+            response_safety_result={"status": status},
+        )
+
+    assert machine.transition(
+        LifecycleState.WITHHELD,
+        response_safety_result={"status": status},
+    ).current_state is LifecycleState.WITHHELD
 
 
-def test_safe_response_requires_execution_permission_and_completion():
+def test_enforcement_allowed_requires_explicit_execution_permission():
     machine = _machine_at_risk_check()
 
     with pytest.raises(ValueError):
         machine.apply_enforcement_result(
             {"status": "READY_FOR_ACTION", "execution_allowed": False},
-            response_completed=True,
         )
 
-    with pytest.raises(InvalidTransitionError):
-        machine.transition(
-            LifecycleState.SAFE_RESPONSE,
-            enforcement_result={"status": "READY_FOR_ACTION", "execution_allowed": True},
-        )
+    permission = machine.transition(
+        LifecycleState.ENFORCEMENT_ALLOWED,
+        enforcement_result={"status": "READY_FOR_ACTION", "execution_allowed": True},
+    )
+    assert permission.current_state is LifecycleState.ENFORCEMENT_ALLOWED
 
 
 def test_snapshot_tracks_context_and_is_immutable():

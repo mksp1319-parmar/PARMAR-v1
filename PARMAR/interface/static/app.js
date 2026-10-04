@@ -5,9 +5,13 @@ const STORAGE_KEYS = {
   memories: 'parmar-memories-v1',
 };
 const MAX_SAVED_MEMORIES = 25;
+const PANEL_DRAWER_BREAKPOINT = 1100;
+const PANEL_TRANSITION_MS = 260;
+const PANEL_EDGE_ZONE = 24;
+const PANEL_DIRECTION_LOCK = 10;
 const PROVIDER_IDS = new Set(['local-demo', 'openai', 'gemini', 'claude', 'http-json']);
 const RESPONSE_SAFETY_STATES = new Set(['PASS', 'REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
-const SUPPRESSED_RESPONSE_SAFETY_STATES = new Set(['BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
+const SUPPRESSED_RESPONSE_SAFETY_STATES = new Set(['REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
 const responseSafetyLabels = {
   PASS: 'No configured response issue detected; factual accuracy is not verified.',
   REVIEW: 'Response needs human review; this is not an approval.',
@@ -16,6 +20,7 @@ const responseSafetyLabels = {
   NOT_CHECKED: 'Response was not checked and is not shown.',
 };
 let historyStorageUnavailable = false;
+let vokiResponsePulseTimer = null;
 const sensitiveMemoryPatterns = [
   /\b(?:password|passwd|pwd|passcode|secret|credential|api[\s_-]?key|access[\s_-]?token|refresh[\s_-]?token|auth(?:entication)?[\s_-]?token|client[\s_-]?secret)\b\s*(?:is|[:=])\s*\S+/i,
   /\bAuthorization\s*:\s*[^\r\n]*/i,
@@ -43,14 +48,19 @@ function sanitizeStoredValue(value) {
 }
 
 function responseSafetyStatus(result) {
-  if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'response_safety')) return null;
-  const status = result.response_safety?.status;
+  if (!result || typeof result !== 'object') return null;
+  const contract = result.voki_contract || result.analysis?.voki_contract;
+  if (!contract && !Object.hasOwn(result, 'response_safety')) return null;
+  const status = contract
+    ? contract.response_safety?.status
+    : result.response_safety?.status;
   if (RESPONSE_SAFETY_STATES.has(status)) return status;
   return 'NOT_CHECKED';
 }
 
 function responseSafetyMessage(status) {
   return {
+    REVIEW: 'PARMAR withheld the provider response pending human review.',
     BLOCK: 'PARMAR withheld the provider response after a response policy check.',
     UNCERTAIN: 'PARMAR withheld the provider response because its checks could not resolve a concern.',
     NOT_CHECKED: 'PARMAR could not validate the provider response, so the generated text was withheld.',
@@ -58,8 +68,19 @@ function responseSafetyMessage(status) {
 }
 
 function safeChatReply(result) {
-  const status = responseSafetyStatus(result) || 'NOT_CHECKED';
+  const contract = result?.voki_contract || result?.analysis?.voki_contract;
   const message = typeof result?.message === 'string' ? result.message : '';
+  if (contract?.provider?.status === 'FAILED' || result?.provider_error) {
+    return sanitizeSensitiveText(message).trim() || 'The configured provider is unavailable.';
+  }
+  if (
+    contract?.provider?.status === 'COMPLETED'
+    && contract.response_disposition !== 'RELEASED'
+  ) {
+    return 'PARMAR withheld the provider response.';
+  }
+
+  const status = responseSafetyStatus(result) || 'NOT_CHECKED';
   if (status === 'NOT_CHECKED' && ['BLOCKED', 'APPROVAL_REQUIRED'].includes(result?.analysis?.status)) {
     const requestMessage = result.analysis.message;
     return typeof requestMessage === 'string'
@@ -90,12 +111,33 @@ function suppressCandidateContent(value) {
 function sanitizeResponseForHistory(result) {
   let stored = sanitizeStoredValue(result);
   const status = responseSafetyStatus(result) ?? (typeof result?.provider === 'string' ? 'NOT_CHECKED' : null);
-  if (!SUPPRESSED_RESPONSE_SAFETY_STATES.has(status)) return stored;
+  const contract = result?.voki_contract || result?.analysis?.voki_contract;
+  const completedButWithheld = contract?.provider?.status === 'COMPLETED'
+    && contract.response_disposition !== 'RELEASED';
+  if (!SUPPRESSED_RESPONSE_SAFETY_STATES.has(status) && !completedButWithheld) return stored;
   stored = suppressCandidateContent(stored);
   if (stored && typeof stored === 'object') {
     stored.message = safeChatReply(result);
   }
   return stored;
+}
+
+function panelGestureAxis(deltaX, deltaY) {
+  if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < PANEL_DIRECTION_LOCK) return 'pending';
+  return Math.abs(deltaX) > Math.abs(deltaY) * 1.4 ? 'horizontal' : 'vertical';
+}
+
+function panelOpenFraction(side, wasOpen, deltaX, panelWidth) {
+  const normalizedDelta = deltaX / Math.max(panelWidth, 1);
+  if (side === 'left') return wasOpen ? 1 + normalizedDelta : normalizedDelta;
+  return wasOpen ? 1 - normalizedDelta : -normalizedDelta;
+}
+
+function shouldOpenPanelAfterGesture(openFraction, velocityTowardOpen, deltaX) {
+  if (Math.abs(velocityTowardOpen) > 0.55 && Math.abs(deltaX) >= 24) {
+    return velocityTowardOpen > 0;
+  }
+  return openFraction >= 0.48;
 }
 
 function containsSensitiveMemory(text) {
@@ -144,38 +186,44 @@ const defaultSettings = {
 };
 
 const lifecyclePresentation = {
+  UNKNOWN: { className: 'unknown', label: 'STATE UNAVAILABLE' },
   IDLE: { className: 'idle', label: 'READY' },
   LISTENING: { className: 'listening', label: 'LISTENING' },
   THINKING: { className: 'thinking', label: 'THINKING' },
   ANALYZING: { className: 'analyzing', label: 'ANALYZING' },
   RISK_CHECK: { className: 'risk-check', label: 'RISK CHECK' },
   WAITING_FOR_HUMAN: { className: 'waiting-human', label: 'WAITING FOR HUMAN' },
-  SAFE_RESPONSE: { className: 'safe-response', label: 'SAFE RESPONSE' },
+  ENFORCEMENT_ALLOWED: { className: 'thinking', label: 'PERMISSION GRANTED' },
+  PROVIDER: { className: 'thinking', label: 'PROVIDER' },
+  RESPONSE_SAFETY: { className: 'risk-check', label: 'RESPONSE CHECK' },
+  RELEASED: { className: 'safe-response', label: 'RESPONSE RELEASED' },
+  WITHHELD: { className: 'waiting-human', label: 'RESPONSE WITHHELD' },
+  PROVIDER_FAILED: { className: 'blocked', label: 'PROVIDER UNAVAILABLE' },
   BLOCKED: { className: 'blocked', label: 'BLOCKED' },
 };
 
 const vokiChatPresentation = {
   IDLE: { label: 'Idle', note: 'Ready when you are.' },
+  TEXT_INPUT_FOCUSED: { label: 'Input focused', note: 'Text input focus only; no request has been submitted.' },
+  HTTP_WAITING: { label: 'Waiting', note: 'The browser is waiting for an HTTP response from PARMAR.' },
   LISTENING: { label: 'Listening', note: 'Following your text input. No microphone access.' },
-  THINKING: { label: 'Thinking', note: 'Waiting for PARMAR’s response.' },
+  THINKING: { label: 'Thinking', note: 'PARMAR is processing a submitted request.' },
   RESPONDING: { label: 'Responding', note: 'PARMAR’s validated response is available.' },
-  APPROVAL_REQUIRED: { label: 'Approval required', note: 'PARMAR requires a human decision. Vokki cannot approve it.' },
+  APPROVAL_REQUIRED: { label: 'Approval required', note: 'PARMAR requires a human decision. VOKKI cannot approve it.' },
   BLOCKED: { label: 'Blocked', note: 'PARMAR withheld this request or response under its safety checks.' },
   REVIEW: { label: 'Review required', note: 'PARMAR’s response needs human review; this is not an approval.' },
   ERROR: { label: 'Unavailable', note: 'PARMAR could not complete the request. No result was received.' },
   LOCAL_DEMO: { label: 'Local demo', note: 'Local-demo mode is active. PARMAR safety controls remain in force.' },
 };
 
-const legacyStatusLifecycle = {
-  SAFE: 'SAFE_RESPONSE',
-  APPROVED: 'SAFE_RESPONSE',
-  APPROVAL_REQUIRED: 'WAITING_FOR_HUMAN',
-  REJECTED: 'BLOCKED',
-  RISK_DETECTED: 'RISK_CHECK',
-};
 const supportedResultStatuses = new Set([
   ...Object.keys(lifecyclePresentation),
-  ...Object.keys(legacyStatusLifecycle),
+  'SAFE',
+  'APPROVED',
+  'APPROVAL_REQUIRED',
+  'REJECTED',
+  'RISK_DETECTED',
+  'BLOCKED',
 ]);
 
 const dom = {
@@ -213,13 +261,20 @@ const dom = {
   settingsReducedMotion: document.getElementById('settings-reduced-motion'),
   settingsPhoneToggle: document.getElementById('settings-phone-toggle'),
   historyList: document.getElementById('history-list'),
+  historyFilter: document.getElementById('history-filter'),
   historyStatus: document.getElementById('history-status'),
   newSessionBtn: document.getElementById('new-session-btn'),
   sidebar: document.getElementById('sidebar'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
-  researchPanel: document.getElementById('research-workspace'),
-  researchToggle: document.getElementById('research-toggle'),
-  researchClose: document.getElementById('research-close'),
+  sidebarClose: document.getElementById('sidebar-close'),
+  mainPanel: document.querySelector('.main-panel'),
+  discoveryPanel: document.getElementById('discovery-panel'),
+  discoveryToggle: document.getElementById('discovery-toggle'),
+  discoveryClose: document.getElementById('discovery-close'),
+  capabilityToolbar: document.querySelector('.capability-toolbar'),
+  discoveryTriggers: Array.from(document.querySelectorAll('[data-discovery-target]')),
+  discoverySections: Array.from(document.querySelectorAll('.discovery-section')),
+  panelScrim: document.getElementById('panel-scrim'),
   chatThread: document.getElementById('chat-thread'),
   chatInput: document.getElementById('chat-input'),
   chatSubmit: document.getElementById('chat-submit'),
@@ -270,6 +325,7 @@ const state = {
   memoryConsent: false,
   settings: loadSettings(),
   currentSessionId: null,
+  historyQuery: '',
   conversationId: null,
   authMode: 'checking',
   csrfToken: null,
@@ -281,6 +337,13 @@ const state = {
   vokiSpeechToken: 0,
   vokiMinimized: false,
 };
+
+const workspacePanels = { left: 'closed', right: 'closed' };
+const panelFocusOrigins = { left: null, right: null };
+const panelTransitionTimers = { left: null, right: null };
+let panelGesture = null;
+let gestureResetTimer = null;
+let lastCompactPanelViewport = window.innerWidth <= PANEL_DRAWER_BREAKPOINT;
 
 function readJson(key, fallback) {
   try {
@@ -335,6 +398,7 @@ function setRequestPending(pending) {
   const controls = [
     dom.analyzeBtn,
     dom.chatSubmit,
+    ...document.querySelectorAll('[data-voki-submit], [data-voki-decision]'),
     ...document.querySelectorAll('.approval-actions button'),
   ].filter(Boolean);
   controls.forEach((control) => {
@@ -613,7 +677,7 @@ function escapeHtml(value) {
 }
 
 function normalizeStatus(value) {
-  return String(value || 'SAFE').toUpperCase();
+  return String(value || 'UNKNOWN').toUpperCase();
 }
 
 function displayList(value, fallback) {
@@ -624,13 +688,19 @@ function displayList(value, fallback) {
 
 function setVokiState(rawState) {
   const key = normalizeStatus(rawState);
-  const presentation = lifecyclePresentation[key] || lifecyclePresentation.IDLE;
+  const presentation = lifecyclePresentation[key] || lifecyclePresentation.UNKNOWN;
+  const previousState = document.body.dataset.vokiState;
 
   if (dom.parmarCore) {
     dom.parmarCore.className = `parmar-core ${presentation.className}`;
+    if (key === 'RELEASED' && previousState !== key && !motionIsReduced()) {
+      window.clearTimeout(vokiResponsePulseTimer);
+      window.requestAnimationFrame(() => dom.parmarCore?.classList.add('response-arrived'));
+      vokiResponsePulseTimer = window.setTimeout(() => dom.parmarCore?.classList.remove('response-arrived'), 650);
+    }
   }
 
-  document.body.dataset.vokiState = lifecyclePresentation[key] ? key : 'IDLE';
+  document.body.dataset.vokiState = lifecyclePresentation[key] ? key : 'UNKNOWN';
   if (dom.vokiState) {
     dom.vokiState.textContent = presentation.label;
   }
@@ -639,7 +709,14 @@ function setVokiState(rawState) {
 function setChatVokiState(rawState) {
   const key = Object.hasOwn(vokiChatPresentation, rawState) ? rawState : 'ERROR';
   const presentation = vokiChatPresentation[key];
-  if (dom.chatVoki) dom.chatVoki.dataset.state = key;
+  const visualState = {
+    RESPONDING: 'RESPONDING',
+    APPROVAL_REQUIRED: 'PAUSED',
+    BLOCKED: 'PAUSED',
+    REVIEW: 'PAUSED',
+    LOCAL_DEMO: 'LOCAL_DEMO',
+  }[key] || key;
+  if (dom.chatVoki) dom.chatVoki.dataset.state = visualState;
   if (dom.vokiChatState) dom.vokiChatState.textContent = presentation.label;
   if (dom.vokiChatNote) dom.vokiChatNote.textContent = presentation.note;
   document.body.dataset.chatVokiState = key;
@@ -647,21 +724,32 @@ function setChatVokiState(rawState) {
 
 function chatVokiResponseState(result) {
   const responseStatus = normalizeStatus(result?.status);
-  if (result?.provider_error || responseStatus.startsWith('PROVIDER_')) return 'ERROR';
+  const contract = result?.voki_contract || result?.analysis?.voki_contract;
+  if (result?.provider_error || responseStatus.startsWith('PROVIDER_')
+    || contract?.provider?.status === 'FAILED') return 'ERROR';
 
   const analysis = result?.analysis || result;
-  const requestStatus = normalizeStatus(analysis?.status || responseStatus);
-  const lifecycleState = normalizeStatus(analysis?.lifecycle?.current_state);
+  const requestStatus = normalizeStatus(
+    contract ? contract.request_review?.status : analysis?.status || responseStatus,
+  );
+  const lifecycleState = normalizeStatus(
+    contract?.lifecycle?.state || analysis?.lifecycle?.current_state,
+  );
   if (
     requestStatus === 'APPROVAL_REQUIRED'
     || lifecycleState === 'WAITING_FOR_HUMAN'
-    || analysis?.decision?.requires_human_approval === true
+    || contract?.approval?.status === 'PENDING'
+    || (!contract && analysis?.decision?.requires_human_approval === true)
   ) return 'APPROVAL_REQUIRED';
   if (['BLOCKED', 'REJECTED'].includes(requestStatus) || lifecycleState === 'BLOCKED') return 'BLOCKED';
 
   const safetyStatus = responseSafetyStatus(result) || 'NOT_CHECKED';
   if (safetyStatus === 'REVIEW') return 'REVIEW';
   if (safetyStatus !== 'PASS') return 'BLOCKED';
+  if (contract && (
+    contract.provider?.status !== 'COMPLETED'
+    || contract.response_disposition !== 'RELEASED'
+  )) return 'BLOCKED';
   if (String(result?.provider || '').toLowerCase() === 'local-demo') return 'LOCAL_DEMO';
   return 'RESPONDING';
 }
@@ -690,18 +778,23 @@ function syncVokiControls() {
 }
 
 function stopVokiSpeech(nextState = 'IDLE') {
+  const speechState = dom.chatVoki?.dataset.speechState;
+  const wasActive = speechState === 'QUEUED' || speechState === 'SPEAKING';
   state.vokiSpeechToken += 1;
   if (speechSynthesisAvailable()) window.speechSynthesis.cancel();
   if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
+  if (dom.chatVoki) dom.chatVoki.dataset.speechState = wasActive ? 'CANCELLED' : 'IDLE';
   setChatVokiState(nextState);
 }
 
 function speakVokiResponse(text, responseState) {
   if (!state.settings.vokiVoiceEnabled) {
+    if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'IDLE';
     setChatVokiState(responseState);
     return;
   }
   if (!speechSynthesisAvailable()) {
+    if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'IDLE';
     setChatVokiState(responseState);
     syncVokiControls();
     return;
@@ -709,23 +802,27 @@ function speakVokiResponse(text, responseState) {
 
   const speechToken = ++state.vokiSpeechToken;
   const utterance = new window.SpeechSynthesisUtterance(String(text));
+  if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'QUEUED';
   utterance.lang = state.settings.language === 'hi' ? 'hi-IN' : state.settings.language === 'mix' ? 'en-IN' : 'en-US';
   utterance.rate = 0.96;
   utterance.onstart = () => {
     if (speechToken === state.vokiSpeechToken) {
       if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'true';
+      if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'SPEAKING';
       setChatVokiState('RESPONDING');
     }
   };
   utterance.onend = () => {
     if (speechToken === state.vokiSpeechToken) {
       if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
+      if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'ENDED';
       setChatVokiState(responseState === 'LOCAL_DEMO' ? 'LOCAL_DEMO' : 'IDLE');
     }
   };
   utterance.onerror = () => {
     if (speechToken === state.vokiSpeechToken) {
       if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
+      if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'ERROR';
       setChatVokiState('ERROR');
     }
   };
@@ -735,6 +832,7 @@ function speakVokiResponse(text, responseState) {
     window.speechSynthesis.speak(utterance);
   } catch (_error) {
     if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
+    if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'ERROR';
     setChatVokiState('ERROR');
   }
 }
@@ -758,20 +856,43 @@ function setBadge(status) {
     return;
   }
 
-  if (normalized === 'APPROVAL_REQUIRED' || normalized === 'WAITING_FOR_HUMAN') {
-    dom.statusPill.classList.add('status-warning');
-    dom.statusPill.textContent = 'REVIEW REQUIRED';
+  if (normalized === 'SAFE' || normalized === 'RELEASED') {
+    dom.statusPill.classList.add('status-safe');
+    dom.statusPill.textContent = normalized === 'RELEASED' ? 'RESPONSE RELEASED' : 'SAFE';
     return;
   }
 
-  dom.statusPill.classList.add('status-safe');
-  dom.statusPill.textContent = 'SAFE';
+  if ([
+    'APPROVAL_REQUIRED',
+    'WAITING_FOR_HUMAN',
+    'ENFORCEMENT_ALLOWED',
+    'APPROVED',
+    'REVIEW',
+    'WITHHELD',
+  ].includes(normalized)) {
+    dom.statusPill.classList.add('status-warning');
+    dom.statusPill.textContent = ({
+      APPROVAL_REQUIRED: 'REVIEW REQUIRED',
+      WAITING_FOR_HUMAN: 'REVIEW REQUIRED',
+      ENFORCEMENT_ALLOWED: 'PERMISSION GRANTED',
+      APPROVED: 'APPROVED',
+      REVIEW: 'RESPONSE REVIEW',
+      WITHHELD: 'RESPONSE WITHHELD',
+    })[normalized];
+    return;
+  }
+
+  dom.statusPill.textContent = ({
+    UNKNOWN: 'NOT ASSESSED',
+    UNAVAILABLE: 'UNAVAILABLE',
+    PROVIDER_FAILED: 'PROVIDER UNAVAILABLE',
+  })[normalized] || normalized.replaceAll('_', ' ');
 }
 
 function syncSidebarToggle() {
   if (!dom.sidebarToggle) return;
-  if (window.innerWidth <= 920) {
-    const isOpen = document.body.classList.contains('sidebar-open');
+  if (window.innerWidth <= PANEL_DRAWER_BREAKPOINT) {
+    const isOpen = ['opening', 'open'].includes(workspacePanels.left);
     dom.sidebarToggle.setAttribute('aria-expanded', String(isOpen));
     dom.sidebarToggle.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
     return;
@@ -782,19 +903,314 @@ function syncSidebarToggle() {
   dom.sidebarToggle.setAttribute('aria-label', isExpanded ? 'Collapse navigation' : 'Expand navigation');
 }
 
-function setResearchOpen(open, restoreFocus = false) {
-  const wasOpen = document.body.classList.contains('research-open');
-  const isOpen = Boolean(open) && window.innerWidth <= 1100;
-  document.body.classList.toggle('research-open', isOpen);
-  dom.researchToggle?.setAttribute('aria-expanded', String(isOpen));
-  dom.researchToggle?.setAttribute('aria-label', isOpen ? 'Close Research workspace' : 'Open Research workspace');
-  if (isOpen) {
-    document.body.classList.remove('sidebar-open');
-    syncSidebarToggle();
-    dom.researchClose?.focus({ preventScroll: true });
-  } else if (wasOpen && restoreFocus) {
-    dom.researchToggle?.focus({ preventScroll: true });
+function isCompactPanelViewport() {
+  return window.innerWidth <= PANEL_DRAWER_BREAKPOINT;
+}
+
+function panelElement(side) {
+  return side === 'left' ? dom.sidebar : dom.discoveryPanel;
+}
+
+function panelTriggers(side) {
+  return side === 'left'
+    ? [dom.sidebarToggle]
+    : [dom.discoveryToggle, ...dom.discoveryTriggers];
+}
+
+function syncWorkspaceAccessibility(activeSide = null) {
+  const compact = isCompactPanelViewport();
+  const active = compact && activeSide && workspacePanels[activeSide] !== 'closed';
+  if (dom.mainPanel) dom.mainPanel.inert = Boolean(active);
+
+  for (const side of ['left', 'right']) {
+    const panel = panelElement(side);
+    if (!panel) continue;
+    const visible = !compact || (active && side === activeSide);
+    panel.inert = !visible;
+    panel.setAttribute('aria-hidden', String(!visible));
+    if (compact && visible) {
+      panel.setAttribute('role', 'dialog');
+      panel.setAttribute('aria-modal', 'true');
+    } else {
+      panel.removeAttribute('role');
+      panel.removeAttribute('aria-modal');
+    }
+    const expanded = compact
+      ? visible && ['opening', 'open'].includes(workspacePanels[side])
+      : ['opening', 'open'].includes(workspacePanels[side]);
+    for (const trigger of panelTriggers(side)) {
+      trigger?.setAttribute('aria-expanded', String(expanded));
+      if (trigger === dom.sidebarToggle) {
+        trigger.setAttribute('aria-label', compact
+          ? expanded ? 'Close navigation' : 'Open navigation'
+          : expanded ? 'Collapse navigation' : 'Expand navigation');
+      } else if (trigger === dom.discoveryToggle) {
+        trigger.setAttribute('aria-label', compact
+          ? expanded ? 'Close Discovery' : 'Open Discovery'
+          : 'Focus Discovery panel');
+      }
+    }
   }
+
+  if (dom.panelScrim) dom.panelScrim.hidden = !active;
+  if (!active) {
+    document.body.classList.remove('workspace-drawer-open');
+    if (dom.panelScrim) dom.panelScrim.style.removeProperty('opacity');
+  } else {
+    document.body.classList.add('workspace-drawer-open');
+  }
+}
+
+function applyWorkspacePanelState(side, nextState, { immediate = false } = {}) {
+  const panel = panelElement(side);
+  if (!panel) return;
+  window.clearTimeout(panelTransitionTimers[side]);
+  workspacePanels[side] = nextState;
+  document.body.dataset[side === 'left' ? 'leftPanelState' : 'rightPanelState'] = nextState;
+
+  const isVisible = ['opening', 'open'].includes(nextState);
+  if (isCompactPanelViewport()) {
+    document.body.classList.toggle(side === 'left' ? 'sidebar-open' : 'discovery-open', isVisible);
+  } else if (side === 'left') {
+    document.body.classList.toggle('sidebar-collapsed', !isVisible);
+  } else {
+    document.body.classList.toggle('discovery-collapsed', !isVisible);
+  }
+
+  syncWorkspaceAccessibility(isCompactPanelViewport() && nextState !== 'closed' ? side : null);
+  if (!immediate && ['opening', 'closing'].includes(nextState)) {
+    panelTransitionTimers[side] = window.setTimeout(
+      () => finishWorkspacePanelTransition(side),
+      PANEL_TRANSITION_MS + 60,
+    );
+  }
+}
+
+function finishWorkspacePanelTransition(side) {
+  const current = workspacePanels[side];
+  if (current !== 'opening' && current !== 'closing') return;
+  window.clearTimeout(panelTransitionTimers[side]);
+  const nextState = current === 'opening' ? 'open' : 'closed';
+  applyWorkspacePanelState(side, nextState, { immediate: true });
+
+  if (nextState === 'closed' && !['opening', 'open', 'closing'].includes(workspacePanels[side === 'left' ? 'right' : 'left'])) {
+    const focusOrigin = panelFocusOrigins[side];
+    panelFocusOrigins[side] = null;
+    focusOrigin?.focus?.({ preventScroll: true });
+  }
+}
+
+function openWorkspacePanel(side, trigger = document.activeElement) {
+  const panel = panelElement(side);
+  if (!panel) return;
+  if (isCompactPanelViewport()) {
+    const otherSide = side === 'left' ? 'right' : 'left';
+    if (workspacePanels[otherSide] !== 'closed') {
+      applyWorkspacePanelState(otherSide, 'closed', { immediate: true });
+      panelFocusOrigins[otherSide] = null;
+    }
+    panelFocusOrigins[side] = trigger;
+  }
+  if (!isCompactPanelViewport() && workspacePanels[side] === 'open') return;
+  applyWorkspacePanelState(side, 'opening');
+
+  if (isCompactPanelViewport()) {
+    const closeButton = side === 'left' ? dom.sidebarClose : dom.discoveryClose;
+    closeButton?.focus({ preventScroll: true });
+  }
+}
+
+function closeWorkspacePanel(side, { restoreFocus = true } = {}) {
+  if (workspacePanels[side] === 'closed' || workspacePanels[side] === 'closing') return;
+  if (!restoreFocus) panelFocusOrigins[side] = null;
+  applyWorkspacePanelState(side, 'closing');
+}
+
+function toggleWorkspacePanel(side, trigger) {
+  if (['opening', 'open'].includes(workspacePanels[side])) {
+    closeWorkspacePanel(side);
+  } else {
+    openWorkspacePanel(side, trigger);
+  }
+}
+
+function syncWorkspacePanels() {
+  const compact = isCompactPanelViewport();
+  if (compact) {
+    const focusedSide = ['left', 'right'].find((side) => panelElement(side)?.contains(document.activeElement));
+    document.body.classList.remove('sidebar-collapsed', 'discovery-collapsed');
+    for (const side of ['left', 'right']) {
+      window.clearTimeout(panelTransitionTimers[side]);
+      panelFocusOrigins[side] = null;
+      applyWorkspacePanelState(side, 'closed', { immediate: true });
+      panelElement(side)?.style.removeProperty('--gesture-x');
+    }
+    if (focusedSide) panelTriggers(focusedSide)[0]?.focus({ preventScroll: true });
+  } else {
+    document.body.classList.remove('sidebar-open', 'discovery-open', 'workspace-drawer-open');
+    if (dom.panelScrim) dom.panelScrim.hidden = true;
+    applyWorkspacePanelState('left', document.body.classList.contains('sidebar-collapsed') ? 'closed' : 'open', { immediate: true });
+    applyWorkspacePanelState('right', document.body.classList.contains('discovery-collapsed') ? 'closed' : 'open', { immediate: true });
+  }
+  syncSidebarToggle();
+  syncWorkspaceAccessibility();
+}
+
+function handleWorkspaceResize() {
+  if (panelGesture) finishPanelGesture(null, true);
+  const compact = isCompactPanelViewport();
+  if (compact !== lastCompactPanelViewport) syncWorkspacePanels();
+  else {
+    syncSidebarToggle();
+    syncWorkspaceAccessibility(
+      compact ? ['left', 'right'].find((side) => workspacePanels[side] !== 'closed') : null,
+    );
+  }
+  lastCompactPanelViewport = compact;
+}
+
+function openDiscoveryTarget(targetId, trigger) {
+  const section = dom.discoverySections.find((item) => item.id === `discovery-${targetId}`);
+  document.body.dataset.discoveryTarget = targetId;
+  dom.discoveryTriggers.forEach((button) => {
+    if (button.dataset.discoveryTarget === targetId) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+  });
+  openWorkspacePanel('right', trigger);
+  section?.scrollIntoView({ behavior: motionIsReduced() ? 'auto' : 'smooth', block: 'nearest' });
+}
+
+function onWorkspacePanelTransitionEnd(event, side) {
+  if (event.target === panelElement(side) && event.propertyName === 'transform') {
+    finishWorkspacePanelTransition(side);
+  }
+}
+
+function panelGestureExcluded(target) {
+  return Boolean(target?.closest?.(
+    'input, textarea, select, button, a, [contenteditable="true"], #parmar-core, #chat-voki, .chat-composer, [data-panel-gesture-ignore]',
+  ));
+}
+
+function startPanelGesture(event) {
+  if (!isCompactPanelViewport() || !event.isPrimary || event.pointerType === 'mouse' || event.button !== 0) return;
+  if (panelGestureExcluded(event.target) || window.getSelection?.()?.toString()) return;
+  window.clearTimeout(gestureResetTimer);
+  document.body.dataset.gestureState = 'idle';
+
+  const x = event.clientX;
+  const openSide = ['left', 'right'].find((side) => ['opening', 'open'].includes(workspacePanels[side]));
+  let side = null;
+  let wasOpen = false;
+  if (openSide) {
+    const panel = panelElement(openSide);
+    if (!panel?.contains(event.target)) return;
+    side = openSide;
+    wasOpen = true;
+  } else if (x <= PANEL_EDGE_ZONE) {
+    side = 'left';
+  } else if (x >= window.innerWidth - PANEL_EDGE_ZONE) {
+    side = 'right';
+  } else {
+    return;
+  }
+
+  panelGesture = {
+    side,
+    wasOpen,
+    pointerId: event.pointerId,
+    target: event.target,
+    startX: x,
+    startY: event.clientY,
+    lastX: x,
+    lastY: event.clientY,
+    startedAt: performance.now(),
+    locked: false,
+  };
+}
+
+function movePanelGesture(event) {
+  if (!panelGesture || event.pointerId !== panelGesture.pointerId) return;
+  if (window.getSelection?.()?.toString()) {
+    finishPanelGesture(null, true);
+    return;
+  }
+  const gesture = panelGesture;
+  const deltaX = event.clientX - gesture.startX;
+  const deltaY = event.clientY - gesture.startY;
+  if (!gesture.locked) {
+    const axis = panelGestureAxis(deltaX, deltaY);
+    if (axis === 'pending') return;
+    if (axis === 'vertical') {
+      document.body.dataset.gestureState = 'cancelled';
+      panelGesture = null;
+      gestureResetTimer = window.setTimeout(() => {
+        if (document.body.dataset.gestureState === 'cancelled') document.body.dataset.gestureState = 'idle';
+        gestureResetTimer = null;
+      }, PANEL_TRANSITION_MS);
+      return;
+    }
+    gesture.locked = true;
+    document.body.classList.add('panel-dragging');
+    try {
+      gesture.target.setPointerCapture?.(gesture.pointerId);
+    } catch {}
+  }
+
+  event.preventDefault();
+  gesture.lastX = event.clientX;
+  gesture.lastY = event.clientY;
+  const panel = panelElement(gesture.side);
+  const panelWidth = panel?.getBoundingClientRect().width || window.innerWidth * 0.82;
+  const openFraction = Math.max(0, Math.min(1, panelOpenFraction(gesture.side, gesture.wasOpen, deltaX, panelWidth)));
+  panel?.style.setProperty('--gesture-x', `${deltaX}px`);
+  if (dom.panelScrim) {
+    dom.panelScrim.hidden = false;
+    dom.panelScrim.style.opacity = String(openFraction * 0.64);
+  }
+  document.body.dataset.gestureState = gesture.side === 'left' ? 'tracking-left' : 'tracking-right';
+}
+
+function finishPanelGesture(event, cancelled = false) {
+  if (!panelGesture || (event && event.pointerId !== panelGesture.pointerId)) return;
+  const gesture = panelGesture;
+  panelGesture = null;
+  const panel = panelElement(gesture.side);
+  const deltaX = (event?.clientX ?? gesture.lastX) - gesture.startX;
+  const deltaY = (event?.clientY ?? gesture.lastY) - gesture.startY;
+  const elapsed = Math.max(1, performance.now() - gesture.startedAt);
+  const velocityX = cancelled ? 0 : deltaX / elapsed;
+  const width = panel?.getBoundingClientRect().width || window.innerWidth * 0.82;
+  const progress = Math.max(0, Math.min(1, panelOpenFraction(gesture.side, gesture.wasOpen, deltaX, width)));
+  const velocityTowardOpen = (gesture.side === 'left' ? 1 : -1) * velocityX;
+  const shouldOpen = !cancelled && gesture.locked
+    && shouldOpenPanelAfterGesture(progress, velocityTowardOpen, deltaX);
+
+  document.body.classList.remove('panel-dragging');
+  panel?.style.removeProperty('--gesture-x');
+  if (dom.panelScrim) dom.panelScrim.style.removeProperty('opacity');
+  document.body.dataset.gestureState = cancelled || !gesture.locked ? 'cancelled' : 'committed';
+
+  if (cancelled) {
+    if (!gesture.wasOpen && dom.panelScrim) dom.panelScrim.hidden = true;
+  } else if (gesture.locked) {
+    if (shouldOpen) openWorkspacePanel(gesture.side, panelFocusOrigins[gesture.side] || document.activeElement);
+    else if (gesture.wasOpen) closeWorkspacePanel(gesture.side);
+    else {
+      if (dom.panelScrim) dom.panelScrim.hidden = true;
+      document.body.dataset.gestureState = 'cancelled';
+    }
+  } else if (panelGestureAxis(deltaX, deltaY) === 'vertical') {
+    document.body.dataset.gestureState = 'cancelled';
+  }
+
+  window.clearTimeout(gestureResetTimer);
+  gestureResetTimer = window.setTimeout(() => {
+    if (document.body.dataset.gestureState === 'committed' || document.body.dataset.gestureState === 'cancelled') {
+      document.body.dataset.gestureState = 'idle';
+    }
+    gestureResetTimer = null;
+  }, PANEL_TRANSITION_MS);
 }
 
 function selectSection(sectionName, navKey = sectionName) {
@@ -810,9 +1226,17 @@ function selectSection(sectionName, navKey = sectionName) {
     view.classList.toggle('active', active);
   });
 
+  document.querySelectorAll('.capability-toolbar [data-section]').forEach((button) => {
+    const active = button.dataset.section === sectionName;
+    button.classList.toggle('is-current', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+
   const sectionLabels = {
     home: 'PARMAR Core',
     chat: 'Chats / History',
+    voki: 'VOKKI',
     safety: 'Risk & Safety',
     phone: 'Phone Awareness',
     simulator: 'Simulation',
@@ -824,8 +1248,10 @@ function selectSection(sectionName, navKey = sectionName) {
   };
   if (dom.viewTitle) dom.viewTitle.textContent = sectionLabels[sectionName] || 'PARMAR';
   document.body.dataset.activeSection = sectionName;
-  if (window.innerWidth <= 920) {
-    document.body.classList.remove('sidebar-open');
+  if (isCompactPanelViewport()) {
+    for (const side of ['left', 'right']) {
+      if (workspacePanels[side] !== 'closed') closeWorkspacePanel(side);
+    }
   }
   syncSidebarToggle();
 }
@@ -1127,11 +1553,18 @@ async function clearAllMemories() {
 
 function renderHistory() {
   if (!dom.historyList) return;
+  const query = state.historyQuery.trim().toLocaleLowerCase();
   const conversations = state.sessions
     .filter((session) => (
       state.authMode !== 'authenticated' || state.serverConversationIds.has(session.id)
     ))
     .filter((session) => session.messages.length > 0)
+    .filter((session) => {
+      if (!query) return true;
+      const firstUserMessage = session.messages.find((message) => message.role === 'user');
+      const title = String(session.title || firstUserMessage?.text || '').toLocaleLowerCase();
+      return title.includes(query) || session.messages.some((message) => String(message.text || '').toLocaleLowerCase().includes(query));
+    })
     .sort((first, second) => Number(second.updatedAt || 0) - Number(first.updatedAt || 0));
 
   if (dom.historyStatus) {
@@ -1145,7 +1578,9 @@ function renderHistory() {
   if (!conversations.length) {
     const empty = document.createElement('li');
     empty.className = 'history-empty';
-    empty.textContent = state.authMode === 'authenticated'
+    empty.textContent = query
+      ? 'No loaded conversations match this filter.'
+      : state.authMode === 'authenticated'
       ? 'Server conversation history is not available in this view yet.'
       : historyStorageUnavailable
         ? 'Saved conversations cannot be displayed.'
@@ -1154,7 +1589,18 @@ function renderHistory() {
     return;
   }
 
+  let previousGroup = null;
   conversations.forEach((session) => {
+    const timestamp = Number(session.updatedAt || session.createdAt);
+    const group = historyGroupLabel(timestamp);
+    if (group !== previousGroup) {
+      const heading = document.createElement('li');
+      heading.className = 'history-group-label';
+      heading.textContent = group;
+      heading.setAttribute('aria-hidden', 'true');
+      dom.historyList.appendChild(heading);
+      previousGroup = group;
+    }
     const firstUserMessage = session.messages.find((message) => message.role === 'user');
     const title = session.title || firstUserMessage?.text || 'PARMAR response';
     const item = document.createElement('li');
@@ -1203,15 +1649,27 @@ function renderHistory() {
   });
 }
 
+function historyGroupLabel(timestamp) {
+  if (!Number.isFinite(timestamp)) return 'Earlier';
+  const date = new Date(timestamp);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const daysOld = Math.floor((startOfToday.getTime() - new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()) / 86_400_000);
+  if (daysOld <= 0) return 'Today';
+  if (daysOld === 1) return 'Yesterday';
+  if (daysOld < 7) return 'Previous 7 days';
+  return 'Earlier';
+}
+
 function resetReviewState(message = 'PARMAR is ready for a request.') {
   state.pendingApprovalId = null;
-  setVokiState('IDLE');
-  setBadge('SAFE');
-  document.body.dataset.state = 'IDLE';
+  setVokiState('UNKNOWN');
+  setBadge('UNKNOWN');
+  document.body.dataset.state = 'UNKNOWN';
   if (dom.riskLevel) dom.riskLevel.textContent = '—';
   if (dom.approvalState) dom.approvalState.textContent = 'Not assessed';
-  if (dom.outcomeState) dom.outcomeState.textContent = 'Ready';
-  if (dom.systemState) dom.systemState.textContent = 'READY';
+  if (dom.outcomeState) dom.outcomeState.textContent = 'Not assessed';
+  if (dom.systemState) dom.systemState.textContent = 'NOT ASSESSED';
   if (dom.statusMessage) dom.statusMessage.textContent = message;
   dom.pipelineEl?.replaceChildren();
   dom.riskCenterEl?.replaceChildren();
@@ -1304,7 +1762,7 @@ function createCopyButton(text) {
 
 function appendThinkingIndicator() {
   const message = document.createElement('div');
-  message.className = 'message assistant thinking-message';
+  message.className = 'message assistant thinking-message message-entering';
   message.setAttribute('role', 'status');
   message.setAttribute('aria-label', 'PARMAR is thinking');
 
@@ -1613,11 +2071,12 @@ function renderPipeline(result) {
 
 function resolveResultShape(result) {
   const analysis = result?.analysis || result || {};
-  const lifecycle = analysis.lifecycle || result?.lifecycle || null;
-  const reportedState = String(lifecycle?.current_state || '').toUpperCase();
-  const status = normalizeStatus(analysis.status || result?.status || reportedState || 'UNAVAILABLE');
-  const requestedLifecycle = normalizeStatus(lifecycle?.current_state || legacyStatusLifecycle[status] || 'IDLE');
-  const lifecycleState = lifecyclePresentation[requestedLifecycle] ? requestedLifecycle : 'IDLE';
+  const contract = result?.voki_contract || analysis.voki_contract;
+  const lifecycle = contract?.lifecycle || analysis.lifecycle || result?.lifecycle || null;
+  const reportedState = String(lifecycle?.state || lifecycle?.current_state || '').toUpperCase();
+  const status = normalizeStatus(analysis.status || result?.status || reportedState);
+  const requestedLifecycle = normalizeStatus(reportedState);
+  const lifecycleState = lifecyclePresentation[requestedLifecycle] ? requestedLifecycle : 'UNKNOWN';
   return {
     status,
     lifecycle,
@@ -1632,7 +2091,13 @@ function resolveResultShape(result) {
 
 function updateState(result, scenarioSimulation = false) {
   const analysis = result?.analysis || result;
-  const lifecycleState = String(analysis?.lifecycle?.current_state || result?.lifecycle?.current_state || '').toUpperCase();
+  const contract = result?.voki_contract || analysis?.voki_contract;
+  const lifecycleState = String(
+    contract?.lifecycle?.state
+    || analysis?.lifecycle?.current_state
+    || result?.lifecycle?.current_state
+    || 'UNKNOWN',
+  ).toUpperCase();
   const resultStatus = String(analysis?.status || result?.status || '').toUpperCase();
   const hasLifecycle = Boolean(lifecyclePresentation[lifecycleState]);
   const enforcement = analysis?.enforcement;
@@ -1671,7 +2136,7 @@ function updateState(result, scenarioSimulation = false) {
 }
 
 function showRequestUnavailable(message) {
-  setVokiState('IDLE');
+  setVokiState('UNKNOWN');
   setBadge('UNAVAILABLE');
   document.body.dataset.state = 'UNAVAILABLE';
   if (dom.statusMessage) dom.statusMessage.textContent = message;
@@ -1805,7 +2270,7 @@ async function submitChatMessage() {
     ? state.sessions.find((session) => session.id === requestedConversationId)
     : ensureCurrentSession();
   let sessionId = currentSession?.id || null;
-  stopVokiSpeech('THINKING');
+  stopVokiSpeech('HTTP_WAITING');
   if (!authenticated || currentSession) {
     appendMessageToSession(sessionId, 'user', text, {});
   }
@@ -1877,7 +2342,7 @@ async function submitChatMessage() {
       if (dom.settingsProvider) dom.settingsProvider.textContent = provider;
       renderMemories();
     }
-    if (!updateState(result.analysis || result)) throw new TypeError('Invalid chat response');
+    if (!updateState(result)) throw new TypeError('Invalid chat response');
     if (authenticated) state.serverConversationIds.add(result.conversation_id);
     appendMessageToSession(sessionId, 'assistant', reply, result);
     const vokiResponseState = chatVokiResponseState(result);
@@ -2002,66 +2467,107 @@ async function runPhoneSimulation(mode) {
   }
 }
 
+function activeWorkspaceDrawer() {
+  if (!isCompactPanelViewport()) return null;
+  return ['left', 'right'].find((side) => workspacePanels[side] !== 'closed') || null;
+}
+
+function trapWorkspacePanelFocus(event, side) {
+  const panel = panelElement(side);
+  const focusable = Array.from(panel?.querySelectorAll(
+    'a[href], button:not(:disabled):not([hidden]), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+  ) || []).filter((element) => element.getClientRects().length > 0);
+  if (!focusable.length) {
+    event.preventDefault();
+    panel?.focus({ preventScroll: true });
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && (document.activeElement === first || !panel?.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !panel?.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function bindEvents() {
-  document.querySelectorAll('.nav-item, .text-button[data-section]').forEach((button) => {
+  document.querySelectorAll('.nav-item, .text-button[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], [data-action="voki-voice"]').forEach((button) => {
     button.addEventListener('click', () => {
       if (button.dataset.action === 'new-chat') {
         dom.newSessionBtn?.click();
         selectSection('chat', 'new-chat');
         return;
       }
-      if (button.dataset.action === 'research') {
-        selectSection('chat', 'research');
-        if (window.innerWidth <= 1100) setResearchOpen(true);
-        else dom.researchPanel?.focus({ preventScroll: true });
+      if (button.dataset.action === 'voki-voice') {
+        selectSection('voki', 'voki');
+        document.querySelector('[data-voki-speech-toggle]')?.focus({ preventScroll: true });
         return;
       }
       selectSection(button.dataset.section, button.dataset.navKey || button.dataset.section);
     });
   });
 
+  dom.discoveryTriggers.forEach((button) => {
+    button.addEventListener('click', () => openDiscoveryTarget(button.dataset.discoveryTarget, button));
+  });
+
+  dom.historyFilter?.addEventListener('input', () => {
+    state.historyQuery = dom.historyFilter.value;
+    renderHistory();
+  });
+
+  dom.capabilityToolbar?.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const controls = Array.from(dom.capabilityToolbar.querySelectorAll(
+      'button:not(:disabled), summary',
+    )).filter((element) => element.getClientRects().length > 0);
+    const index = controls.indexOf(event.target.closest('button, summary'));
+    if (index < 0 || !controls.length) return;
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? controls.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + controls.length) % controls.length;
+    event.preventDefault();
+    controls[nextIndex].focus();
+  });
+
   if (dom.sidebarToggle) {
-    dom.sidebarToggle.addEventListener('click', () => {
-      if (window.innerWidth <= 920) {
-        setResearchOpen(false);
-        document.body.classList.toggle('sidebar-open');
-      } else {
-        document.body.classList.toggle('sidebar-collapsed');
-      }
-      syncSidebarToggle();
-    });
+    dom.sidebarToggle.addEventListener('click', () => toggleWorkspacePanel('left', dom.sidebarToggle));
   }
 
-  dom.researchToggle?.addEventListener('click', () => {
-    setResearchOpen(!document.body.classList.contains('research-open'));
+  dom.discoveryToggle?.addEventListener('click', () => {
+    if (isCompactPanelViewport()) toggleWorkspacePanel('right', dom.discoveryToggle);
+    else dom.discoveryPanel?.focus({ preventScroll: true });
   });
-  dom.researchClose?.addEventListener('click', () => setResearchOpen(false, true));
+  dom.sidebarClose?.addEventListener('click', () => closeWorkspacePanel('left'));
+  dom.discoveryClose?.addEventListener('click', () => closeWorkspacePanel('right'));
+  dom.panelScrim?.addEventListener('click', () => {
+    const side = activeWorkspaceDrawer();
+    if (side) closeWorkspacePanel(side);
+  });
 
-  window.addEventListener('resize', () => {
-    syncSidebarToggle();
-    if (window.innerWidth > 1100) setResearchOpen(false);
-  });
+  dom.sidebar?.addEventListener('transitionend', (event) => onWorkspacePanelTransitionEnd(event, 'left'));
+  dom.discoveryPanel?.addEventListener('transitionend', (event) => onWorkspacePanelTransitionEnd(event, 'right'));
+  window.addEventListener('resize', handleWorkspaceResize);
 
-  document.addEventListener('pointerdown', (event) => {
-    if (document.body.classList.contains('sidebar-open')) {
-      if (dom.sidebar?.contains(event.target) || dom.sidebarToggle?.contains(event.target)) return;
-      document.body.classList.remove('sidebar-open');
-      syncSidebarToggle();
-    }
-    if (document.body.classList.contains('research-open')) {
-      if (dom.researchPanel?.contains(event.target) || dom.researchToggle?.contains(event.target)) return;
-      setResearchOpen(false);
-    }
-  });
+  document.addEventListener('pointerdown', startPanelGesture, { passive: true });
+  document.addEventListener('pointermove', movePanelGesture, { passive: false });
+  document.addEventListener('pointerup', (event) => finishPanelGesture(event));
+  document.addEventListener('pointercancel', (event) => finishPanelGesture(event, true));
+  window.addEventListener('blur', () => finishPanelGesture(null, true));
 
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      if (document.body.classList.contains('sidebar-open')) {
-        document.body.classList.remove('sidebar-open');
-        syncSidebarToggle();
-      }
-      if (document.body.classList.contains('research-open')) setResearchOpen(false, true);
+    const activeSide = activeWorkspaceDrawer();
+    if (event.key === 'Escape' && activeSide) {
+      event.preventDefault();
+      closeWorkspacePanel(activeSide);
+      return;
     }
+    if (event.key === 'Tab' && activeSide) trapWorkspacePanelFocus(event, activeSide);
   });
 
   if (dom.analyzeBtn) {
@@ -2171,11 +2677,11 @@ function bindEvents() {
     dom.chatInput.addEventListener('input', resizeChatInput);
     dom.chatInput.addEventListener('focus', () => {
       if (!state.requestInFlight && !(speechSynthesisAvailable() && window.speechSynthesis.speaking)) {
-        setChatVokiState('LISTENING');
+        setChatVokiState('TEXT_INPUT_FOCUSED');
       }
     });
     dom.chatInput.addEventListener('blur', () => {
-      if (dom.chatVoki?.dataset.state === 'LISTENING') setChatVokiState('IDLE');
+      if (dom.chatVoki?.dataset.state === 'TEXT_INPUT_FOCUSED') setChatVokiState('IDLE');
     });
   }
 
@@ -2226,12 +2732,12 @@ function bindEvents() {
       selectSection('chat', 'chat');
       if (dom.requestInput) dom.requestInput.value = '';
       if (dom.chatInput) dom.chatInput.value = '';
-      setVokiState('IDLE');
-      setBadge('SAFE');
-      document.body.dataset.state = 'IDLE';
+      setVokiState('UNKNOWN');
+      setBadge('UNKNOWN');
+      document.body.dataset.state = 'UNKNOWN';
       if (dom.riskLevel) dom.riskLevel.textContent = '—';
       if (dom.approvalState) dom.approvalState.textContent = 'Not assessed';
-      if (dom.outcomeState) dom.outcomeState.textContent = 'Ready';
+      if (dom.outcomeState) dom.outcomeState.textContent = 'Not assessed';
       if (dom.pipelineEl) dom.pipelineEl.replaceChildren();
       if (dom.riskCenterEl) dom.riskCenterEl.replaceChildren();
       if (dom.explanationList) dom.explanationList.replaceChildren();
@@ -2242,7 +2748,7 @@ function bindEvents() {
       if (dom.approvalConflicts) dom.approvalConflicts.textContent = 'No explicit conflict detected.';
       if (dom.approvalSafety) dom.approvalSafety.textContent = 'Awaiting review.';
       if (dom.approvalAlternative) dom.approvalAlternative.textContent = 'A recommendation will appear when available.';
-      if (dom.systemState) dom.systemState.textContent = 'READY';
+      if (dom.systemState) dom.systemState.textContent = 'NOT ASSESSED';
       if (dom.statusMessage) dom.statusMessage.textContent = 'PARMAR is ready for a request.';
     });
   }
@@ -2302,14 +2808,26 @@ function initialize() {
   renderAuditEntries();
   renderPhoneStatus();
   loadScenarios();
+  const vokiRoot = document.querySelector('[data-voki-interface]');
+  if (vokiRoot && window.PARMARVOKKIInterface?.VOKKIInterface) {
+    new window.PARMARVOKKIInterface.VOKKIInterface({
+      root: vokiRoot,
+      request: apiRequest,
+      getLanguage: () => dom.languageSelect?.value || state.settings.language,
+      beginRequest,
+      finishRequest,
+    });
+  }
   bindEvents();
   applySettings();
-  setVokiState('IDLE');
+  setVokiState('UNKNOWN');
+  setBadge('UNKNOWN');
+  document.body.dataset.state = 'UNKNOWN';
   setChatVokiState(state.settings.provider === 'local-demo' ? 'LOCAL_DEMO' : 'IDLE');
   syncVokiControls();
   syncVokiVisibility();
-  syncSidebarToggle();
-  selectSection('home');
+  syncWorkspacePanels();
+  selectSection(window.innerWidth <= 640 ? 'chat' : 'home');
   configureCrossTabAuthentication();
   refreshAuthenticationState();
 }
