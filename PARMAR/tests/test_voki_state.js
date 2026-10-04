@@ -3,9 +3,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const presentation = require('../interface/static/chat-presentation.js');
+const { interpretContract } = require('../interface/static/voki-interface.js');
 
-const appPath = path.join(__dirname, '..', 'interface', 'static', 'app.js');
-const appSource = fs.readFileSync(appPath, 'utf8');
+const appSource = fs.readFileSync(
+  path.join(__dirname, '..', 'interface', 'static', 'app.js'),
+  'utf8',
+);
 
 function functionSource(name) {
   const match = appSource.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`));
@@ -13,227 +17,134 @@ function functionSource(name) {
   return match[0];
 }
 
-const presentationMatch = appSource.match(/const vokiChatPresentation = (\{[\s\S]*?\n\});/);
-assert.ok(presentationMatch, 'Expected Vokki presentation states to exist in app.js');
-const lifecyclePresentationMatch = appSource.match(/const lifecyclePresentation = (\{[\s\S]*?\n\});/);
-assert.ok(lifecyclePresentationMatch, 'Expected lifecycle presentation states to exist in app.js');
+function appResponseGuard() {
+  const context = vm.createContext({
+    window: { PARMARChatPresentation: presentation },
+  });
+  vm.runInContext(`
+    const RESPONSE_SAFETY_STATES = new Set(['PASS', 'REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
+    const SUPPRESSED_RESPONSE_SAFETY_STATES = new Set(['REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
+    const sanitizeSensitiveText = (value) => String(value);
+    const sanitizeStoredValue = (value) => value;
+    ${functionSource('normalizeStatus')}
+    ${functionSource('responseSafetyStatus')}
+    ${functionSource('responseSafetyMessage')}
+    ${functionSource('isUnconfirmedCandidateResponse')}
+    ${functionSource('safeChatReply')}
+    ${functionSource('suppressCandidateContent')}
+    ${functionSource('sanitizeResponseForHistory')}
+    globalThis.safeChatReply = safeChatReply;
+    globalThis.sanitizeResponseForHistory = sanitizeResponseForHistory;
+  `, context);
+  return context;
+}
 
-const dom = {
-  chatVoki: { dataset: {} },
-  vokiChatState: { textContent: '' },
-  vokiChatNote: { textContent: '' },
-};
-const context = vm.createContext({
-  dom,
-  document: { body: { dataset: {} } },
-});
-vm.runInContext(`
-  const RESPONSE_SAFETY_STATES = new Set(['PASS', 'REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
-  const SUPPRESSED_RESPONSE_SAFETY_STATES = new Set(['REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
-  const sanitizeSensitiveText = (value) => String(value);
-  const sanitizeStoredValue = (value) => value;
-  ${functionSource('normalizeStatus')}
-  ${functionSource('responseSafetyStatus')}
-  ${functionSource('suppressCandidateContent')}
-  ${functionSource('safeChatReply')}
-  ${functionSource('sanitizeResponseForHistory')}
-  const lifecyclePresentation = ${lifecyclePresentationMatch[1]};
-  const vokiChatPresentation = ${presentationMatch[1]};
-  ${functionSource('resolveResultShape')}
-  ${functionSource('setChatVokiState')}
-  ${functionSource('chatVokiResponseState')}
-  globalThis.normalizeStatus = normalizeStatus;
-  globalThis.responseSafetyStatus = responseSafetyStatus;
-  globalThis.safeChatReply = safeChatReply;
-  globalThis.sanitizeResponseForHistory = sanitizeResponseForHistory;
-  globalThis.lifecyclePresentation = lifecyclePresentation;
-  globalThis.resolveResultShape = resolveResultShape;
-  globalThis.setChatVokiState = setChatVokiState;
-  globalThis.chatVokiResponseState = chatVokiResponseState;
-`, context);
-
-test('Vokki renders every requested interaction state', () => {
-  const states = [
-    'IDLE',
-    'LISTENING',
-    'THINKING',
-    'RESPONDING',
-    'APPROVAL_REQUIRED',
-    'BLOCKED',
-    'REVIEW',
-    'ERROR',
-    'LOCAL_DEMO',
-  ];
-  const visualStates = {
-    RESPONDING: 'RESPONDING',
-    APPROVAL_REQUIRED: 'PAUSED',
-    BLOCKED: 'PAUSED',
-    REVIEW: 'PAUSED',
-    LOCAL_DEMO: 'LOCAL_DEMO',
+function response(overrides = {}) {
+  return {
+    provider: 'example',
+    message: 'Candidate content must not escape the release guard.',
+    voki_contract: {
+      lifecycle: { state: 'RELEASED' },
+      request_review: { status: 'SAFE' },
+      provider: { status: 'COMPLETED' },
+      response_safety: { status: 'PASS' },
+      response_disposition: 'RELEASED',
+      ...overrides,
+    },
   };
+}
 
-  for (const state of states) {
-    context.setChatVokiState(state);
-    assert.equal(dom.chatVoki.dataset.state, visualStates[state] || state);
-    assert.equal(context.document.body.dataset.chatVokiState, state);
-    assert.ok(dom.vokiChatState.textContent);
-    assert.ok(dom.vokiChatNote.textContent);
+test('unknown or legacy lifecycle values remain explicitly unknown', () => {
+  assert.equal(interpretContract({}).lifecycleState, 'UNKNOWN');
+  assert.equal(interpretContract({ lifecycle: { state: 'SAFE_RESPONSE' } }).lifecycleState, 'UNKNOWN');
+  assert.equal(interpretContract({ lifecycle: { state: 'RELEASED' } }).lifecycleState, 'RELEASED');
+});
+
+test('Chat exposes candidate text only when the authoritative release contract is coherent', () => {
+  const guard = appResponseGuard();
+  assert.equal(guard.safeChatReply(response()), 'Candidate content must not escape the release guard.');
+
+  const mismatches = [
+    { lifecycle: { state: 'WITHHELD' } },
+    { provider: { status: 'FAILED' } },
+    { response_safety: { status: 'UNCERTAIN' } },
+    { response_disposition: 'WITHHELD' },
+  ];
+  for (const mismatch of mismatches) {
+    const candidate = response(mismatch);
+    const visibleText = guard.safeChatReply(candidate);
+    assert.doesNotMatch(visibleText, /Candidate content/);
+    assert.equal(presentation.isAuthoritativelyReleased(candidate), false);
   }
 });
 
-test('PARMAR chat and response-safety results map to distinct Vokki states', () => {
-  const map = context.chatVokiResponseState;
-  const safe = { status: 'SAFE', provider: 'openai', response_safety: { status: 'PASS' } };
-
-  assert.equal(map(safe), 'RESPONDING');
-  assert.equal(map({ status: 'SAFE', provider: 'local-demo', response_safety: { status: 'PASS' } }), 'LOCAL_DEMO');
-  assert.equal(map({ status: 'APPROVAL_REQUIRED', response_safety: { status: 'NOT_CHECKED' } }), 'APPROVAL_REQUIRED');
-  assert.equal(map({ status: 'BLOCKED', response_safety: { status: 'NOT_CHECKED' } }), 'BLOCKED');
-  assert.equal(map({ status: 'SAFE', response_safety: { status: 'REVIEW' } }), 'REVIEW');
-  assert.equal(map({ status: 'SAFE', response_safety: { status: 'BLOCK' } }), 'BLOCKED');
-  assert.equal(map({ status: 'PROVIDER_UNAVAILABLE' }), 'ERROR');
-  assert.equal(map({ status: 'SAFE', provider_error: true }), 'ERROR');
-});
-
-test('authoritative contract safety and release facts take precedence over response fields', () => {
-  const baseContract = {
-    lifecycle: { state: 'RELEASED' },
-    request_review: { status: 'SAFE' },
-    approval: { status: 'NOT_REQUIRED' },
-    provider: { status: 'COMPLETED' },
-    response_safety: { status: 'PASS' },
-    response_disposition: 'RELEASED',
-  };
-
-  assert.equal(
-    context.responseSafetyStatus({
-      status: 'SAFE',
-      response_safety: { status: 'BLOCK' },
-      voki_contract: baseContract,
-    }),
-    'PASS',
-  );
-  assert.equal(context.chatVokiResponseState({
-    status: 'SAFE',
-    provider: 'openai',
-    response_safety: { status: 'BLOCK' },
-    voki_contract: baseContract,
-  }), 'RESPONDING');
-  assert.equal(context.chatVokiResponseState({
-    status: 'SAFE',
-    provider: 'openai',
-    response_safety: { status: 'PASS' },
-    voki_contract: {
-      ...baseContract,
-      response_safety: { status: 'BLOCK' },
-      response_disposition: 'WITHHELD',
-    },
-  }), 'BLOCKED');
-});
-
-test('withheld content stays hidden and provider failures remain distinct', () => {
-  const withheld = {
-    status: 'SAFE',
-    provider: 'multi-model',
-    message: 'Candidate response that must remain hidden.',
-    response_safety: { status: 'PASS' },
-    orchestration: { candidates: [{ content: 'candidate', output: 'candidate' }] },
-    voki_contract: {
-      provider: { status: 'COMPLETED' },
-      response_safety: { status: 'PASS' },
-      response_disposition: 'WITHHELD',
-    },
-  };
-  assert.equal(context.safeChatReply(withheld), 'PARMAR withheld the provider response.');
-  const history = context.sanitizeResponseForHistory(withheld);
-  assert.equal(history.message, 'PARMAR withheld the provider response.');
-  assert.equal(history.orchestration.candidates[0].content, null);
-  assert.equal(history.orchestration.candidates[0].output, null);
-
-  const providerFailure = {
-    status: 'PROVIDER_UNAVAILABLE',
+test('provider failure, approval pending, and response-safety withholding stay distinguishable', () => {
+  const guard = appResponseGuard();
+  const failed = {
     provider_error: true,
-    message: 'The configured provider is unavailable.',
-    response_safety: { status: 'NOT_CHECKED' },
+    message: 'Candidate content must not escape the failure path.',
+    orchestration: { candidates: [{ content: 'candidate', output: 'candidate' }] },
+    voki_contract: { provider: { status: 'FAILED' } },
+  };
+  assert.equal(guard.safeChatReply(failed), 'The configured provider is unavailable. No response was released.');
+  const failedHistory = guard.sanitizeResponseForHistory(failed);
+  assert.equal(failedHistory.orchestration.candidates[0].content, null);
+  assert.doesNotMatch(failedHistory.message, /Candidate content/);
+  const approval = {
+    status: 'APPROVAL_REQUIRED',
+    analysis: { status: 'APPROVAL_REQUIRED', message: 'A human decision is required.' },
     voki_contract: {
-      provider: { status: 'FAILED' },
+      lifecycle: { state: 'WAITING_FOR_HUMAN' },
+      request_review: { status: 'APPROVAL_REQUIRED' },
+      provider: { status: 'NOT_STARTED' },
       response_safety: { status: 'NOT_CHECKED' },
       response_disposition: 'NOT_APPLICABLE',
     },
   };
-  assert.equal(context.chatVokiResponseState(providerFailure), 'ERROR');
-  assert.equal(context.safeChatReply(providerFailure), 'The configured provider is unavailable.');
+  assert.equal(guard.safeChatReply(approval), 'A human decision is required.');
+
+  for (const status of ['REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']) {
+    const withheld = response({
+      lifecycle: { state: 'WITHHELD' },
+      response_safety: { status },
+      response_disposition: 'WITHHELD',
+    });
+    assert.doesNotMatch(guard.safeChatReply(withheld), /Candidate content/);
+    const stored = guard.sanitizeResponseForHistory(withheld);
+    assert.equal(stored.orchestration, undefined);
+    assert.doesNotMatch(stored.message, /Candidate content/);
+  }
 });
 
-test('unknown and unavailable states never receive the safe badge', () => {
-  const classes = new Set();
-  const badge = { classList: {
-    remove: (...values) => values.forEach((value) => classes.delete(value)),
-    add: (value) => classes.add(value),
-  } };
-  const badgeContext = vm.createContext({
-    dom: { statusPill: badge },
-    normalizeStatus: context.normalizeStatus,
-  });
-  vm.runInContext(functionSource('setBadge'), badgeContext);
-
-  badgeContext.setBadge('UNKNOWN');
-  assert.equal(badge.textContent, 'NOT ASSESSED');
-  assert.equal(classes.has('status-safe'), false);
-
-  badgeContext.setBadge('UNAVAILABLE');
-  assert.equal(badge.textContent, 'UNAVAILABLE');
-  assert.equal(classes.has('status-safe'), false);
-
-  badgeContext.setBadge('ENFORCEMENT_ALLOWED');
-  assert.equal(badge.textContent, 'PERMISSION GRANTED');
-  assert.equal(classes.has('status-safe'), false);
-
-  badgeContext.setBadge('SAFE');
-  assert.equal(badge.textContent, 'SAFE');
-  assert.equal(classes.has('status-safe'), true);
+test('Chat waiting and reveal remain presentation-only and cancellable on rerender', () => {
+  const renderer = functionSource('renderSessionMessages');
+  const waiting = functionSource('appendWaitingIndicator');
+  const cancel = functionSource('cancelChatResponseReveal');
+  assert.match(waiting, /Waiting for PARMAR…/);
+  assert.doesNotMatch(waiting, /Thinking|ANALYZING|RISK_CHECK/);
+  assert.match(renderer, /cancelChatResponseReveal\(\)/);
+  assert.match(renderer, /startProgressiveReveal/);
+  assert.match(renderer, /isAuthoritativelyReleased\(message\.analysis\)/);
+  assert.match(cancel, /state\.chatRevealCancel\?\.\(\)/);
+  assert.match(functionSource('renderSessionMessages'), /createCopyButton\(String\(message\.text \?\? ''\)\)/);
+  assert.doesNotMatch(appSource, /setChatVokiState|speechSynthesis|chat-voki/);
 });
 
-test('late responses are ignored and logout or expiry clears the prior Vokki state', () => {
-  const submit = functionSource('submitChatMessage');
-  const staleGuard = submit.indexOf('if (requestId !== state.requestSequence || authEpoch !== state.authEpoch) return;');
-  const stateMapping = submit.indexOf('chatVokiResponseState(result)');
-  assert.ok(staleGuard >= 0 && stateMapping > staleGuard);
-
-  const clearAuthenticatedState = functionSource('clearAuthenticatedState');
-  assert.ok(clearAuthenticatedState.includes('invalidatePendingRequest();'));
-  assert.ok(clearAuthenticatedState.includes("stopVokiSpeech('LOCAL_DEMO');"));
-
-  const refreshAuthenticationState = functionSource('refreshAuthenticationState');
-  assert.ok(refreshAuthenticationState.includes("stopVokiSpeech('LOCAL_DEMO');"));
+test('historical rendering and workspace changes invalidate any in-flight reveal', () => {
+  const renderer = functionSource('renderSessionMessages');
+  const history = functionSource('renderHistory');
+  const bindEvents = functionSource('bindEvents');
+  assert.match(renderer, /revealLatestAssistant = false/);
+  assert.match(renderer, /&& index === session\.messages\.length - 1/);
+  assert.match(renderer, /role === 'assistant'/);
+  assert.match(history, /renderSessionMessages\(\)/);
+  assert.match(bindEvents, /dom\.newSessionBtn\.addEventListener/);
+  assert.match(bindEvents, /invalidatePendingRequest\(\);[\s\S]*?renderSessionMessages\(\);/);
 });
 
-test('Vokki mapping is presentation-only and cannot invoke approval or authorization', () => {
-  const mapping = functionSource('chatVokiResponseState');
-  assert.doesNotMatch(mapping, /apiRequest|approve|authorize|enforcement|fetch\(/i);
-});
-
-test('unknown backend lifecycle and browser-only states remain explicit', () => {
-  assert.equal(context.normalizeStatus(undefined), 'UNKNOWN');
-  assert.equal(context.resolveResultShape({ status: 'SAFE' }).lifecycleState, 'UNKNOWN');
-  assert.equal(context.lifecyclePresentation.SAFE_RESPONSE, undefined);
-  assert.equal(context.resolveResultShape({
-    status: 'SAFE',
-    lifecycle: { current_state: 'SAFE_RESPONSE' },
-  }).lifecycleState, 'UNKNOWN');
-  assert.equal(
-    context.resolveResultShape({
-      status: 'SAFE',
-      voki_contract: { lifecycle: { state: 'UNKNOWN' } },
-    }).lifecycleState,
-    'UNKNOWN',
-  );
-  assert.ok(appSource.includes("stopVokiSpeech('HTTP_WAITING')"));
-  assert.ok(appSource.includes("setChatVokiState('TEXT_INPUT_FOCUSED')"));
-  assert.ok(appSource.includes("dataset.speechState = 'QUEUED'"));
-  assert.ok(appSource.includes("dataset.speechState = 'SPEAKING'"));
-  assert.ok(appSource.includes("dataset.speechState = 'ENDED'"));
-  assert.ok(appSource.includes("dataset.speechState = 'ERROR'"));
-  assert.ok(appSource.includes("dataset.speechState = wasActive ? 'CANCELLED' : 'IDLE'"));
-  assert.match(appSource, /SUPPRESSED_RESPONSE_SAFETY_STATES = new Set\(\['REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED'\]\)/);
+test('the existing composer still submits once on Enter and preserves Shift+Enter and IME input', () => {
+  assert.match(appSource, /event\.key === 'Enter' && !event\.shiftKey && !event\.isComposing/);
+  assert.match(appSource, /function beginRequest\(\) \{[\s\S]*?state\.requestInFlight/);
+  assert.match(functionSource('submitChatMessage'), /if \(requestId === null\) return;/);
+  assert.match(appSource, /dom\.chatInput\.addEventListener\('input', resizeChatInput\)/);
 });

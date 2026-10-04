@@ -78,46 +78,24 @@ def test_voki_has_a_description_for_each_lifecycle_state():
     assert "no authoritative state is asserted" in voki.state_for("SAFE_RESPONSE")["message"]
 
 
-def test_chat_voki_has_response_states_voice_and_minimize_controls():
+def test_chat_and_voki_are_separate_workspaces_with_dedicated_voki_controls():
     static_dir = Path(__file__).parents[1] / "interface" / "static"
     app_source = (static_dir / "app.js").read_text(encoding="utf-8")
     html_source = (static_dir / "index.html").read_text(encoding="utf-8")
-    styles_source = (static_dir / "styles.css").read_text(encoding="utf-8")
-    mapping = re.search(r"const vokiChatPresentation = \{(.*?)\n\};", app_source, re.DOTALL)
-    assert mapping is not None
-
-    for state in (
-        "IDLE",
-        "LISTENING",
-        "THINKING",
-        "RESPONDING",
-        "APPROVAL_REQUIRED",
-        "BLOCKED",
-        "REVIEW",
-        "ERROR",
-        "LOCAL_DEMO",
-    ):
-        assert re.search(rf"\b{state}: \{{ label:", mapping.group(1))
-    for control_id in ("chat-voki", "voki-voice-toggle", "voki-visibility-toggle", "voki-avatar-stage"):
-        assert f'id="{control_id}"' in html_source
-    assert "Browser speech synthesis is unavailable. Text chat remains available." in app_source
-    assert "speechSynthesisAvailable" in app_source
-    assert "speechSynthesis.speak(utterance)" in app_source
-    assert "speechSynthesis.cancel()" in app_source
-    assert re.search(r"utterance\.onstart = \(\) => \{\s*if \(speechToken === state\.vokiSpeechToken\) \{", app_source)
-    assert "setChatVokiState('RESPONDING');" in app_source
-    assert "setChatVokiState(responseState === 'LOCAL_DEMO' ? 'LOCAL_DEMO' : 'IDLE');" in app_source
-    assert "utterance.onend = () => {" in app_source
-    assert "utterance.onerror = () => {" in app_source
-    assert "getUserMedia" not in app_source
-    assert "SpeechRecognition" not in app_source
-    for state in ("LISTENING", "THINKING", "SPEAKING", "PAUSED", "ERROR"):
-        assert f'.chat-voki[data-state="{state}"]' in styles_source
-    assert "@media (prefers-reduced-motion: reduce)" in styles_source
-    assert "animation-duration: 0.01ms !important" in styles_source
-    assert ".chat-voki-orb" in styles_source
-    assert ".chat-voki[data-state=\"SPEAKING\"]" in styles_source
-    assert ".chat-voki[data-state=\"PAUSED\"]" in styles_source
+    chat_section = re.search(r'<section class="section-view" data-section="chat".*?</section>\s*</section>', html_source, re.DOTALL)
+    assert chat_section is not None
+    assert 'id="section-voki"' in html_source
+    assert 'data-voki-interface' in html_source
+    assert 'data-voki-speech-toggle' in html_source
+    assert 'data-voki-stop-speech' in html_source
+    assert 'data-section="voki"' in chat_section.group(0)
+    assert "Open VOKKI" in chat_section.group(0)
+    for legacy_control in ("chat-voki", "voki-voice-toggle", "voki-visibility-toggle", "voki-avatar-stage"):
+        assert legacy_control not in chat_section.group(0)
+    assert "function setChatVokiState" not in app_source
+    assert "speechSynthesis.speak(utterance)" not in app_source
+    assert "/static/voki-interface.js" in html_source
+    assert html_source.index('/static/chat-presentation.js') < html_source.index('/static/app.js')
 
 
 def test_browser_does_not_send_memory_as_chat_context():
@@ -130,37 +108,15 @@ def test_browser_does_not_send_memory_as_chat_context():
     assert "Relevant consented notes may be used as untrusted context in authenticated chat" in memory_page
 
 
-def test_voki_voice_availability_cancellation_and_memory_opt_in_hooks():
+def test_voki_speech_is_owned_by_the_dedicated_voki_interface():
     app_path = Path(__file__).parents[1] / "interface" / "static" / "app.js"
+    voki_path = Path(__file__).parents[1] / "interface" / "static" / "voki-interface.js"
     app_source = app_path.read_text(encoding="utf-8")
-    controls = re.search(r"function syncVokiControls\(\) \{(.*?)\n\}", app_source, re.DOTALL)
-    cancel = re.search(r"function stopVokiSpeech\(nextState = 'IDLE'\) \{(.*?)\n\}", app_source, re.DOTALL)
-    speak = re.search(r"function speakVokiResponse\(text, responseState\) \{(.*?)\n\}", app_source, re.DOTALL)
-    assert controls and cancel and speak
-
-    assert "disabled = !available" in controls.group(1)
-    assert "Browser speech synthesis is unavailable." in controls.group(1)
-    assert "state.vokiSpeechToken += 1" in cancel.group(1)
-    assert "window.speechSynthesis.cancel()" in cancel.group(1)
-    assert "setChatVokiState(nextState)" in cancel.group(1)
-    assert "utterance.onstart" in speak.group(1)
-    assert "utterance.onend" in speak.group(1)
-    assert "utterance.onerror" in speak.group(1)
-    assert "vokiVoiceEnabled: stored?.vokiVoiceEnabled === true" in app_source
-    assert "if (!state.settings.vokiVoiceEnabled) stopVokiSpeech('IDLE');" in app_source
-    chat_submit = re.search(r"async function submitChatMessage\(\) \{(.*?)\n\}", app_source, re.DOTALL)
-    assert chat_submit is not None
-    assert "memory" not in chat_submit.group(1)
-    response_state = re.search(r"function chatVokiResponseState\(result\) \{(.*?)\n\}", app_source, re.DOTALL)
-    assert response_state is not None
-    assert "result?.provider_error" in response_state.group(1)
-    assert "responseStatus.startsWith('PROVIDER_')" in response_state.group(1)
-    assert "requestStatus === 'APPROVAL_REQUIRED'" in response_state.group(1)
-    assert "['BLOCKED', 'REJECTED'].includes(requestStatus)" in response_state.group(1)
-    assert "safetyStatus === 'REVIEW'" in response_state.group(1)
-    assert "safetyStatus !== 'PASS'" in response_state.group(1)
-    assert "if (vokiResponseState === 'RESPONDING' || vokiResponseState === 'LOCAL_DEMO')" in app_source
-    assert "setChatVokiState(vokiResponseState);" in app_source
+    voki_source = voki_path.read_text(encoding="utf-8")
+    assert "speechSynthesis.speak(utterance)" not in app_source
+    assert "this.speech?.setEnabled(this.speechToggle.checked)" in voki_source
+    assert "this.speech?.cancel()" in voki_source
+    assert "speechSynthesis" not in app_source
 
 
 def test_suppressed_response_text_is_removed_before_chat_history_persistence():
@@ -187,7 +143,7 @@ def test_suppressed_response_text_is_removed_before_chat_history_persistence():
     assert "stored.message = safeChatReply(result)" in history_sanitizer.group(1)
     assert "const reply = safeChatReply(result);" in app_source
     assert "sanitizeResponseForHistory(analysis)" in append_message.group(1)
-    assert "const safeText = sanitizeSensitiveText(suppressed ? safeChatReply(analysis) : text);" in append_message.group(1)
+    assert "sanitizeSensitiveText(suppressed || unconfirmedCandidate ? safeChatReply(analysis) : text)" in append_message.group(1)
     assert "SUPPRESSED_RESPONSE_SAFETY_STATES" in app_source
 
 
@@ -321,7 +277,7 @@ def test_workspace_toolbar_and_discovery_only_advertise_real_or_unavailable_feat
     assert '<svg viewBox="0 0 24 24" aria-hidden="true">' in html_source
     assert 'data-section="memory"' in html_source
     assert 'data-section="tools"' in html_source
-    assert 'data-action="voki-voice"' in html_source
+    assert 'data-section="voki" title="Open the dedicated VOKKI interface"' in html_source
     assert '<span>Plugins</span><span class="capability-unavailable">Not connected</span>' in html_source
     assert '<span>Tools</span><span class="capability-unavailable">Not connected</span>' in html_source
     for capability in ("Automation and reminders", "Developer and GitHub", "Connected accounts", "Knowledge and documents", "Multimodal input", "Local demo"):
@@ -385,7 +341,7 @@ def test_edge_gestures_protect_scroll_selection_composer_and_voki():
     start = re.search(r"function startPanelGesture\(event\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert excluded and move and start
 
-    for target in (".chat-composer", "#chat-voki", "#parmar-core", "[contenteditable=\"true\"]"):
+    for target in (".chat-composer", ".chat-thread", "#parmar-core", "[contenteditable=\"true\"]"):
         assert target in excluded.group(1)
     assert "window.getSelection" in start.group(1)
     assert "window.getSelection" in move.group(1)
@@ -398,14 +354,69 @@ def test_chat_history_entrance_motion_only_applies_to_explicitly_new_messages():
     static_dir = Path(__file__).parents[1] / "interface" / "static"
     app_source = (static_dir / "app.js").read_text(encoding="utf-8")
     styles_source = (static_dir / "styles.css").read_text(encoding="utf-8")
-    renderer = re.search(r"function renderSessionMessages\(animateLatest = false\) \{(.*?)\n\}", app_source, re.DOTALL)
+    renderer = re.search(r"function renderSessionMessages\(animateLatest = false, revealLatestAssistant = false\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert renderer is not None
     assert "if (animateLatest && index === session.messages.length - 1) wrapper.classList.add('message-entering')" in renderer.group(1)
-    thinking = re.search(r"function appendThinkingIndicator\(\) \{(.*?)\n\}", app_source, re.DOTALL)
-    assert thinking is not None
-    assert "thinking-message message-entering" in thinking.group(1)
+    assert "revealLatestAssistant" in renderer.group(1)
+    assert "window.PARMARChatPresentation?.isAuthoritativelyReleased(message.analysis)" in renderer.group(1)
+    waiting = re.search(r"function appendWaitingIndicator\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    assert waiting is not None
+    assert "Waiting for PARMAR…" in waiting.group(1)
+    assert "thinking" not in waiting.group(1).casefold()
+    assert "backend" not in waiting.group(1).casefold()
     assert ".message,\n.message .message-bubble {\n  animation: none;\n}" in styles_source
     assert ".message.message-entering {\n  animation: message-arrive 220ms ease both;\n}" in styles_source
+
+
+def test_chat_release_guard_copy_and_reveal_cancellation_are_integrated():
+    static_dir = Path(__file__).parents[1] / "interface" / "static"
+    app_source = (static_dir / "app.js").read_text(encoding="utf-8")
+    presentation_source = (static_dir / "chat-presentation.js").read_text(encoding="utf-8")
+    render = re.search(
+        r"function renderSessionMessages\(animateLatest = false, revealLatestAssistant = false\) \{(.*?)\n\}",
+        app_source,
+        re.DOTALL,
+    )
+    cancel = re.search(r"function cancelChatResponseReveal\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    submit = re.search(r"async function submitChatMessage\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    append = re.search(r"function appendMessageToSession\(sessionId, role, text, analysis\) \{(.*?)\n\}", app_source, re.DOTALL)
+    new_chat = re.search(r"if \(dom\.newSessionBtn\) \{(.*?)\n\s*\}", app_source, re.DOTALL)
+    history = re.search(r"function renderHistory\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    assert render and cancel and submit and append and new_chat and history
+
+    for contract_field in (
+        "contract?.lifecycle?.state === 'RELEASED'",
+        "contract?.provider?.status === 'COMPLETED'",
+        "contract?.response_safety?.status === 'PASS'",
+        "contract?.response_disposition === 'RELEASED'",
+    ):
+        assert contract_field in presentation_source
+    assert "if (!window.PARMARChatPresentation?.isAuthoritativelyReleased(result))" in app_source
+    assert "responseSafetyMessage(status)" in app_source
+    assert "window.PARMARChatPresentation.startProgressiveReveal" in render.group(1)
+    assert "reducedMotion: motionIsReduced()" in render.group(1)
+    assert "accessibleText.className = 'sr-only'" in render.group(1)
+    assert "startProgressiveReveal" in presentation_source
+    assert "createCopyButton(String(message.text ?? ''))" in render.group(1)
+    assert "state.chatRevealCancel?.()" in cancel.group(1)
+    assert "cancelChatResponseReveal();" in render.group(1)
+    assert "renderSessionMessages();" in new_chat.group(1)
+    assert "invalidatePendingRequest();" in new_chat.group(1)
+    assert "renderSessionMessages();" in history.group(1)
+    assert "role === 'assistant' && isUnconfirmedCandidateResponse(analysis)" in append.group(1)
+
+
+def test_chat_composer_keyboard_and_duplicate_request_guards_remain():
+    app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
+    events = re.search(r"if \(dom\.chatSubmit\) \{(.*?)\n\s*if \(dom\.memoryEnabledToggle\)", app_source, re.DOTALL)
+    request = re.search(r"function beginRequest\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    submit = re.search(r"async function submitChatMessage\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    assert events and request and submit
+    assert "event.key === 'Enter' && !event.shiftKey && !event.isComposing" in events.group(1)
+    assert "event.preventDefault()" in events.group(1)
+    assert "dom.chatInput.addEventListener('input', resizeChatInput)" in events.group(1)
+    assert "state.requestInFlight" in request.group(1)
+    assert "if (requestId === null) return;" in submit.group(1)
 
 
 def test_vokki_identity_uses_real_lifecycle_and_not_a_speaking_orb_for_local_demo():
@@ -413,18 +424,18 @@ def test_vokki_identity_uses_real_lifecycle_and_not_a_speaking_orb_for_local_dem
     html_source = (static_dir / "index.html").read_text(encoding="utf-8")
     app_source = (static_dir / "app.js").read_text(encoding="utf-8")
     styles_source = (static_dir / "styles.css").read_text(encoding="utf-8")
-    state_mapping = re.search(r"function setChatVokiState\(rawState\) \{(.*?)\n\}", app_source, re.DOTALL)
     lifecycle_mapping = re.search(r"function setVokiState\(rawState\) \{(.*?)\n\}", app_source, re.DOTALL)
-    assert state_mapping and lifecycle_mapping
+    assert lifecycle_mapping
 
     assert "PARMAR VOKKI" in html_source
+    assert 'id="section-chat"' in html_source
+    assert 'id="section-voki"' in html_source
     assert "class=\"voki-nameplate\"" in html_source
     assert "class=\"presence-form\"" in html_source
     assert "class=\"voki-face\"" in html_source
-    assert "LOCAL_DEMO: 'LOCAL_DEMO'" in state_mapping.group(1)
-    assert "RESPONDING: 'RESPONDING'" in state_mapping.group(1)
-    assert "data-voice-active=\"true\"" in styles_source
-    assert '.chat-voki[data-voice-active="true"] .chat-voki-audio-wave' in styles_source
+    assert "setChatVokiState" not in app_source
+    assert 'data-voki-speech-toggle' in html_source
+    assert '.voki-presence[data-speech-state="SPEAKING"]' in styles_source
     assert "key === 'RELEASED'" in lifecycle_mapping.group(1)
     assert "SAFE_RESPONSE" not in lifecycle_mapping.group(1)
     assert "motionIsReduced()" in lifecycle_mapping.group(1)

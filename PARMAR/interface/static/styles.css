@@ -6686,6 +6686,17 @@ body[data-voki-state="BLOCKED"] .presence-status {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.024);
 }
 
+.message-bubble-visual {
+  white-space: inherit;
+}
+
+.waiting-bubble {
+  border-color: rgba(123, 178, 213, 0.16);
+  background: rgba(19, 36, 55, 0.58);
+  color: #9eafc1;
+  font-size: 0.74rem;
+}
+
 .message.user .message-bubble {
   border-color: rgba(112, 177, 227, 0.19);
   border-radius: 11px 4px 11px 11px;

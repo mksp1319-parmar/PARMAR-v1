@@ -773,7 +773,9 @@ test('VOKKI is an independent interface and Chat remains a separate section', ()
   assert.match(app, /data-voki-submit], \[data-voki-decision/);
   assert.match(html, /<script src="\/static\/voki-avatar\.js"><\/script>/);
   assert.match(html, /<script src="\/static\/voki-speech\.js"><\/script>/);
-  assert.match(app, /selectSection\('voki', 'voki'\)/);
+  assert.match(app, /selectSection\(button\.dataset\.section, button\.dataset\.navKey \|\| button\.dataset\.section\)/);
+  assert.match(chatSection, /class="composer-tool composer-voki"[^>]*data-section="voki"/);
+  assert.doesNotMatch(chatSection, /chat-voki|voki-voice-toggle|voki-visibility-toggle/);
   assert.match(vokiSection, /data-voki-speech-toggle/);
   assert.doesNotMatch(chatSection, /data-voki-speech-toggle/);
 });

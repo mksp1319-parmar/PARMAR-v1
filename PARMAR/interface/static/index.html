@@ -92,7 +92,7 @@
             <button class="capability-button" type="button" data-section="tools" title="Plugin registry status">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7.5H5.5v-3H9v3M15 7.5h3.5v-3H15v3M8 16.5H5.5v3H9v-3M15 16.5h3.5v3H15v-3M9 12h6M12 9v6" /></svg><span>Plugins</span><span class="capability-unavailable">Not connected</span>
             </button>
-            <button class="capability-button" type="button" data-action="voki-voice" title="Open VOKKI voice controls">
+            <button class="capability-button" type="button" data-section="voki" title="Open the dedicated VOKKI interface">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v15M7.5 8v8M16.5 8v8M4 10v4M20 10v4" /></svg><span>VOKKI</span>
             </button>
             <details class="capability-more">
@@ -272,23 +272,6 @@
             <section class="conversation-surface" aria-label="PARMAR conversation">
               <div class="conversation-topline"><span class="presence-small" aria-hidden="true">P</span><span>PARMAR</span><span class="conversation-divider"></span><span id="chat-mode-label">Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
               <p class="history-status" id="auth-status" role="status" aria-live="polite" hidden></p>
-              <section class="chat-voki" id="chat-voki" data-state="IDLE" aria-label="PARMAR VOKKI assistant">
-                <div class="chat-voki-toolbar">
-                  <div class="chat-voki-identity"><span class="chat-voki-status-mark" aria-hidden="true">V</span><div><strong>PARMAR VOKKI</strong><span id="voki-chat-state" role="status" aria-live="polite">Idle</span></div></div>
-                  <span class="chat-voki-note" id="voki-chat-note">Text input only. No microphone access.</span>
-                  <div class="chat-voki-controls">
-                    <label class="voki-voice-control" for="voki-voice-toggle"><span id="voki-voice-label">Voice off</span><input id="voki-voice-toggle" type="checkbox" aria-describedby="voki-voice-status" /></label>
-                    <button class="voki-visibility-control" id="voki-visibility-toggle" type="button" aria-expanded="true" aria-controls="voki-avatar-stage">Minimize</button>
-                  </div>
-                </div>
-                <div class="chat-voki-voice-status" id="voki-voice-status">Browser speech is off.</div>
-                <div class="chat-voki-stage" id="voki-avatar-stage" aria-hidden="true">
-                  <div class="chat-voki-visual">
-                    <div class="chat-voki-orb"><span class="chat-voki-orb-ring ring-a"></span><span class="chat-voki-orb-ring ring-b"></span><span class="chat-voki-orb-node node-a"></span><span class="chat-voki-orb-node node-b"></span><span class="chat-voki-orb-center">V</span></div>
-                    <div class="chat-voki-audio-wave"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
-                  </div>
-                </div>
-              </section>
               <div class="chat-thread" id="chat-thread" aria-live="polite" aria-relevant="additions"></div>
               <div class="chat-composer">
                 <label class="sr-only" for="chat-input">Message PARMAR</label>
@@ -297,8 +280,8 @@
                   <button class="composer-tool" type="button" disabled aria-describedby="files-unavailable" title="File attachments are unavailable">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 13.8 6.7a3 3 0 0 1 4.2 4.2l-7.1 7.2a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1" /></svg><span>Files unavailable</span>
                   </button>
-                  <button class="composer-tool composer-voki" type="button" data-action="voki-voice" title="Open VOKKI voice controls">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v15M7.5 8v8M16.5 8v8M4 10v4M20 10v4" /></svg><span>VOKKI</span>
+                  <button class="composer-tool composer-voki" type="button" data-section="voki" title="Open the dedicated VOKKI interface">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v15M7.5 8v8M16.5 8v8M4 10v4M20 10v4" /></svg><span>Open VOKKI</span>
                   </button>
                   <button class="primary-btn send-button" id="chat-submit" type="button" aria-label="Send message"><span>Send</span><span class="button-arrow" aria-hidden="true">↗</span></button>
                 </div>
@@ -494,6 +477,7 @@
     <script src="/static/voki-speech.js"></script>
     <script src="/static/voki-identity.js"></script>
     <script src="/static/voki-interface.js"></script>
+    <script src="/static/chat-presentation.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

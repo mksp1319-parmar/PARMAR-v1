@@ -70,8 +70,12 @@ function responseSafetyMessage(status) {
 function safeChatReply(result) {
   const contract = result?.voki_contract || result?.analysis?.voki_contract;
   const message = typeof result?.message === 'string' ? result.message : '';
-  if (contract?.provider?.status === 'FAILED' || result?.provider_error) {
-    return sanitizeSensitiveText(message).trim() || 'The configured provider is unavailable.';
+  if (
+    contract?.provider?.status === 'FAILED'
+    || result?.provider_status === 'FAILED'
+    || result?.provider_error
+  ) {
+    return 'The configured provider is unavailable. No response was released.';
   }
   if (
     contract?.provider?.status === 'COMPLETED'
@@ -90,7 +94,33 @@ function safeChatReply(result) {
   if (SUPPRESSED_RESPONSE_SAFETY_STATES.has(status)) {
     return responseSafetyMessage(status);
   }
+  if (isUnconfirmedCandidateResponse(result)) {
+    return 'PARMAR could not confirm this provider response as released.';
+  }
+  if (!window.PARMARChatPresentation?.isAuthoritativelyReleased(result)) {
+    return 'PARMAR could not confirm this response as released.';
+  }
   return sanitizeSensitiveText(message).trim();
+}
+
+function isUnconfirmedCandidateResponse(result) {
+  const contract = result?.voki_contract || result?.analysis?.voki_contract;
+  if (
+    result?.provider_error
+    || contract?.provider?.status === 'FAILED'
+    || result?.provider_status === 'FAILED'
+  ) return false;
+  const requestStatus = normalizeStatus(
+    contract?.request_review?.status || result?.analysis?.status || result?.status,
+  );
+  if (
+    ['BLOCKED', 'REJECTED', 'APPROVAL_REQUIRED'].includes(requestStatus)
+    && contract?.provider?.status !== 'COMPLETED'
+  ) return false;
+  if (window.PARMARChatPresentation?.isAuthoritativelyReleased(result)) return false;
+  return contract?.provider?.status === 'COMPLETED'
+    || Boolean(typeof result?.message === 'string' && result.message.trim())
+    || (!contract && typeof result?.provider === 'string' && result.provider_status !== 'FAILED');
 }
 
 function suppressCandidateContent(value) {
@@ -114,7 +144,11 @@ function sanitizeResponseForHistory(result) {
   const contract = result?.voki_contract || result?.analysis?.voki_contract;
   const completedButWithheld = contract?.provider?.status === 'COMPLETED'
     && contract.response_disposition !== 'RELEASED';
-  if (!SUPPRESSED_RESPONSE_SAFETY_STATES.has(status) && !completedButWithheld) return stored;
+  const unconfirmedCandidate = isUnconfirmedCandidateResponse(result);
+  const providerFailed = contract?.provider?.status === 'FAILED'
+    || result?.provider_status === 'FAILED'
+    || result?.provider_error === true;
+  if (!SUPPRESSED_RESPONSE_SAFETY_STATES.has(status) && !completedButWithheld && !unconfirmedCandidate && !providerFailed) return stored;
   stored = suppressCandidateContent(stored);
   if (stored && typeof stored === 'object') {
     stored.message = safeChatReply(result);
@@ -182,7 +216,6 @@ const defaultSettings = {
   phonePermission: true,
   provider: 'local-demo',
   memoryEnabled: false,
-  vokiVoiceEnabled: false,
 };
 
 const lifecyclePresentation = {
@@ -200,20 +233,6 @@ const lifecyclePresentation = {
   WITHHELD: { className: 'waiting-human', label: 'RESPONSE WITHHELD' },
   PROVIDER_FAILED: { className: 'blocked', label: 'PROVIDER UNAVAILABLE' },
   BLOCKED: { className: 'blocked', label: 'BLOCKED' },
-};
-
-const vokiChatPresentation = {
-  IDLE: { label: 'Idle', note: 'Ready when you are.' },
-  TEXT_INPUT_FOCUSED: { label: 'Input focused', note: 'Text input focus only; no request has been submitted.' },
-  HTTP_WAITING: { label: 'Waiting', note: 'The browser is waiting for an HTTP response from PARMAR.' },
-  LISTENING: { label: 'Listening', note: 'Following your text input. No microphone access.' },
-  THINKING: { label: 'Thinking', note: 'PARMAR is processing a submitted request.' },
-  RESPONDING: { label: 'Responding', note: 'PARMAR’s validated response is available.' },
-  APPROVAL_REQUIRED: { label: 'Approval required', note: 'PARMAR requires a human decision. VOKKI cannot approve it.' },
-  BLOCKED: { label: 'Blocked', note: 'PARMAR withheld this request or response under its safety checks.' },
-  REVIEW: { label: 'Review required', note: 'PARMAR’s response needs human review; this is not an approval.' },
-  ERROR: { label: 'Unavailable', note: 'PARMAR could not complete the request. No result was received.' },
-  LOCAL_DEMO: { label: 'Local demo', note: 'Local-demo mode is active. PARMAR safety controls remain in force.' },
 };
 
 const supportedResultStatuses = new Set([
@@ -278,14 +297,6 @@ const dom = {
   chatThread: document.getElementById('chat-thread'),
   chatInput: document.getElementById('chat-input'),
   chatSubmit: document.getElementById('chat-submit'),
-  chatVoki: document.getElementById('chat-voki'),
-  vokiChatState: document.getElementById('voki-chat-state'),
-  vokiChatNote: document.getElementById('voki-chat-note'),
-  vokiVoiceToggle: document.getElementById('voki-voice-toggle'),
-  vokiVoiceLabel: document.getElementById('voki-voice-label'),
-  vokiVoiceStatus: document.getElementById('voki-voice-status'),
-  vokiVisibilityToggle: document.getElementById('voki-visibility-toggle'),
-  vokiAvatarStage: document.getElementById('voki-avatar-stage'),
   memoryEnabledToggle: document.getElementById('memory-enabled-toggle'),
   memoryEnabledLabel: document.getElementById('memory-enabled-label'),
   memoryEnabledDescription: document.getElementById('memory-enabled-description'),
@@ -334,8 +345,8 @@ const state = {
   pendingApprovalId: null,
   requestSequence: 0,
   requestInFlight: false,
-  vokiSpeechToken: 0,
-  vokiMinimized: false,
+  chatRevealGeneration: 0,
+  chatRevealCancel: null,
 };
 
 const workspacePanels = { left: 'closed', right: 'closed' };
@@ -366,7 +377,6 @@ function loadSettings() {
     phonePermission: stored?.phonePermission !== false,
     provider: PROVIDER_IDS.has(stored?.provider) ? stored.provider : defaultSettings.provider,
     memoryEnabled: stored?.memoryEnabled === true,
-    vokiVoiceEnabled: stored?.vokiVoiceEnabled === true,
   };
 }
 
@@ -482,7 +492,6 @@ function clearAuthenticatedState(message, { broadcast = false } = {}) {
     renderAuditEntries();
     renderMemories();
     resetReviewState(message);
-    stopVokiSpeech('LOCAL_DEMO');
     selectSection(state.currentSessionId ? 'chat' : 'home');
     if (dom.logoutBtn) dom.logoutBtn.hidden = true;
     if (broadcast) notifyOtherTabs('session-ended');
@@ -499,7 +508,6 @@ async function refreshAuthenticationState({ expired = false, broadcast = false }
       if (enteringAuthenticated) {
         invalidatePendingRequest();
         state.authEpoch += 1;
-        stopVokiSpeech('IDLE');
         state.sessions = [];
         state.memories = [];
         state.memoryConsent = false;
@@ -535,7 +543,6 @@ async function refreshAuthenticationState({ expired = false, broadcast = false }
   } catch (_error) {
     if (state.authMode === 'checking') {
       state.authMode = 'anonymous';
-      stopVokiSpeech('LOCAL_DEMO');
       state.localDemoSessions = loadSessions();
       state.sessions = state.localDemoSessions;
       state.memories = loadMemories();
@@ -654,7 +661,6 @@ function applySettings() {
   if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = Boolean(settings.phonePermission);
   if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = Boolean(settings.phonePermission);
   if (dom.memoryEnabledToggle) dom.memoryEnabledToggle.checked = Boolean(settings.memoryEnabled);
-  if (dom.vokiVoiceToggle) dom.vokiVoiceToggle.checked = Boolean(settings.vokiVoiceEnabled);
   if (dom.providerStatus) dom.providerStatus.textContent = String(settings.provider || 'local-demo').toUpperCase();
   if (dom.settingsProvider) dom.settingsProvider.value = settings.provider;
 }
@@ -703,145 +709,6 @@ function setVokiState(rawState) {
   document.body.dataset.vokiState = lifecyclePresentation[key] ? key : 'UNKNOWN';
   if (dom.vokiState) {
     dom.vokiState.textContent = presentation.label;
-  }
-}
-
-function setChatVokiState(rawState) {
-  const key = Object.hasOwn(vokiChatPresentation, rawState) ? rawState : 'ERROR';
-  const presentation = vokiChatPresentation[key];
-  const visualState = {
-    RESPONDING: 'RESPONDING',
-    APPROVAL_REQUIRED: 'PAUSED',
-    BLOCKED: 'PAUSED',
-    REVIEW: 'PAUSED',
-    LOCAL_DEMO: 'LOCAL_DEMO',
-  }[key] || key;
-  if (dom.chatVoki) dom.chatVoki.dataset.state = visualState;
-  if (dom.vokiChatState) dom.vokiChatState.textContent = presentation.label;
-  if (dom.vokiChatNote) dom.vokiChatNote.textContent = presentation.note;
-  document.body.dataset.chatVokiState = key;
-}
-
-function chatVokiResponseState(result) {
-  const responseStatus = normalizeStatus(result?.status);
-  const contract = result?.voki_contract || result?.analysis?.voki_contract;
-  if (result?.provider_error || responseStatus.startsWith('PROVIDER_')
-    || contract?.provider?.status === 'FAILED') return 'ERROR';
-
-  const analysis = result?.analysis || result;
-  const requestStatus = normalizeStatus(
-    contract ? contract.request_review?.status : analysis?.status || responseStatus,
-  );
-  const lifecycleState = normalizeStatus(
-    contract?.lifecycle?.state || analysis?.lifecycle?.current_state,
-  );
-  if (
-    requestStatus === 'APPROVAL_REQUIRED'
-    || lifecycleState === 'WAITING_FOR_HUMAN'
-    || contract?.approval?.status === 'PENDING'
-    || (!contract && analysis?.decision?.requires_human_approval === true)
-  ) return 'APPROVAL_REQUIRED';
-  if (['BLOCKED', 'REJECTED'].includes(requestStatus) || lifecycleState === 'BLOCKED') return 'BLOCKED';
-
-  const safetyStatus = responseSafetyStatus(result) || 'NOT_CHECKED';
-  if (safetyStatus === 'REVIEW') return 'REVIEW';
-  if (safetyStatus !== 'PASS') return 'BLOCKED';
-  if (contract && (
-    contract.provider?.status !== 'COMPLETED'
-    || contract.response_disposition !== 'RELEASED'
-  )) return 'BLOCKED';
-  if (String(result?.provider || '').toLowerCase() === 'local-demo') return 'LOCAL_DEMO';
-  return 'RESPONDING';
-}
-
-function speechSynthesisAvailable() {
-  return Boolean(window.speechSynthesis && typeof window.SpeechSynthesisUtterance === 'function');
-}
-
-function syncVokiControls() {
-  const available = speechSynthesisAvailable();
-  const enabled = available && Boolean(state.settings.vokiVoiceEnabled);
-  if (dom.vokiVoiceToggle) {
-    dom.vokiVoiceToggle.disabled = !available;
-    dom.vokiVoiceToggle.checked = enabled;
-  }
-  if (dom.vokiVoiceLabel) {
-    dom.vokiVoiceLabel.textContent = available ? `Voice ${enabled ? 'on' : 'off'}` : 'Voice unavailable';
-  }
-  if (dom.vokiVoiceStatus) {
-    dom.vokiVoiceStatus.textContent = !available
-      ? 'Browser speech synthesis is unavailable. Text chat remains available.'
-      : enabled
-        ? 'Browser speech is on. PARMAR responses will be read aloud.'
-        : 'Browser speech is off. PARMAR responses remain text only.';
-  }
-}
-
-function stopVokiSpeech(nextState = 'IDLE') {
-  const speechState = dom.chatVoki?.dataset.speechState;
-  const wasActive = speechState === 'QUEUED' || speechState === 'SPEAKING';
-  state.vokiSpeechToken += 1;
-  if (speechSynthesisAvailable()) window.speechSynthesis.cancel();
-  if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
-  if (dom.chatVoki) dom.chatVoki.dataset.speechState = wasActive ? 'CANCELLED' : 'IDLE';
-  setChatVokiState(nextState);
-}
-
-function speakVokiResponse(text, responseState) {
-  if (!state.settings.vokiVoiceEnabled) {
-    if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'IDLE';
-    setChatVokiState(responseState);
-    return;
-  }
-  if (!speechSynthesisAvailable()) {
-    if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'IDLE';
-    setChatVokiState(responseState);
-    syncVokiControls();
-    return;
-  }
-
-  const speechToken = ++state.vokiSpeechToken;
-  const utterance = new window.SpeechSynthesisUtterance(String(text));
-  if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'QUEUED';
-  utterance.lang = state.settings.language === 'hi' ? 'hi-IN' : state.settings.language === 'mix' ? 'en-IN' : 'en-US';
-  utterance.rate = 0.96;
-  utterance.onstart = () => {
-    if (speechToken === state.vokiSpeechToken) {
-      if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'true';
-      if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'SPEAKING';
-      setChatVokiState('RESPONDING');
-    }
-  };
-  utterance.onend = () => {
-    if (speechToken === state.vokiSpeechToken) {
-      if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
-      if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'ENDED';
-      setChatVokiState(responseState === 'LOCAL_DEMO' ? 'LOCAL_DEMO' : 'IDLE');
-    }
-  };
-  utterance.onerror = () => {
-    if (speechToken === state.vokiSpeechToken) {
-      if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
-      if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'ERROR';
-      setChatVokiState('ERROR');
-    }
-  };
-
-  try {
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  } catch (_error) {
-    if (dom.chatVoki) dom.chatVoki.dataset.voiceActive = 'false';
-    if (dom.chatVoki) dom.chatVoki.dataset.speechState = 'ERROR';
-    setChatVokiState('ERROR');
-  }
-}
-
-function syncVokiVisibility() {
-  if (dom.vokiAvatarStage) dom.vokiAvatarStage.hidden = state.vokiMinimized;
-  if (dom.vokiVisibilityToggle) {
-    dom.vokiVisibilityToggle.textContent = state.vokiMinimized ? 'Show avatar' : 'Minimize';
-    dom.vokiVisibilityToggle.setAttribute('aria-expanded', String(!state.vokiMinimized));
   }
 }
 
@@ -1088,7 +955,7 @@ function onWorkspacePanelTransitionEnd(event, side) {
 
 function panelGestureExcluded(target) {
   return Boolean(target?.closest?.(
-    'input, textarea, select, button, a, [contenteditable="true"], #parmar-core, #chat-voki, .chat-composer, [data-panel-gesture-ignore]',
+    'input, textarea, select, button, a, [contenteditable="true"], #parmar-core, .chat-thread, .chat-composer, [data-panel-gesture-ignore]',
   ));
 }
 
@@ -1760,11 +1627,17 @@ function createCopyButton(text) {
   return button;
 }
 
-function appendThinkingIndicator() {
+function cancelChatResponseReveal() {
+  state.chatRevealGeneration += 1;
+  state.chatRevealCancel?.();
+  state.chatRevealCancel = null;
+}
+
+function appendWaitingIndicator() {
   const message = document.createElement('div');
-  message.className = 'message assistant thinking-message message-entering';
+  message.className = 'message assistant waiting-message message-entering';
   message.setAttribute('role', 'status');
-  message.setAttribute('aria-label', 'PARMAR is thinking');
+  message.setAttribute('aria-label', 'Waiting for PARMAR response');
 
   const avatar = document.createElement('span');
   avatar.className = 'message-avatar';
@@ -1777,14 +1650,8 @@ function appendThinkingIndicator() {
   meta.className = 'message-meta';
   meta.textContent = 'PARMAR';
   const bubble = document.createElement('div');
-  bubble.className = 'message-bubble thinking-bubble';
-  const label = document.createElement('span');
-  label.textContent = 'Thinking';
-  const dots = document.createElement('span');
-  dots.className = 'thinking-dots';
-  dots.setAttribute('aria-hidden', 'true');
-  dots.textContent = '...';
-  bubble.append(label, dots);
+  bubble.className = 'message-bubble waiting-bubble';
+  bubble.textContent = 'Waiting for PARMAR…';
   content.append(meta, bubble);
   message.append(avatar, content);
   dom.chatThread?.appendChild(message);
@@ -1792,8 +1659,9 @@ function appendThinkingIndicator() {
   return message;
 }
 
-function renderSessionMessages(animateLatest = false) {
+function renderSessionMessages(animateLatest = false, revealLatestAssistant = false) {
   if (!dom.chatThread) return;
+  cancelChatResponseReveal();
   const session = state.sessions.find((entry) => entry.id === state.currentSessionId);
   dom.chatThread.replaceChildren();
 
@@ -1802,6 +1670,7 @@ function renderSessionMessages(animateLatest = false) {
     return;
   }
 
+  let revealTargets = null;
   session.messages.forEach((message, index) => {
     const role = message.role === 'assistant' ? 'assistant' : 'user';
     const wrapper = document.createElement('div');
@@ -1831,7 +1700,20 @@ function renderSessionMessages(animateLatest = false) {
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    bubble.textContent = String(message.text ?? '');
+    const revealThisMessage = revealLatestAssistant
+      && role === 'assistant'
+      && index === session.messages.length - 1
+      && window.PARMARChatPresentation?.isAuthoritativelyReleased(message.analysis);
+    if (revealThisMessage) {
+      const visibleText = document.createElement('span');
+      visibleText.className = 'message-bubble-visual';
+      const accessibleText = document.createElement('span');
+      accessibleText.className = 'sr-only';
+      bubble.append(visibleText, accessibleText);
+      revealTargets = { visibleText, accessibleText, text: String(message.text ?? '') };
+    } else {
+      bubble.textContent = String(message.text ?? '');
+    }
 
     const safetyStatus = role === 'assistant' ? responseSafetyStatus(message.analysis) : null;
     if (safetyStatus) {
@@ -1844,7 +1726,7 @@ function renderSessionMessages(animateLatest = false) {
 
     const actions = document.createElement('div');
     actions.className = 'message-actions';
-    actions.appendChild(createCopyButton(bubble.textContent));
+    actions.appendChild(createCopyButton(String(message.text ?? '')));
 
     content.append(meta, bubble, actions);
     wrapper.append(avatar, content);
@@ -1852,6 +1734,20 @@ function renderSessionMessages(animateLatest = false) {
   });
 
   dom.chatThread.scrollTop = dom.chatThread.scrollHeight;
+  if (revealTargets) {
+    const revealGeneration = state.chatRevealGeneration;
+    state.chatRevealCancel = window.PARMARChatPresentation.startProgressiveReveal({
+      ...revealTargets,
+      reducedMotion: motionIsReduced(),
+      isCurrent: () => (
+        state.chatRevealGeneration === revealGeneration
+        && dom.chatThread.contains(revealTargets.visibleText)
+      ),
+      onComplete: () => {
+        if (state.chatRevealGeneration === revealGeneration) state.chatRevealCancel = null;
+      },
+    });
+  }
 }
 
 function addMessageToSession(role, text, analysis) {
@@ -1868,7 +1764,8 @@ function appendMessageToSession(sessionId, role, text, analysis) {
     ? responseSafetyStatus(analysis) ?? (typeof analysis?.provider === 'string' ? 'NOT_CHECKED' : null)
     : null;
   const suppressed = SUPPRESSED_RESPONSE_SAFETY_STATES.has(safetyStatus);
-  const safeText = sanitizeSensitiveText(suppressed ? safeChatReply(analysis) : text);
+  const unconfirmedCandidate = role === 'assistant' && isUnconfirmedCandidateResponse(analysis);
+  const safeText = sanitizeSensitiveText(suppressed || unconfirmedCandidate ? safeChatReply(analysis) : text);
   const storedAnalysis = role === 'assistant' ? sanitizeResponseForHistory(analysis) : sanitizeStoredValue(analysis);
   const entry = { role, text: safeText, analysis: storedAnalysis, timestamp: new Date().toISOString() };
   session.messages.push(entry);
@@ -1879,7 +1776,11 @@ function appendMessageToSession(sessionId, role, text, analysis) {
   if (role === 'assistant') session.status = analysis?.status || 'READY';
   persistedSessionList();
   renderHistory();
-  if (session.id === state.currentSessionId) renderSessionMessages(true);
+  if (session.id === state.currentSessionId) {
+    const releasedAssistant = role === 'assistant'
+      && window.PARMARChatPresentation?.isAuthoritativelyReleased(analysis);
+    renderSessionMessages(true, Boolean(releasedAssistant));
+  }
   return true;
 }
 
@@ -2270,13 +2171,12 @@ async function submitChatMessage() {
     ? state.sessions.find((session) => session.id === requestedConversationId)
     : ensureCurrentSession();
   let sessionId = currentSession?.id || null;
-  stopVokiSpeech('HTTP_WAITING');
   if (!authenticated || currentSession) {
     appendMessageToSession(sessionId, 'user', text, {});
   }
   if (dom.chatInput) dom.chatInput.value = '';
   resizeChatInput();
-  const thinkingMessage = appendThinkingIndicator();
+  const waitingMessage = appendWaitingIndicator();
   if (dom.statusMessage) dom.statusMessage.textContent = 'Message sent. Waiting for PARMAR’s response.';
 
   try {
@@ -2345,24 +2245,17 @@ async function submitChatMessage() {
     if (!updateState(result)) throw new TypeError('Invalid chat response');
     if (authenticated) state.serverConversationIds.add(result.conversation_id);
     appendMessageToSession(sessionId, 'assistant', reply, result);
-    const vokiResponseState = chatVokiResponseState(result);
-    if (vokiResponseState === 'RESPONDING' || vokiResponseState === 'LOCAL_DEMO') {
-      speakVokiResponse(reply, vokiResponseState);
-    } else {
-      setChatVokiState(vokiResponseState);
-    }
     dom.requestInput.value = text;
   } catch {
     if (requestId !== state.requestSequence) return;
     if (state.currentSessionId === sessionId) {
       showRequestUnavailable('The chat service could not respond. No decision result was received.');
-      setChatVokiState('ERROR');
     }
     if (sessionId) {
       appendMessageToSession(sessionId, 'assistant', 'The chat service could not respond. Please try again.', { status: 'UNAVAILABLE' });
     }
   } finally {
-    thinkingMessage.remove();
+    waitingMessage.remove();
     finishRequest(requestId);
   }
 }
@@ -2494,16 +2387,11 @@ function trapWorkspacePanelFocus(event, side) {
 }
 
 function bindEvents() {
-  document.querySelectorAll('.nav-item, .text-button[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], [data-action="voki-voice"]').forEach((button) => {
+  document.querySelectorAll('.nav-item, .text-button[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section]').forEach((button) => {
     button.addEventListener('click', () => {
       if (button.dataset.action === 'new-chat') {
         dom.newSessionBtn?.click();
         selectSection('chat', 'new-chat');
-        return;
-      }
-      if (button.dataset.action === 'voki-voice') {
-        selectSection('voki', 'voki');
-        document.querySelector('[data-voki-speech-toggle]')?.focus({ preventScroll: true });
         return;
       }
       selectSection(button.dataset.section, button.dataset.navKey || button.dataset.section);
@@ -2675,30 +2563,6 @@ function bindEvents() {
       }
     });
     dom.chatInput.addEventListener('input', resizeChatInput);
-    dom.chatInput.addEventListener('focus', () => {
-      if (!state.requestInFlight && !(speechSynthesisAvailable() && window.speechSynthesis.speaking)) {
-        setChatVokiState('TEXT_INPUT_FOCUSED');
-      }
-    });
-    dom.chatInput.addEventListener('blur', () => {
-      if (dom.chatVoki?.dataset.state === 'TEXT_INPUT_FOCUSED') setChatVokiState('IDLE');
-    });
-  }
-
-  if (dom.vokiVoiceToggle) {
-    dom.vokiVoiceToggle.addEventListener('change', () => {
-      state.settings.vokiVoiceEnabled = Boolean(dom.vokiVoiceToggle.checked);
-      persistSettings();
-      syncVokiControls();
-      if (!state.settings.vokiVoiceEnabled) stopVokiSpeech('IDLE');
-    });
-  }
-
-  if (dom.vokiVisibilityToggle) {
-    dom.vokiVisibilityToggle.addEventListener('click', () => {
-      state.vokiMinimized = !state.vokiMinimized;
-      syncVokiVisibility();
-    });
   }
 
   if (dom.memoryEnabledToggle) {
@@ -2722,7 +2586,6 @@ function bindEvents() {
   if (dom.newSessionBtn) {
     dom.newSessionBtn.addEventListener('click', () => {
       invalidatePendingRequest();
-      stopVokiSpeech('IDLE');
       state.currentSessionId = null;
       state.conversationId = null;
       state.pendingApprovalId = null;
@@ -2823,9 +2686,6 @@ function initialize() {
   setVokiState('UNKNOWN');
   setBadge('UNKNOWN');
   document.body.dataset.state = 'UNKNOWN';
-  setChatVokiState(state.settings.provider === 'local-demo' ? 'LOCAL_DEMO' : 'IDLE');
-  syncVokiControls();
-  syncVokiVisibility();
   syncWorkspacePanels();
   selectSection(window.innerWidth <= 640 ? 'chat' : 'home');
   configureCrossTabAuthentication();
