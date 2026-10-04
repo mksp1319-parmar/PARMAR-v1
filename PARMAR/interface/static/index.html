@@ -6,9 +6,9 @@
     <title>PARMAR | Human-Controlled AI Governance</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body data-state="IDLE" data-active-section="home" data-theme="midnight" data-animation="normal" data-voki-state="IDLE">
+  <body data-state="IDLE" data-active-section="home" data-theme="midnight" data-animation="normal" data-voki-state="IDLE" data-left-panel-state="closed" data-right-panel-state="closed" data-gesture-state="idle">
     <div class="app-shell">
-      <aside class="sidebar" id="sidebar" aria-label="PARMAR workspace">
+      <aside class="sidebar" id="sidebar" aria-label="PARMAR workspace" aria-hidden="true" inert tabindex="-1">
         <a class="brand-block sidebar-brand" href="#section-home" aria-label="PARMAR home">
           <span class="brand-mark" aria-hidden="true"><span>P</span></span>
           <span class="brand-copy">
@@ -16,12 +16,13 @@
             <span class="brand-subtitle">Human-guided intelligence</span>
           </span>
         </a>
+        <button class="panel-close sidebar-close" id="sidebar-close" type="button" aria-label="Close navigation" title="Close navigation">×</button>
 
         <button class="nav-item new-chat-nav" type="button" data-section="chat" data-nav-key="new-chat" data-action="new-chat" aria-label="New Chat" title="New Chat"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></span><span>New Chat</span></button>
         <div class="nav-label">Workspace</div>
         <nav class="nav" aria-label="Main navigation">
           <button class="nav-item active" data-section="chat" data-nav-key="chat" aria-label="Chats / History" title="Chats / History"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 5.75h14a1.25 1.25 0 0 1 1.25 1.25v8A1.25 1.25 0 0 1 19 16.25H10l-4.5 3v-3.1A1.25 1.25 0 0 1 4.25 15V7A1.25 1.25 0 0 1 5.5 5.75Z" /><path d="M8 10h8M8 13h5" /></svg></span><span>Chats / History</span></button>
-          <button class="nav-item" type="button" data-nav-key="research" data-action="research" aria-label="Search / Research" title="Search / Research"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.1" /><path d="m15.3 15.3 4.2 4.2M8.5 10.8h4.6M10.8 8.5v4.6" /></svg></span><span>Search / Research</span></button>
+          <button class="nav-item" data-section="voki" aria-label="VOKKI interface" title="VOKKI interface"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><path d="m8 9 4 6 4-6" /></svg></span><span>VOKKI</span></button>
           <button class="nav-item" data-section="home" data-nav-key="home" aria-label="PARMAR Core" title="PARMAR Core"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><circle cx="12" cy="12" r="4.75" /><circle cx="12" cy="12" r="1.25" /></svg></span><span>PARMAR Core</span></button>
           <button class="nav-item" data-section="safety" aria-label="Risk & Safety" title="Risk & Safety"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span><span>Risk &amp; Safety</span></button>
           <button class="nav-item" data-section="simulator" aria-label="Simulation" title="Simulation"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.25 7.25A2.25 2.25 0 0 1 7.5 5h9A2.25 2.25 0 0 1 18.75 7.25v9.5A2.25 2.25 0 0 1 16.5 19h-9a2.25 2.25 0 0 1-2.25-2.25Z" /><path d="m10 9 5 3-5 3Z" /></svg></span><span>Simulation</span></button>
@@ -39,6 +40,10 @@
 
         <div class="sidebar-lower">
           <div class="sidebar-section-label">Recent</div>
+          <label class="history-filter">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1" /></svg>
+            <input id="history-filter" type="search" placeholder="Find a conversation" autocomplete="off" aria-label="Filter loaded conversations" />
+          </label>
           <p class="history-status" id="history-status" role="status" aria-live="polite" hidden></p>
           <ul class="history-list" id="history-list"></ul>
           <div class="authority-note"><span class="authority-dot"></span><span>Human authority<br /><strong>Always retained</strong></span></div>
@@ -53,12 +58,55 @@
             <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Overview</span></div>
           </div>
           <div class="header-controls">
-            <button class="research-toggle" id="research-toggle" type="button" aria-label="Open Research workspace" aria-expanded="false" aria-controls="research-workspace" title="Open Research"><span aria-hidden="true">⌕</span><span>Research</span></button>
             <div class="status-pill status-safe" id="status-pill" aria-live="polite">READY</div>
             <div class="human-pill"><span class="human-mark" aria-hidden="true">+</span> Human in control</div>
             <button class="new-session-btn auth-logout-btn" id="logout-btn" type="button" hidden>Sign out</button>
             <button class="new-session-btn" id="new-session-btn"><span aria-hidden="true">+</span> New session</button>
           </div>
+          <nav class="capability-toolbar" role="toolbar" aria-label="PARMAR capabilities">
+            <button class="capability-button capability-new-chat" type="button" data-action="new-chat" title="Start a new chat">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span>New Chat</span>
+            </button>
+            <span class="toolbar-divider" aria-hidden="true"></span>
+            <button class="capability-button discovery-toggle" id="discovery-toggle" type="button" aria-label="Open Discovery" aria-expanded="false" aria-controls="discovery-panel" title="Open Discovery workspace">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1" /></svg><span>Discovery</span>
+            </button>
+            <button class="capability-button" type="button" data-discovery-target="search" aria-controls="discovery-panel" aria-expanded="false" title="Search is not connected">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1M8.5 10.8h4.6" /></svg><span>Search</span><span class="capability-unavailable">Unavailable</span>
+            </button>
+            <button class="capability-button" type="button" data-discovery-target="research" aria-controls="discovery-panel" aria-expanded="false" title="Research provider not connected">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.75h14v14.5H5zM8.5 8.5h7M8.5 12h7M8.5 15.5h4" /></svg><span>Research</span><span class="capability-unavailable">Not connected</span>
+            </button>
+            <button class="capability-button" type="button" data-discovery-target="news" aria-controls="discovery-panel" aria-expanded="false" title="Live news feed not connected">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v13H5zM8 9h8M8 12h8M8 15h4" /></svg><span>News</span><span class="capability-unavailable">Unavailable</span>
+            </button>
+            <button class="capability-button capability-unavailable-action" type="button" disabled aria-describedby="files-unavailable" title="Files are unavailable">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.75h8l4 4v12.5H6zM14 3.75v4h4" /><path d="M9 13h6M9 16h6" /></svg><span>Files</span><span class="capability-unavailable">Unavailable</span>
+            </button>
+            <button class="capability-button" type="button" data-section="memory" title="Manage saved memory">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.75h12v14.5H6zM9 8.5h6M9 12h6M9 15.5h3" /></svg><span>Memory</span>
+            </button>
+            <button class="capability-button" type="button" data-section="tools" title="View tools and plugins">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v6M16 5v6M6.5 11h11v2a5.5 5.5 0 0 1-5.5 5.5V21M7 7.5h10" /></svg><span>Tools</span><span class="capability-unavailable">Not connected</span>
+            </button>
+            <button class="capability-button" type="button" data-section="tools" title="Plugin registry status">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7.5H5.5v-3H9v3M15 7.5h3.5v-3H15v3M8 16.5H5.5v3H9v-3M15 16.5h3.5v3H15v-3M9 12h6M12 9v6" /></svg><span>Plugins</span><span class="capability-unavailable">Not connected</span>
+            </button>
+            <button class="capability-button" type="button" data-section="voki" title="Open the dedicated VOKKI interface">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v15M7.5 8v8M16.5 8v8M4 10v4M20 10v4" /></svg><span>VOKKI</span>
+            </button>
+            <details class="capability-more">
+              <summary class="capability-button" title="More PARMAR capabilities">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg><span>More</span>
+              </summary>
+              <div class="capability-menu" role="group" aria-label="More PARMAR sections">
+                <button type="button" data-section="simulator">Simulation</button>
+                <button type="button" data-section="phone">Device awareness</button>
+                <button type="button" data-section="audit">Activity</button>
+                <button type="button" data-section="settings">Settings</button>
+              </div>
+            </details>
+          </nav>
         </header>
 
         <main class="workspace">
@@ -69,14 +117,19 @@
               <p>Bring a decision, proposal, or question. PARMAR will surface the relevant risks and keep the final say with you.</p>
             </div>
 
-            <section class="home-presence" aria-label="PARMAR Vokki status">
+            <section class="home-presence" aria-label="PARMAR VOKKI status">
               <div class="presence-backdrop" aria-hidden="true"><span></span><span></span><span></span></div>
-              <div class="presence-status"><span class="mini-dot" id="mini-dot"></span><span id="voki-state" aria-live="polite">IDLE</span></div>
+              <div class="voki-nameplate">
+                <span class="voki-insignia" aria-hidden="true">V</span>
+                <span class="voki-nameplate-copy"><strong>VOKKI</strong><small>PARMAR intelligence</small></span>
+                <span class="voki-human-line"><span class="authority-dot"></span> Human-led</span>
+              </div>
+              <div class="presence-status"><span class="mini-dot" id="mini-dot"></span><span id="voki-state" aria-live="polite">STATE UNAVAILABLE</span></div>
               <div class="voki-stage" aria-live="polite">
                 <div class="halo halo-one"></div>
                 <div class="halo halo-two"></div>
                 <div class="halo halo-three"></div>
-                <button class="parmar-core idle" id="parmar-core" type="button" aria-label="Vokki, PARMAR's visual assistant. Activate for a subtle response.">
+                <button class="parmar-core unknown" id="parmar-core" type="button" aria-label="VOKKI, PARMAR's visual intelligence. Activate for a subtle response.">
                   <span class="core-ring ring-one" aria-hidden="true"></span>
                   <span class="core-ring ring-two" aria-hidden="true"></span>
                   <span class="core-ring ring-three" aria-hidden="true"></span>
@@ -85,14 +138,14 @@
                   <span class="voki-face" aria-hidden="true"><span class="eye left"></span><span class="eye right"></span><span class="mouth"></span></span>
                 </button>
               </div>
-              <div class="presence-caption"><span class="caption-kicker">PARMAR Vokki</span><span class="caption-divider"></span><span>Present, not in control</span></div>
+              <div class="presence-caption"><span class="caption-kicker">LIVING INTELLIGENCE</span><span class="caption-divider"></span><span>Present, never in control</span></div>
             </section>
 
             <section class="home-interaction" aria-label="Start a PARMAR review">
               <div class="interaction-heading">
                 <div>
                   <span class="eyebrow">Your next decision</span>
-                  <h2 id="system-state">READY</h2>
+                  <h2 id="system-state">NOT ASSESSED</h2>
                 </div>
                 <label class="language-control" for="language-select"><span>Language</span>
                   <select id="language-select" class="language-select" aria-label="Request language">
@@ -106,13 +159,13 @@
                 <textarea id="request-input" rows="3" placeholder="Tell PARMAR what you’re considering…"></textarea>
                 <button id="analyze-btn" class="primary-btn" type="button"><span>Review request</span><span class="button-arrow" aria-hidden="true">↗</span></button>
               </div>
-              <div class="interaction-footnote"><span>Safety review only</span><span class="footnote-divider"></span><span>No action is taken on your behalf</span><button class="wake-btn" id="wake-btn" type="button">About Vokki</button></div>
+              <div class="interaction-footnote"><span>Safety review only</span><span class="footnote-divider"></span><span>No action is taken on your behalf</span><button class="wake-btn" id="wake-btn" type="button">About VOKKI</button></div>
             </section>
 
             <section class="home-summary" aria-label="Current review context">
               <div class="summary-item"><span class="summary-icon risk-icon" aria-hidden="true"></span><span class="summary-label">Risk</span><strong id="risk-level">—</strong></div>
               <div class="summary-item"><span class="summary-icon approval-icon" aria-hidden="true"></span><span class="summary-label">Human review</span><strong id="approval-state">Not assessed</strong></div>
-              <div class="summary-item"><span class="summary-icon outcome-icon" aria-hidden="true"></span><span class="summary-label">Outcome</span><strong id="outcome-state">Ready</strong></div>
+              <div class="summary-item"><span class="summary-icon outcome-icon" aria-hidden="true"></span><span class="summary-label">Outcome</span><strong id="outcome-state">Not assessed</strong></div>
               <div class="summary-item"><span class="summary-icon provider-icon" aria-hidden="true"></span><span class="summary-label">Provider</span><strong id="provider-status">Local demo</strong></div>
             </section>
 
@@ -124,35 +177,116 @@
             <section class="home-activity" aria-label="Recent activity"><div class="section-title-row"><h2>Recent activity</h2><button class="text-button" type="button" data-section="audit">View all <span aria-hidden="true">↗</span></button></div><div id="audit-list" class="audit-list"></div></section>
           </section>
 
+          <section class="section-view" data-section="voki" id="section-voki" aria-labelledby="voki-interface-title">
+            <div class="view-heading"><div><span class="eyebrow">VOKKI interface</span><h1 id="voki-interface-title">Present with you.</h1></div><p>VOKKI communicates PARMAR’s result. PARMAR’s review, enforcement, approval, and response checks remain authoritative.</p></div>
+            <section class="voki-interface-surface" data-voki-interface data-presence-state="unknown" aria-label="VOKKI interaction">
+              <div class="voki-presence-stage" aria-hidden="true">
+                <div class="voki-presence" data-voki-presence data-presence-state="unknown" data-lifecycle-state="UNKNOWN">
+                  <span class="voki-presence-field field-outer"></span>
+                  <span class="voki-presence-field field-middle"></span>
+                  <span class="voki-presence-field field-inner"></span>
+                  <span class="voki-presence-light"></span>
+                  <div class="voki-avatar" data-voki-avatar data-voki-avatar-host data-expression="unavailable" data-avatar-kind="local-default">
+                    <svg class="voki-avatar-portrait" viewBox="0 0 240 300" role="presentation" focusable="false">
+                      <defs>
+                        <linearGradient id="voki-face-light" x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0" stop-color="#d2e3e5" stop-opacity=".94" />
+                          <stop offset=".5" stop-color="#95b7c2" stop-opacity=".94" />
+                          <stop offset="1" stop-color="#4f7488" stop-opacity=".96" />
+                        </linearGradient>
+                        <linearGradient id="voki-form-light" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0" stop-color="#345c75" stop-opacity=".88" />
+                          <stop offset="1" stop-color="#101d30" stop-opacity=".96" />
+                        </linearGradient>
+                      </defs>
+                      <path class="voki-avatar-shoulders" d="M25 288c4-54 34-82 73-88l22 13 22-13c39 6 69 34 73 88Z" />
+                      <path class="voki-avatar-neck" d="M101 181h38v39l-19 16-19-16Z" />
+                      <path class="voki-avatar-face" d="M70 101c0-42 21-67 50-67s50 25 50 67v43c0 39-22 66-50 66s-50-27-50-66Z" />
+                      <path class="voki-avatar-hair" d="M68 108c-5-53 14-82 52-82 38 0 57 29 52 82l-12-21-11-28c-18 14-43 20-70 16l-5 32Z" />
+                      <path class="voki-avatar-brow brow-left" d="M83 111q13-9 27-2" />
+                      <path class="voki-avatar-brow brow-right" d="M130 109q14-7 27 2" />
+                      <path class="voki-avatar-eye eye-left" d="M84 125q12-9 25 0" />
+                      <path class="voki-avatar-eye eye-right" d="M131 125q13-9 25 0" />
+                      <path class="voki-avatar-nose" d="m119 123-6 31 8 3" />
+                      <path class="voki-avatar-mouth" d="M103 174q16 5 32 0" />
+                      <path class="voki-avatar-collar" d="m95 204 25 23 25-23 13 13-19 29h-38l-19-29Z" />
+                    </svg>
+                    <img class="voki-avatar-approved-reference" data-voki-approved-image alt="" hidden />
+                    <span class="voki-avatar-insignia" aria-hidden="true">V</span>
+                  </div>
+                </div>
+                <div class="voki-presence-caption"><span class="voki-presence-caption-line"></span><span>PARMAR / VOKKI</span><span class="voki-presence-caption-line"></span></div>
+              </div>
+              <div class="voki-interface-topline"><span class="presence-small" aria-hidden="true">V</span><span>VOKKI</span><span class="conversation-divider"></span><span>Connected to PARMAR Core</span></div>
+              <div class="voki-interface-status">
+                <span class="eyebrow">PARMAR lifecycle</span>
+                <strong data-voki-lifecycle data-lifecycle="UNKNOWN" role="status" aria-live="polite">STATE UNAVAILABLE</strong>
+                <span class="voki-presence-state-label" data-voki-presence-label>STATE UNAVAILABLE</span>
+                <p data-voki-transport aria-live="polite">No request in progress.</p>
+              </div>
+              <p class="voki-interface-output" data-voki-output aria-live="polite">PARMAR state is not available until a request is reviewed.</p>
+              <div class="voki-speech-controls" aria-label="VOKKI speech output">
+                <label class="voki-speech-toggle" for="voki-speech-toggle">
+                  <input id="voki-speech-toggle" type="checkbox" data-voki-speech-toggle aria-describedby="voki-speech-status" />
+                  <span>Read released responses aloud</span>
+                </label>
+                <p class="voki-speech-status" data-voki-speech-status role="status" aria-live="polite">Checking browser speech availability.</p>
+                <button class="voki-stop-speech" type="button" data-voki-stop-speech hidden>Stop speaking</button>
+              </div>
+              <section class="voki-identity-onboarding" aria-label="Optional VOKKI visual identity setup">
+                <div>
+                  <strong>Optional visual reference</strong>
+                  <p>A camera is not needed to use VOKKI. If you choose setup, one still is captured on this device and saved only after your approval. No image is uploaded.</p>
+                </div>
+                <p class="voki-identity-status" data-voki-identity-status role="status" aria-live="polite" tabindex="-1">The bundled avatar is active.</p>
+                <video class="voki-identity-video" data-voki-identity-video autoplay muted playsinline hidden aria-label="Temporary local camera preview"></video>
+                <img class="voki-identity-preview" data-voki-identity-preview alt="Temporary VOKKI reference preview. Not saved." hidden />
+                <div class="voki-identity-actions">
+                  <button type="button" data-voki-identity-start>Set up an optional visual reference</button>
+                  <button type="button" data-voki-identity-enable hidden>Enable camera for this session</button>
+                  <button type="button" data-voki-identity-capture hidden>Capture one still</button>
+                  <button type="button" data-voki-identity-approve hidden>Approve and save on this device</button>
+                  <button type="button" data-voki-identity-retake hidden>Retake</button>
+                  <button type="button" data-voki-identity-cancel hidden>Cancel / Not now</button>
+                  <button type="button" data-voki-identity-remove hidden>Remove saved reference</button>
+                </div>
+              </section>
+              <div class="voki-interface-approval" data-voki-approval hidden>
+                <p data-voki-approval-message></p>
+                <div class="voki-interface-actions">
+                  <button class="approve-btn" type="button" data-voki-decision="APPROVE">Approve</button>
+                  <button class="reject-btn" type="button" data-voki-decision="REJECT">Reject</button>
+                </div>
+              </div>
+              <form class="voki-interface-form" data-voki-form>
+                <label class="sr-only" for="voki-interface-input">Send a request to PARMAR through VOKKI</label>
+                <textarea id="voki-interface-input" data-voki-input rows="3" maxlength="12000" placeholder="What would you like PARMAR to consider?"></textarea>
+                <button class="primary-btn" type="submit" data-voki-submit><span>Send to PARMAR</span><span class="button-arrow" aria-hidden="true">↗</span></button>
+              </form>
+              <p class="voki-interface-note">Text interaction only in this phase. VOKKI does not make safety decisions or execute actions.</p>
+            </section>
+          </section>
+
           <section class="section-view" data-section="chat" id="section-chat" aria-labelledby="chat-title">
             <div class="view-heading"><div><span class="eyebrow">A considered conversation</span><h1 id="chat-title">Talk it through.</h1></div><p>Ask for perspective. PARMAR reviews requests through its existing safety pipeline before responding.</p></div>
             <section class="conversation-surface" aria-label="PARMAR conversation">
               <div class="conversation-topline"><span class="presence-small" aria-hidden="true">P</span><span>PARMAR</span><span class="conversation-divider"></span><span id="chat-mode-label">Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
               <p class="history-status" id="auth-status" role="status" aria-live="polite" hidden></p>
-              <section class="chat-voki" id="chat-voki" data-state="IDLE" data-voice-active="false" aria-label="PARMAR Vokki assistant">
-                <div class="chat-voki-toolbar">
-                  <div class="chat-voki-identity"><span class="chat-voki-status-mark" aria-hidden="true"></span><div><strong>PARMAR Vokki</strong><span id="voki-chat-state" role="status" aria-live="polite">Idle</span></div></div>
-                  <span class="chat-voki-note" id="voki-chat-note">Text input only. No microphone access.</span>
-                  <div class="chat-voki-controls">
-                    <label class="voki-voice-control" for="voki-voice-toggle"><span id="voki-voice-label">Voice off</span><input id="voki-voice-toggle" type="checkbox" aria-describedby="voki-voice-status" /></label>
-                    <button class="voki-visibility-control" id="voki-visibility-toggle" type="button" aria-expanded="true" aria-controls="voki-avatar-stage">Minimize</button>
-                  </div>
-                </div>
-                <div class="chat-voki-voice-status" id="voki-voice-status">Browser speech is off.</div>
-                <div class="chat-voki-stage" id="voki-avatar-stage" aria-hidden="true">
-                  <div class="chat-voki-visual">
-                    <div class="chat-voki-orb"><span class="chat-voki-orb-ring ring-a"></span><span class="chat-voki-orb-ring ring-b"></span><span class="chat-voki-orb-node node-a"></span><span class="chat-voki-orb-node node-b"></span><span class="chat-voki-orb-center">P</span></div>
-                    <div class="chat-voki-audio-wave"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
-                  </div>
-                </div>
-              </section>
               <div class="chat-thread" id="chat-thread" aria-live="polite" aria-relevant="additions"></div>
               <div class="chat-composer">
                 <label class="sr-only" for="chat-input">Message PARMAR</label>
                 <textarea id="chat-input" rows="2" placeholder="What would you like to think through?"></textarea>
-                <button class="primary-btn send-button" id="chat-submit" type="button" aria-label="Send message"><span>Send</span><span class="button-arrow" aria-hidden="true">↗</span></button>
+                <div class="composer-actions">
+                  <button class="composer-tool" type="button" disabled aria-describedby="files-unavailable" title="File attachments are unavailable">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 13.8 6.7a3 3 0 0 1 4.2 4.2l-7.1 7.2a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1" /></svg><span>Files unavailable</span>
+                  </button>
+                  <button class="composer-tool composer-voki" type="button" data-section="voki" title="Open the dedicated VOKKI interface">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v15M7.5 8v8M16.5 8v8M4 10v4M20 10v4" /></svg><span>Open VOKKI</span>
+                  </button>
+                  <button class="primary-btn send-button" id="chat-submit" type="button" aria-label="Send message"><span>Send</span><span class="button-arrow" aria-hidden="true">↗</span></button>
+                </div>
               </div>
-              <div class="composer-note">Enter to send <span>·</span> Shift + Enter for a new line</div>
+              <div class="composer-note"><span>Enter to send</span><span class="composer-note-divider">·</span><span>Shift + Enter for a new line</span></div>
             </section>
           </section>
 
@@ -218,7 +352,32 @@
 
           <section class="section-view" data-section="tools" id="section-tools" aria-labelledby="tools-title">
             <div class="view-heading"><div><span class="eyebrow">Extensions</span><h1 id="tools-title">Tools / Plugins</h1></div><p>Optional tools remain outside this demo’s active request flow.</p></div>
-            <section class="feature-placeholder"><span class="placeholder-mark" aria-hidden="true">T</span><div><strong>No tools configured</strong><p>PARMAR’s existing safety review remains unchanged.</p></div></section>
+            <section class="capability-catalog" aria-label="Available and unavailable PARMAR capabilities">
+              <div class="capability-catalog-group">
+                <span class="eyebrow">Available in this workspace</span>
+                <ul>
+                  <li><strong>PARMAR review</strong><span>Existing risk, safety, enforcement, and human approval flow.</span></li>
+                  <li><strong>Conversation</strong><span>Current local-demo and authenticated chat behavior.</span></li>
+                  <li><strong>Memory</strong><span>User-managed notes with existing consent and ownership rules.</span></li>
+                  <li><strong>Simulation</strong><span>Local synthetic scenarios; no real-world action is performed.</span></li>
+                  <li><strong>Device awareness</strong><span>Permission-gated simulated events only.</span></li>
+                  <li><strong>Local demo</strong><span>The deterministic demo provider makes no network request; external provider selection keeps its existing authorization gates.</span></li>
+                </ul>
+              </div>
+              <div class="capability-catalog-group capability-catalog-future">
+                <span class="eyebrow">Not connected</span>
+                <ul>
+                  <li><strong>Search, research, and news</strong><span>No search provider or live feed is configured.</span></li>
+                  <li><strong>Files and personal knowledge</strong><span>No upload, document retrieval, or project storage path exists.</span></li>
+                  <li><strong>Executable tools and connectors</strong><span>The server registry is metadata-only; no UI tool execution path is configured.</span></li>
+                  <li><strong>Automation and reminders</strong><span>No scheduler, reminder, or automation route is connected.</span></li>
+                  <li><strong>Developer and GitHub</strong><span>No repository, issue, pull-request, or code-hosting connector is connected.</span></li>
+                  <li><strong>Connected accounts</strong><span>No external account connection or integration authorization surface is configured.</span></li>
+                  <li><strong>Knowledge and documents</strong><span>No file corpus, document retrieval, or project knowledge store is available.</span></li>
+                  <li><strong>Multimodal input</strong><span>No image/document upload or microphone input is available. Optional voice is browser speech synthesis only.</span></li>
+                </ul>
+              </div>
+            </section>
           </section>
 
           <section class="section-view" data-section="system" id="section-system" aria-labelledby="system-title">
@@ -240,93 +399,85 @@
         </main>
         <footer class="workspace-footer"><span>PARMAR</span><span>Safety review, never automatic authority.</span><span id="outcome-footer">Human-led</span></footer>
       </div>
-
-      <aside class="research-workspace" id="research-workspace" aria-labelledby="research-title" tabindex="-1" data-research-state="disconnected">
-        <header class="research-header">
-          <div class="research-heading-copy">
-            <span class="research-kicker"><span aria-hidden="true">P</span> PARMAR RESEARCH</span>
-            <h2 id="research-title">Research</h2>
-            <p>Evidence and synthesis, alongside your conversation.</p>
+      <aside class="discovery-panel" id="discovery-panel" aria-label="PARMAR Discovery" aria-hidden="true" inert tabindex="-1" data-research-state="unavailable">
+        <header class="discovery-header">
+          <div>
+            <span class="discovery-kicker">PARMAR INTELLIGENCE</span>
+            <h2>Discovery</h2>
+            <p>Source-backed research is not connected.</p>
           </div>
-          <button class="research-close" id="research-close" type="button" aria-label="Close Research workspace" title="Close Research">×</button>
+          <button class="panel-close discovery-close" id="discovery-close" type="button" aria-label="Close Discovery" title="Close Discovery">×</button>
         </header>
-
-        <div class="research-conversation-link"><span class="research-link-mark" aria-hidden="true"></span><span>Linked to the current conversation</span></div>
-
-        <section class="research-query" aria-labelledby="research-query-title">
-          <div class="research-section-heading">
-            <h3 id="research-query-title">Research question</h3>
-            <span class="research-unavailable-tag">Unavailable</span>
-          </div>
-          <label class="sr-only" for="research-query-input">Research question</label>
-          <div class="research-query-control">
-            <input id="research-query-input" type="search" placeholder="Search is not connected" disabled />
-            <button type="button" aria-label="Start research" disabled>↗</button>
-          </div>
-          <p class="research-supporting-copy">A search provider is not connected. PARMAR will not claim to search the web or return live sources.</p>
+        <div class="discovery-context" id="discovery-context" role="status" aria-live="polite">
+          <span class="discovery-status-mark" aria-hidden="true"></span>
+          <span>Waiting for a connected research provider</span>
+        </div>
+        <section class="discovery-section" id="discovery-search" aria-labelledby="discovery-search-title" data-discovery-state="unavailable">
+          <div class="discovery-section-heading"><h3 id="discovery-search-title">Search</h3><span class="discovery-state">Unavailable</span></div>
+          <label class="sr-only" for="discovery-query">Research question</label>
+          <input id="discovery-query" class="discovery-query" type="search" placeholder="Search provider not connected" disabled />
+          <p>No search request has been sent. PARMAR will show results only after a real provider is connected.</p>
         </section>
-
-        <section class="research-progress" aria-labelledby="research-progress-title" aria-describedby="research-progress-description" data-state="not-started">
-          <div class="research-section-heading">
-            <h3 id="research-progress-title">Research path</h3>
-            <span class="research-state-label"><span aria-hidden="true"></span> Not started</span>
-          </div>
-          <p id="research-progress-description" class="sr-only">No research has started because search is unavailable.</p>
-          <ol class="research-stages">
-            <li data-stage-state="empty"><span class="research-stage-marker" aria-hidden="true"></span><strong>Question</strong><small>Not sent to search</small></li>
-            <li data-stage-state="unavailable"><span class="research-stage-marker" aria-hidden="true"></span><strong>Search</strong><small>Disconnected</small></li>
-            <li data-stage-state="empty"><span class="research-stage-marker" aria-hidden="true"></span><strong>Sources</strong><small>None available</small></li>
-            <li data-stage-state="empty"><span class="research-stage-marker" aria-hidden="true"></span><strong>Synthesis</strong><small>Not available</small></li>
-          </ol>
+        <ol class="discovery-workflow" aria-label="Research workflow">
+          <li data-stage-state="unavailable"><span class="workflow-mark" aria-hidden="true"></span><strong>Search</strong><small>Provider unavailable</small></li>
+          <li data-stage-state="empty"><span class="workflow-mark" aria-hidden="true"></span><strong>Sources</strong><small>None received</small></li>
+          <li data-stage-state="empty"><span class="workflow-mark" aria-hidden="true"></span><strong>Evidence</strong><small>Not available</small></li>
+          <li data-stage-state="empty"><span class="workflow-mark" aria-hidden="true"></span><strong>Analysis</strong><small>Not started</small></li>
+          <li data-stage-state="empty"><span class="workflow-mark" aria-hidden="true"></span><strong>Synthesis</strong><small>Not started</small></li>
+          <li data-stage-state="empty"><span class="workflow-mark" aria-hidden="true"></span><strong>Citations</strong><small>None available</small></li>
+          <li data-stage-state="empty"><span class="workflow-mark" aria-hidden="true"></span><strong>Related</strong><small>Not available</small></li>
+        </ol>
+        <section class="discovery-section" id="discovery-evidence" aria-labelledby="discovery-evidence-title" data-discovery-state="empty">
+          <div class="discovery-section-heading"><h3 id="discovery-evidence-title">Evidence</h3><span class="discovery-state">0 items</span></div>
+          <ol class="discovery-evidence-list" aria-label="Research evidence" aria-live="polite"></ol>
+          <p>Evidence will be linked to its source when real results are available.</p>
+          <template id="discovery-evidence-template">
+            <li class="discovery-evidence" data-evidence-source-id="">
+              <p data-evidence-excerpt></p>
+              <span data-evidence-citation></span>
+            </li>
+          </template>
         </section>
-
-        <section class="research-synthesis" aria-labelledby="research-synthesis-title" data-state="empty">
-          <div class="research-section-heading">
-            <h3 id="research-synthesis-title">Synthesis</h3>
-            <span class="research-evidence-count">0 references</span>
-          </div>
-          <div class="research-empty-state">
-            <strong>No source-backed answer yet</strong>
-            <p>Answers in chat are not presented as web research. A synthesis will appear here only when evidence is available.</p>
-          </div>
+        <section class="discovery-section" id="discovery-news" aria-labelledby="discovery-news-title" data-discovery-state="disconnected">
+          <div class="discovery-section-heading"><h3 id="discovery-news-title">News</h3><span class="discovery-state">Disconnected</span></div>
+          <p>There is no live news feed. No current headlines are shown.</p>
         </section>
-
-        <section class="research-sources" aria-labelledby="research-sources-title" data-state="empty">
-          <div class="research-section-heading">
-            <h3 id="research-sources-title">Sources <span class="research-citation-key" aria-label="Citation reference">[ ]</span></h3>
-            <span class="research-evidence-count">0</span>
-          </div>
-          <p class="research-empty-copy">Source titles, domains, previews, and source types will be shown here when a provider returns them. Nothing has been researched for this conversation.</p>
-          <ol class="research-source-list" aria-label="Research sources" aria-live="polite"></ol>
+        <section class="discovery-section" id="discovery-research" aria-labelledby="discovery-research-title" data-discovery-state="ready">
+          <div class="discovery-section-heading"><h3 id="discovery-research-title">Intelligence</h3><span class="discovery-state">Ready for evidence</span></div>
+          <p>Analysis can appear here only after validated sources and evidence are available.</p>
         </section>
-
-        <section class="research-related" aria-labelledby="research-related-title">
-          <div class="research-section-heading"><h3 id="research-related-title">Related discoveries</h3></div>
-          <p class="research-empty-copy">Related questions will appear after source-backed research is available.</p>
+        <section class="discovery-section" id="discovery-synthesis" aria-labelledby="discovery-synthesis-title" data-discovery-state="empty">
+          <div class="discovery-section-heading"><h3 id="discovery-synthesis-title">Synthesis</h3><span class="discovery-state">Not started</span></div>
+          <p>No synthesis is shown until evidence has been gathered and reviewed.</p>
         </section>
-
-        <section class="research-news" aria-labelledby="research-news-title" data-state="not-available">
-          <div class="research-section-heading">
-            <h3 id="research-news-title">Recent information</h3>
-            <span class="research-unavailable-tag">No live feed</span>
-          </div>
-          <p class="research-empty-copy">Live news is not connected. No current headlines are shown.</p>
+        <section class="discovery-section" id="discovery-sources" aria-labelledby="discovery-sources-title" data-discovery-state="empty">
+          <div class="discovery-section-heading"><h3 id="discovery-sources-title">Sources</h3><span class="discovery-state">0</span></div>
+          <ol class="discovery-source-list" aria-label="Research sources" aria-live="polite"></ol>
+          <p>No sources or citations have been received.</p>
+          <template id="discovery-source-template">
+            <li class="discovery-source" data-source-status="received">
+              <div class="discovery-source-meta"><span data-source-publisher></span><span data-source-status-label></span></div>
+              <h4 data-source-title></h4>
+              <p data-source-excerpt></p>
+              <a data-source-link hidden>Open source</a>
+              <span class="discovery-source-citation" data-source-citation></span>
+            </li>
+          </template>
         </section>
-
-        <template id="research-source-template">
-          <li class="research-source">
-            <div class="research-source-meta"><span class="research-source-type"></span><span class="research-source-domain"></span></div>
-            <h4 class="research-source-title"></h4>
-            <p class="research-source-preview"></p>
-            <div class="research-source-actions">
-              <span class="research-source-citation"></span>
-              <button class="research-source-select" type="button" aria-pressed="false">Select</button>
-              <button class="research-source-open" type="button">Open source</button>
-            </div>
-          </li>
-        </template>
+        <section class="discovery-section" id="discovery-related" aria-labelledby="discovery-related-title" data-discovery-state="empty">
+          <div class="discovery-section-heading"><h3 id="discovery-related-title">Related discovery</h3><span class="discovery-state">Empty</span></div>
+          <p>Related findings will appear only when supported by real research results.</p>
+        </section>
+        <p class="discovery-disclaimer">PARMAR does not present chat responses as web research.</p>
       </aside>
+      <button class="panel-scrim" id="panel-scrim" type="button" aria-label="Close open panel" tabindex="-1" hidden></button>
     </div>
+    <span class="sr-only" id="files-unavailable">File uploads are not available.</span>
+    <script src="/static/voki-avatar.js"></script>
+    <script src="/static/voki-speech.js"></script>
+    <script src="/static/voki-identity.js"></script>
+    <script src="/static/voki-interface.js"></script>
+    <script src="/static/chat-presentation.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

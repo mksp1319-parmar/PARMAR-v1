@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import secrets
 import threading
@@ -22,6 +23,7 @@ class PendingApproval:
     session_id: UUID | None
     decision_id: str | None
     request_fingerprint: str | None
+    execution_context: dict[str, Any] | None
 
 
 class PendingApprovalStore:
@@ -42,6 +44,7 @@ class PendingApprovalStore:
         user_id: UUID,
         session_id: UUID,
         decision_id: str,
+        execution_context: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> str:
         if not isinstance(user_id, UUID) or not isinstance(session_id, UUID):
@@ -63,6 +66,7 @@ class PendingApprovalStore:
                 session_id=session_id,
                 decision_id=decision_id,
                 request_fingerprint=request_fingerprint,
+                execution_context=deepcopy(execution_context),
             )
         return token
 
@@ -89,9 +93,15 @@ class PendingApprovalStore:
         ):
             return False
         stored_summary_decision = pending.summary.get("enforcement", {}).get("decision_id")
-        stored_response_decision = pending.response.get("enforcement", {}).get("decision_id")
+        reviewed_response = pending.response.get("analysis", pending.response)
+        stored_response_decision = reviewed_response.get("enforcement", {}).get("decision_id")
+        stored_review_text = reviewed_response.get(
+            "request",
+            pending.response.get("request"),
+        )
         return (
-            (stored_summary_decision is None or stored_summary_decision == pending.decision_id)
+            stored_review_text == pending.request_text
+            and (stored_summary_decision is None or stored_summary_decision == pending.decision_id)
             and (stored_response_decision is None or stored_response_decision == pending.decision_id)
         )
 

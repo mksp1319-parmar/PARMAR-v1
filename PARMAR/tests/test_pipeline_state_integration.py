@@ -84,7 +84,7 @@ def test_analysis_and_risk_check_follow_existing_pipeline_order(monkeypatch, tmp
     ]
 
 
-def test_low_risk_completed_pipeline_reaches_safe_response_then_idle(monkeypatch, tmp_path):
+def test_low_risk_review_stops_at_enforcement_permission(monkeypatch, tmp_path):
     dashboard, events = _dashboard(
         monkeypatch,
         tmp_path,
@@ -93,9 +93,9 @@ def test_low_risk_completed_pipeline_reaches_safe_response_then_idle(monkeypatch
 
     dashboard.run_pipeline("Hi")
 
-    assert _trace(events)[-2:] == [LifecycleState.SAFE_RESPONSE, LifecycleState.IDLE]
-    safe_snapshot = events[-2][2]
-    assert safe_snapshot.enforcement_status == EnforcementState.READY_FOR_ACTION
+    assert _trace(events)[-2:] == [LifecycleState.ENFORCEMENT_ALLOWED, LifecycleState.IDLE]
+    permission_snapshot = events[-2][2]
+    assert permission_snapshot.enforcement_status == EnforcementState.READY_FOR_ACTION
 
 
 def test_blocked_request_reaches_blocked_then_idle(monkeypatch, tmp_path):
@@ -152,7 +152,7 @@ def test_human_rejection_transitions_to_blocked_then_idle(monkeypatch, tmp_path)
     assert _trace(events)[-2:] == [LifecycleState.BLOCKED, LifecycleState.IDLE]
 
 
-def test_approval_reaches_safe_response_only_after_enforcement_processing(monkeypatch, tmp_path):
+def test_approval_reaches_enforcement_permission_only_after_gate_processing(monkeypatch, tmp_path):
     dashboard, events = _dashboard(
         monkeypatch,
         tmp_path,
@@ -167,7 +167,7 @@ def test_approval_reaches_safe_response_only_after_enforcement_processing(monkey
     outcome = dashboard.handle_human_decision(result, "approve")
 
     assert outcome["action_boundary"]["execution_allowed"] is True
-    assert _trace(events)[-2:] == [LifecycleState.SAFE_RESPONSE, LifecycleState.IDLE]
+    assert _trace(events)[-2:] == [LifecycleState.ENFORCEMENT_ALLOWED, LifecycleState.IDLE]
 
 
 def test_approval_cannot_bypass_blocking_enforcement(monkeypatch, tmp_path):
@@ -186,11 +186,11 @@ def test_approval_cannot_bypass_blocking_enforcement(monkeypatch, tmp_path):
     assert outcome["human_decision"] == "APPROVED"
     assert outcome["enforcement"]["execution_allowed"] is False
     assert outcome["action_boundary"]["execution_allowed"] is False
-    assert LifecycleState.SAFE_RESPONSE not in _trace(events)
+    assert LifecycleState.ENFORCEMENT_ALLOWED not in _trace(events)
     assert _trace(events)[-2:] == [LifecycleState.BLOCKED, LifecycleState.IDLE]
 
 
-def test_safety_checks_alone_do_not_produce_safe_response(monkeypatch, tmp_path):
+def test_safety_checks_alone_do_not_produce_enforcement_permission(monkeypatch, tmp_path):
     dashboard, events = _dashboard(
         monkeypatch,
         tmp_path,
@@ -200,10 +200,10 @@ def test_safety_checks_alone_do_not_produce_safe_response(monkeypatch, tmp_path)
     dashboard.run_pipeline("Hi")
 
     assert dashboard.state_machine.snapshot.current_state is LifecycleState.WAITING_FOR_HUMAN
-    assert LifecycleState.SAFE_RESPONSE not in _trace(events)
+    assert LifecycleState.ENFORCEMENT_ALLOWED not in _trace(events)
 
 
-def test_exception_after_enforcement_does_not_publish_safe_response(monkeypatch, tmp_path):
+def test_exception_before_enforcement_does_not_publish_permission(monkeypatch, tmp_path):
     dashboard, events = _dashboard(
         monkeypatch,
         tmp_path,
@@ -218,7 +218,7 @@ def test_exception_after_enforcement_does_not_publish_safe_response(monkeypatch,
         dashboard.run_pipeline("Hi")
 
     assert dashboard.state_machine.snapshot.current_state is LifecycleState.RISK_CHECK
-    assert LifecycleState.SAFE_RESPONSE not in _trace(events)
+    assert LifecycleState.ENFORCEMENT_ALLOWED not in _trace(events)
     assert "sensitive exception detail" not in repr(dashboard.state_machine.snapshot)
 
 
@@ -317,13 +317,13 @@ def test_analyze_response_lifecycle_matches_emitted_dashboard_snapshot(monkeypat
 
     result = PARMARUIAdapter.analyze_request("Hi")
 
-    safe_snapshot = next(snapshot for _, state, snapshot in events if state is LifecycleState.SAFE_RESPONSE)
-    assert result["lifecycle"]["current_state"] == safe_snapshot.current_state.value
-    assert result["lifecycle"]["previous_state"] == safe_snapshot.previous_state.value
-    assert result["lifecycle"]["decision_id"] == safe_snapshot.decision_id
-    assert result["lifecycle"]["transition_timestamp"] == safe_snapshot.transition_timestamp.isoformat()
-    assert dashboard.lifecycle_snapshot is safe_snapshot
-    assert dashboard.state_machine.snapshot.current_state is LifecycleState.IDLE
+    permission_snapshot = next(snapshot for _, state, snapshot in events if state is LifecycleState.ENFORCEMENT_ALLOWED)
+    assert result["lifecycle"]["current_state"] == permission_snapshot.current_state.value
+    assert result["lifecycle"]["previous_state"] == permission_snapshot.previous_state.value
+    assert result["lifecycle"]["decision_id"] == permission_snapshot.decision_id
+    assert result["lifecycle"]["transition_timestamp"] == permission_snapshot.transition_timestamp.isoformat()
+    assert dashboard.lifecycle_snapshot is permission_snapshot
+    assert dashboard.state_machine.snapshot.current_state is LifecycleState.ENFORCEMENT_ALLOWED
 
 
 @pytest.mark.parametrize(
@@ -387,7 +387,7 @@ def test_analyze_lifecycle_payload_is_safe_and_additive(monkeypatch, tmp_path):
         "chat_architecture",
         "system_state",
     }.issubset(result)
-    assert result["lifecycle"]["current_state"] == LifecycleState.SAFE_RESPONSE.value
+    assert result["lifecycle"]["current_state"] == LifecycleState.ENFORCEMENT_ALLOWED.value
     assert raw_request not in repr(result["lifecycle"])
 
 

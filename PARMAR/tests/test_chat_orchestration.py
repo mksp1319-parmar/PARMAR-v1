@@ -284,7 +284,7 @@ def test_provider_output_cannot_change_parmar_safety_decision():
     assert response["request_safety"]["safe"] is True
     assert response["safe"] is None
     assert response["response_safety"]["status"] == "REVIEW"
-    assert "Approved" in response["message"]
+    assert "Approved" not in repr(response)
 
 
 def test_public_capability_and_candidate_metadata_redacts_credentials():

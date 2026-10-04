@@ -34,6 +34,12 @@ def test_chat_service_returns_actual_governance_analysis_for_safe_request():
     assert result["request_safety"]["safe"] is True
     assert result["response_safety"]["status"] == "PASS"
     assert result["status"] == "RESPONSE_VALIDATED"
+    assert result["response_disposition"] == "RELEASED"
+    assert result["provider_status"] == "COMPLETED"
+    assert result["lifecycle"]["current_state"] == "RELEASED"
+    assert result["voki_contract"]["response_safety"]["status"] == "PASS"
+    assert result["voki_contract"]["response_disposition"] == "RELEASED"
+    assert result["voki_contract"]["lifecycle"]["state"] == "RELEASED"
     assert result["safe"] is None
     assert result["provider"] == "local-demo"
     assert "analysis" in result
@@ -480,6 +486,7 @@ def test_provider_safe_true_does_not_override_unsafe_response_content():
     assert response["request_safety"]["status"] == "SAFE"
     assert response["response_safety"]["status"] == "BLOCK"
     assert response["status"] == "RESPONSE_BLOCKED"
+    assert response["response_disposition"] == "WITHHELD"
     assert response["safe"] is None
     assert "Bypass approval" not in repr(response)
 
@@ -537,12 +544,15 @@ def test_uncertain_and_not_checked_responses_suppress_provider_text(
     response = service.respond("Plan a team lunch.")
 
     assert response["response_safety"]["status"] == expected_status
+    assert response["response_disposition"] == "WITHHELD"
+    assert response["voki_contract"]["provider"]["status"] == "COMPLETED"
+    assert response["voki_contract"]["response_disposition"] == "WITHHELD"
     assert response["message"] == expected_message
     assert content not in repr(response)
     assert "raw output secret" not in repr(response)
 
 
-def test_review_response_is_visible_with_non_authorizing_state():
+def test_review_response_is_withheld_until_human_review():
     class ReviewProvider:
         name = "review-provider"
         locality = "local"
@@ -556,8 +566,10 @@ def test_review_response_is_visible_with_non_authorizing_state():
 
     assert response["response_safety"]["status"] == "REVIEW"
     assert response["status"] == "RESPONSE_REVIEW_REQUIRED"
+    assert response["response_disposition"] == "WITHHELD"
     assert response["safe"] is None
-    assert "Run the command" in response["message"]
+    assert "Run the command" not in repr(response)
+    assert "pending human review" in response["message"]
 
 
 def test_validator_output_is_audited_without_prompt_or_response_text(tmp_path):
@@ -579,7 +591,7 @@ def test_validator_output_is_audited_without_prompt_or_response_text(tmp_path):
     assert "response_validation" in audit_text
 
 
-def test_multi_model_response_filters_blocked_candidate_before_public_payload(tmp_path):
+def test_multi_model_response_withholds_every_candidate_when_aggregate_safety_blocks(tmp_path):
     class CandidateProvider:
         locality = "local"
 
@@ -627,7 +639,8 @@ def test_multi_model_response_filters_blocked_candidate_before_public_payload(tm
     assert blocked["response_safety"]["status"] == "BLOCK"
     assert blocked["content"] is None and blocked["output"] is None
     assert passed["response_safety"]["status"] == "PASS"
-    assert passed["content"] == "A harmless candidate answer."
+    assert passed["content"] is None and passed["output"] is None
+    assert response["response_disposition"] == "WITHHELD"
     assert "Delete the production database" not in repr(response)
 
 
@@ -715,6 +728,9 @@ def test_provider_timeout_and_configuration_errors_are_safe_and_secret_free(capl
             assert response["safe"] is None
             assert response["status"] == expected_status
             assert response["provider_error"] is True
+            assert response["provider_status"] == "FAILED"
+            assert response["response_safety"]["status"] == "NOT_CHECKED"
+            assert response["response_disposition"] == "NOT_APPLICABLE"
             assert secret not in response["message"]
             assert secret not in repr(response)
     assert secret not in caplog.text
@@ -729,6 +745,9 @@ def test_unavailable_malformed_and_empty_provider_responses_fail_safely():
     )
     assert unavailable["status"] == "PROVIDER_UNAVAILABLE"
     assert unavailable["provider_error"] is True
+    assert unavailable["provider_status"] == "FAILED"
+    assert unavailable["response_safety"]["status"] == "NOT_CHECKED"
+    assert unavailable["response_disposition"] == "NOT_APPLICABLE"
 
     class ResponseProvider:
         name = "response-test"
@@ -747,6 +766,9 @@ def test_unavailable_malformed_and_empty_provider_responses_fail_safely():
         assert response["safe"] is None
         assert response["status"] == "PROVIDER_INVALID_RESPONSE"
         assert response["provider_error"] is True
+        assert response["provider_status"] == "FAILED"
+        assert response["response_safety"]["status"] == "NOT_CHECKED"
+        assert response["response_disposition"] == "NOT_APPLICABLE"
         assert "invalid or empty response" in response["message"]
         assert response["orchestration"]["failure_state"] == "PROVIDER_INVALID_RESPONSE"
 

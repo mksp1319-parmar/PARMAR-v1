@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from PARMAR.audit.decision_logs import DecisionLogManager
 from PARMAR.core.conflict.conflict_detector import ConflictDetector
@@ -27,6 +28,7 @@ class TerminalDashboard:
         self.phone_awareness_enabled = True
         self.state_machine = LifecycleStateMachine()
         self._lifecycle_snapshot = self.state_machine.snapshot
+        self._continue_lifecycle = False
 
     @property
     def lifecycle_snapshot(self) -> StateSnapshot:
@@ -84,8 +86,20 @@ class TerminalDashboard:
             return "REVIEW REQUIRED"
         return "BLOCKED"
 
-    def run_pipeline(self, request_text: str, human_interests: list[str] | None = None, rules: list[str] | None = None) -> dict:
-        self.state_machine.transition(LifecycleState.LISTENING, reset_context=True)
+    def run_pipeline(
+        self,
+        request_text: str,
+        human_interests: list[str] | None = None,
+        rules: list[str] | None = None,
+        *,
+        continue_lifecycle: bool = False,
+    ) -> dict:
+        self._continue_lifecycle = continue_lifecycle
+        self.state_machine.transition(
+            LifecycleState.LISTENING,
+            request_id=str(uuid4()),
+            reset_context=True,
+        )
         self.state_machine.transition(LifecycleState.THINKING)
         self.state_machine.transition(LifecycleState.ANALYZING)
 
@@ -158,11 +172,11 @@ class TerminalDashboard:
             "approval_status": decision["human_approval_status"],
         })
 
-        self._apply_enforcement_lifecycle(summary["enforcement"], response_completed=True)
-        self._return_terminal_lifecycle_to_idle()
+        self._apply_enforcement_lifecycle(summary["enforcement"])
+        self._return_completed_review_to_idle()
         return summary
 
-    def _apply_enforcement_lifecycle(self, enforcement_result: dict, *, response_completed: bool) -> None:
+    def _apply_enforcement_lifecycle(self, enforcement_result: dict) -> None:
         if self.state_machine.snapshot.current_state not in {
             LifecycleState.RISK_CHECK,
             LifecycleState.WAITING_FOR_HUMAN,
@@ -185,13 +199,15 @@ class TerminalDashboard:
 
         self._lifecycle_snapshot = self.state_machine.apply_enforcement_result(
             enforcement_result,
-            response_completed=response_completed,
             risk_level=self.state_machine.snapshot.risk_level,
             intent=self.state_machine.snapshot.intent,
         )
 
-    def _return_terminal_lifecycle_to_idle(self) -> None:
-        if self.state_machine.snapshot.current_state in {LifecycleState.SAFE_RESPONSE, LifecycleState.BLOCKED}:
+    def _return_completed_review_to_idle(self) -> None:
+        current = self.state_machine.snapshot.current_state
+        if current is LifecycleState.BLOCKED or (
+            current is LifecycleState.ENFORCEMENT_ALLOWED and not self._continue_lifecycle
+        ):
             self._lifecycle_snapshot = self.state_machine.snapshot
             self.state_machine.transition(LifecycleState.IDLE)
 
@@ -269,8 +285,8 @@ class TerminalDashboard:
             "action_boundary": result["action_boundary"],
         }
         if self.state_machine.snapshot.current_state is LifecycleState.WAITING_FOR_HUMAN:
-            self._apply_enforcement_lifecycle(outcome["enforcement"], response_completed=True)
-            self._return_terminal_lifecycle_to_idle()
+            self._apply_enforcement_lifecycle(outcome["enforcement"])
+            self._return_completed_review_to_idle()
         return outcome
 
     def run_phone_demo(self) -> dict:

@@ -22,7 +22,6 @@ class PARMARVoki:
         self.config = config or VOKIConfig()
 
     def state_for(self, system_state: str) -> dict:
-        state = str(system_state or "IDLE").upper()
         status_map = {
             "IDLE": "calm breathing / neutral monitoring",
             "LISTENING": "ready to receive a request",
@@ -30,13 +29,16 @@ class PARMARVoki:
             "ANALYZING": "reviewing request context",
             "RISK_CHECK": "evaluating the authoritative safety outcome",
             "WAITING_FOR_HUMAN": "paused / awaiting human authority",
-            "SAFE_RESPONSE": "completed response after enforcement approval",
+            "ENFORCEMENT_ALLOWED": "PARMAR granted permission; no action is asserted as executed",
+            "PROVIDER": "provider response is being requested",
+            "RESPONSE_SAFETY": "PARMAR is validating the provider response",
+            "RELEASED": "provider response passed response-safety validation and was released",
+            "WITHHELD": "provider response was withheld",
+            "PROVIDER_FAILED": "provider response is unavailable",
             "BLOCKED": "locked / enforcement denied the proposal",
-            "RISK_DETECTED": "warning pulse / escalation watch",
-            "APPROVAL_REQUIRED": "paused core / awaiting human authority",
-            "APPROVED": "confirmation pulse / authorized proceed",
-            "SAFE": "stable operational reassurance",
         }
+        reported_state = str(system_state).upper() if isinstance(system_state, str) and system_state else "UNKNOWN"
+        state = reported_state if reported_state in status_map else "UNKNOWN"
         return {
             "state": state,
             "voice": self.config.voice,
@@ -44,5 +46,8 @@ class PARMARVoki:
             "personality": self.config.personality,
             "pronunciation": self.config.pronunciation,
             "avatar_mode": self.config.avatar_mode,
-            "message": status_map.get(state, "stable monitoring"),
+            "message": status_map.get(
+                state,
+                "PARMAR lifecycle state is unavailable; no authoritative state is asserted.",
+            ),
         }

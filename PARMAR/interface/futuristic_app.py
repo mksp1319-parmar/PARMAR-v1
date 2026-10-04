@@ -34,6 +34,7 @@ from PARMAR.chat.readiness import (
 )
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
 from PARMAR.interface.approvals import PendingApprovalStore
+from PARMAR.interface.voki_contract import attach_voki_contract
 from PARMAR.phone.phone_awareness import PhoneAwarenessModule
 from PARMAR.sessions import (
     SESSION_COOKIE_NAME,
@@ -58,6 +59,76 @@ _IN_MEMORY_CONVERSATIONS = InMemoryConversationRepository()
 CONVERSATION_REPOSITORY: ConversationRepository = _IN_MEMORY_CONVERSATIONS
 MESSAGE_REPOSITORY: MessageRepository = _IN_MEMORY_CONVERSATIONS
 MEMORY_REPOSITORY: MemoryRepository = InMemoryMemoryRepository()
+
+
+def _create_pending_approval(
+    request: object,
+    request_text: str,
+    response: dict,
+    dashboard: object,
+    summary: dict | None,
+    *,
+    source: str,
+    execution_context: dict | None = None,
+) -> bool:
+    context = getattr(request, "request_context", None)
+    if (
+        dashboard is None
+        or summary is None
+        or response.get("status") != "APPROVAL_REQUIRED"
+        or summary.get("enforcement", {}).get("status") != "HUMAN_APPROVAL_REQUIRED"
+        or context is None
+        or not context.principal.authenticated
+        or context.principal.user_id is None
+        or context.session_id is None
+    ):
+        attach_voki_contract(
+            response,
+            provider_status="NOT_STARTED",
+            response_disposition="NOT_APPLICABLE",
+            approval_record_available=False,
+            source=source,
+        )
+        return False
+
+    decision_id = summary.get("enforcement", {}).get("decision_id")
+    if not isinstance(decision_id, str) or not decision_id:
+        attach_voki_contract(
+            response,
+            provider_status="NOT_STARTED",
+            response_disposition="NOT_APPLICABLE",
+            approval_record_available=False,
+            source=source,
+        )
+        return False
+
+    pending_response = response.copy()
+    attach_voki_contract(
+        pending_response,
+        provider_status="NOT_STARTED",
+        response_disposition="NOT_APPLICABLE",
+        approval_record_available=True,
+        source=source,
+    )
+    approval_id = PENDING_APPROVALS.create(
+        request_text,
+        pending_response,
+        dashboard,
+        summary,
+        user_id=context.principal.user_id,
+        session_id=context.session_id,
+        decision_id=decision_id,
+        execution_context=execution_context,
+    )
+    response["approval_id"] = approval_id
+    attach_voki_contract(
+        response,
+        provider_status="NOT_STARTED",
+        response_disposition="NOT_APPLICABLE",
+        approval_record_available=True,
+        source=source,
+    )
+    return True
 
 _CLIENT_IDENTITY_FIELDS = frozenset({
     "user_id",
@@ -505,25 +576,15 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                 request_text,
                 language=language,
             )
-            if (
-                dashboard is not None
-                and summary is not None
-                and result.get("status") == "APPROVAL_REQUIRED"
-                and summary.get("enforcement", {}).get("status") == "HUMAN_APPROVAL_REQUIRED"
-                and self.request_context.principal.authenticated
-                and self.request_context.session_id is not None
-            ):
-                decision_id = summary.get("enforcement", {}).get("decision_id")
-                if isinstance(decision_id, str) and decision_id:
-                    result["approval_id"] = PENDING_APPROVALS.create(
-                        request_text,
-                        result.copy(),
-                        dashboard,
-                        summary,
-                        user_id=self.request_context.principal.user_id,
-                        session_id=self.request_context.session_id,
-                        decision_id=decision_id,
-                    )
+            if result.get("status") == "APPROVAL_REQUIRED":
+                _create_pending_approval(
+                    self,
+                    request_text,
+                    result,
+                    dashboard,
+                    summary,
+                    source="PARMARRequestHandler./api/analyze",
+                )
             self._send_json(200, result)
             return
 
@@ -654,6 +715,35 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                 decision,
             )
             result.pop("approval_id", None)
+            if (
+                decision in {"APPROVE", "APPROVED"}
+                and pending.execution_context is not None
+                and result.get("enforcement", {}).get("status") == "READY_FOR_ACTION"
+                and result.get("enforcement", {}).get("execution_allowed") is True
+                and result.get("action_boundary", {}).get("status") == "ACTION_BOUNDARY_OK"
+                and result.get("action_boundary", {}).get("execution_allowed") is True
+            ):
+                execution = pending.execution_context
+                service = ChatService(external_authorization=EXTERNAL_AUTHORIZATION)
+                result = service.respond_approved(
+                    pending.request_text,
+                    approved_response=result,
+                    dashboard=pending.dashboard,
+                    summary=pending.summary,
+                    context=execution["context"],
+                    selected_provider=execution.get("selected_provider"),
+                    orchestration_mode=execution["orchestration_mode"],
+                    recent_messages=execution.get("recent_messages"),
+                )
+                if execution.get("conversation_id") is not None:
+                    result["conversation_id"] = execution["conversation_id"]
+                    owner_user_id = context.principal.user_id
+                    if owner_user_id is not None and isinstance(result.get("message"), str):
+                        MESSAGE_REPOSITORY.append_owned(
+                            UUID(execution["conversation_id"]),
+                            owner_user_id,
+                            (("assistant", result["message"]),),
+                        )
             self._send_json(200, result)
             return
 
@@ -767,15 +857,63 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             elif conversation_id_value is not None:
                 self.send_error(404, "Conversation not found")
                 return
-            service = ChatService(external_authorization=EXTERNAL_AUTHORIZATION)
-            service_options = {}
-            if isinstance(recent_messages, list) and recent_messages:
-                service_options["recent_messages"] = recent_messages
-            if "provider" in payload:
-                service_options["selected_provider"] = payload.get("provider")
-            if "orchestration_mode" in payload:
-                service_options["orchestration_mode"] = orchestration_mode
-            response = service.respond(message, context=context, **service_options)
+            review, approval_dashboard, approval_summary = PARMARUIAdapter.analyze_request_with_dashboard(
+                message,
+                language=language,
+            )
+            if (
+                review.get("status") == "APPROVAL_REQUIRED"
+                and approval_summary is not None
+                and approval_summary.get("enforcement", {}).get("status") == "HUMAN_APPROVAL_REQUIRED"
+            ):
+                response = {
+                    "safe": None,
+                    "status": review["status"],
+                    "message": review["message"],
+                    "provider": "not_started",
+                    "provider_status": "NOT_STARTED",
+                    "provider_error": False,
+                    "analysis": review,
+                    "request_safety": {
+                        "status": review["status"],
+                        "safe": False,
+                        "risk_level": review.get("risk", {}).get("risk_level"),
+                        "enforcement_status": review.get("enforcement", {}).get("status", "UNKNOWN"),
+                        "execution_allowed": review.get("enforcement", {}).get("execution_allowed") is True,
+                    },
+                    "response_safety": {
+                        "status": "NOT_CHECKED",
+                        "reason_codes": ["NO_OUTPUT"],
+                        "checks_run": [],
+                        "validator_version": "unknown",
+                    },
+                    "response_disposition": "NOT_APPLICABLE",
+                }
+                _create_pending_approval(
+                    self,
+                    message,
+                    response,
+                    approval_dashboard,
+                    approval_summary,
+                    source="PARMARRequestHandler./api/chat",
+                    execution_context={
+                        "context": context,
+                        "selected_provider": payload.get("provider"),
+                        "orchestration_mode": orchestration_mode,
+                        "recent_messages": recent_messages,
+                        "conversation_id": str(conversation_id) if conversation_id is not None else None,
+                    },
+                )
+            else:
+                service = ChatService(external_authorization=EXTERNAL_AUTHORIZATION)
+                service_options = {}
+                if isinstance(recent_messages, list) and recent_messages:
+                    service_options["recent_messages"] = recent_messages
+                if "provider" in payload:
+                    service_options["selected_provider"] = payload.get("provider")
+                if "orchestration_mode" in payload:
+                    service_options["orchestration_mode"] = orchestration_mode
+                response = service.respond(message, context=context, **service_options)
             if conversation_id is not None:
                 owner_user_id = request_context.principal.user_id
                 if owner_user_id is None:

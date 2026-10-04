@@ -11,6 +11,7 @@ from PARMAR.core.mediation.mediation_engine import MediationEngine
 from PARMAR.core.risk.risk_engine import RiskEngine
 from PARMAR.interface.dashboard import TerminalDashboard
 from PARMAR.interface.voki import PARMARVoki
+from PARMAR.interface.voki_contract import attach_voki_contract
 from PARMAR.phone.phone_awareness import PhoneAwarenessModule
 from PARMAR.safety.autonomy_check import AutonomyCheck
 from PARMAR.safety.emergency_gate import EmergencyGate
@@ -51,10 +52,27 @@ class PARMARUIAdapter:
 
     @staticmethod
     def _status_message(risk_level: str, enforcement: dict[str, Any], human_approval_required: bool) -> str:
+        enforcement_status = enforcement.get("status")
+        if enforcement_status not in {
+            "READY_FOR_ACTION",
+            "APPROVED",
+            "HUMAN_APPROVAL_REQUIRED",
+            "BLOCKED",
+            "REJECTED",
+        }:
+            return "PARMAR could not establish an authoritative enforcement outcome. No safe outcome is asserted."
+        if enforcement_status == "HUMAN_APPROVAL_REQUIRED" or human_approval_required:
+            return "Human approval required before action can proceed."
+        if enforcement_status in {"BLOCKED", "REJECTED"}:
+            return "Action blocked by safety policy. Human decision remains the authority."
+        if enforcement_status not in {"READY_FOR_ACTION", "APPROVED"}:
+            return "PARMAR could not establish an authoritative enforcement outcome. No safe outcome is asserted."
         if enforcement.get("execution_allowed") is False:
             return "Action blocked by safety policy. Human decision remains the authority."
-        if human_approval_required:
-            return "Human approval required before action can proceed."
+        if enforcement.get("execution_allowed") is not True:
+            return "PARMAR could not establish whether this request is permitted. No safe outcome is asserted."
+        if str(risk_level).lower() not in {"low", "medium", "high", "critical"}:
+            return "PARMAR could not determine the request risk level. No safe outcome is asserted."
         if str(risk_level).lower() in {"medium", "high", "critical"}:
             return "Additional review recommended before any consequential action."
         return "Situation appears low risk and safe for review."
@@ -64,15 +82,24 @@ class PARMARUIAdapter:
         enforcement = summary.get("enforcement", {})
         decision = summary.get("decision", {})
 
-        if enforcement.get("status") == "HUMAN_APPROVAL_REQUIRED":
+        status = enforcement.get("status")
+        if status in {"BLOCKED", "REJECTED"}:
+            return "BLOCKED"
+        if status == "HUMAN_APPROVAL_REQUIRED":
             return "APPROVAL_REQUIRED"
+        if status not in {"READY_FOR_ACTION", "APPROVED"}:
+            return "UNKNOWN"
         if bool(decision.get("requires_human_approval")) and enforcement.get("execution_allowed") is False:
             return "APPROVAL_REQUIRED"
         if enforcement.get("execution_allowed") is False:
             return "BLOCKED"
+        if enforcement.get("execution_allowed") is not True:
+            return "UNKNOWN"
         if bool(decision.get("requires_human_approval")):
             return "APPROVAL_REQUIRED"
-        risk_level = str(summary.get("risk", {}).get("risk_level", "low")).lower()
+        risk_level = str(summary.get("risk", {}).get("risk_level", "unknown")).lower()
+        if risk_level not in {"low", "medium", "high", "critical"}:
+            return "UNKNOWN"
         if risk_level in {"medium", "high", "critical"}:
             return "RISK_DETECTED"
         return "SAFE"
@@ -84,8 +111,8 @@ class PARMARUIAdapter:
         conflict = summary.get("conflict", {})
         categories = [name for name, enabled in (risk.get("category_flags") or {}).items() if enabled]
         return {
-            "risk_level": str(risk.get("risk_level", "low")).upper(),
-            "risk_categories": categories or ["none_detected"],
+            "risk_level": str(risk.get("risk_level", "UNKNOWN")).upper(),
+            "risk_categories": categories or ["unknown"],
             "detected_intent": intent.get("intent", "unknown"),
             "potential_conflict": conflict.get("reasons", ["No explicit conflict detected."]),
             "affected_human_interests": ["privacy", "autonomy", "safety"],
@@ -94,7 +121,7 @@ class PARMARUIAdapter:
                 summary.get("autonomy", {}).get("status", "UNKNOWN"),
                 summary.get("emergency_gate", {}).get("status", "UNKNOWN"),
             ],
-            "reason_for_decision": risk.get("summary", "Risk evaluation completed."),
+            "reason_for_decision": risk.get("summary", "Risk evaluation is unavailable."),
         }
 
     @staticmethod
@@ -125,13 +152,13 @@ class PARMARUIAdapter:
         language: str = "en",
     ) -> tuple[dict[str, Any], TerminalDashboard | None, dict[str, Any] | None]:
         if not request_text or not str(request_text).strip():
-            return ({
+            response = {
                 "status": "BLOCKED",
                 "human_control": True,
                 "message": "No request supplied. PARMAR cannot approve an empty or missing action.",
                 "request": "",
                 "intent": {"intent": "unknown", "requested_action": "", "confidence": 0.0, "summary": "No request provided."},
-                "risk": {"risk_level": "low", "reasons": ["No request text was provided."], "category_flags": {}},
+                "risk": {"risk_level": "UNKNOWN", "reasons": ["No request text was provided."], "category_flags": {}},
                 "conflict": {"conflict_detected": False, "reasons": ["No request supplied."], "matched_rules": [], "severity": "low"},
                 "mediation": {"alternatives": [{"title": "Request clarification", "message": "Ask for a clearer proposal before proceeding."}]},
                 "privacy": {"allow_execution": False, "status": "BLOCKED", "risk_type": "privacy", "reasons": ["No request was supplied."]},
@@ -142,23 +169,35 @@ class PARMARUIAdapter:
                 "action_boundary": {"execution_allowed": False, "status": "ACTION_BOUNDARY_DENIED"},
                 "language": language,
                 "language_independent_safety": True,
-                "voki": PARMARVoki().state_for("BLOCKED"),
+                "voki": PARMARVoki().state_for("UNKNOWN"),
+                "response_safety": {"status": "NOT_CHECKED", "reason_codes": ["NO_OUTPUT"], "checks_run": [], "validator_version": "unknown"},
+                "response_disposition": "NOT_APPLICABLE",
+                "provider": "unavailable",
+                "provider_status": "NOT_STARTED",
                 "phone_awareness": PhoneAwarenessModule().get_status(),
                 "pipeline": [],
                 "safer_alternatives": [{"title": "Request clarification", "message": "Ask for a clearer proposal before proceeding."}],
                 "human_approval_required": True,
-                "risk_center": {"risk_level": "LOW", "risk_categories": ["none_detected"], "detected_intent": "unknown", "potential_conflict": ["No request."], "affected_human_interests": ["privacy", "autonomy", "safety"], "safety_checks": ["BLOCKED", "BLOCKED", "BLOCKED"], "reason_for_decision": "Empty request is fail-closed."},
+                "risk_center": {"risk_level": "UNKNOWN", "risk_categories": ["unknown"], "detected_intent": "unknown", "potential_conflict": ["No request."], "affected_human_interests": ["privacy", "autonomy", "safety"], "safety_checks": ["BLOCKED", "BLOCKED", "BLOCKED"], "reason_for_decision": "Empty request is fail-closed."},
                 "explanation": {"what_requested": "", "what_detected": "No request provided.", "what_risks_found": ["No request provided."], "what_conflict_found": ["No request provided."], "what_safety_checks_did": ["No safety checks could run without a request."], "what_parmar_recommends": "Request clarification before any action.", "what_human_decided": "PENDING HUMAN APPROVAL"},
                 "chat_architecture": {"provider": "local-demo", "safety_middleware": True, "requires_human_approval": True},
                 "system_state": {"title": "PARMAR Core", "detail": "No request supplied; fail-closed protection remains active."},
                 "lifecycle": None,
-            }, None, None)
+            }
+            attach_voki_contract(
+                response,
+                provider_status="NOT_STARTED",
+                response_disposition="NOT_APPLICABLE",
+                source="PARMARUIAdapter.analyze_request_with_dashboard",
+            )
+            return response, None, None
 
         dashboard = TerminalDashboard()
         summary = dashboard.run_pipeline(
             request_text,
             human_interests=["privacy", "autonomy", "safety"],
             rules=list(cls.POLICY_RULES),
+            continue_lifecycle=True,
         )
         lifecycle_snapshot = dashboard.lifecycle_snapshot
 
@@ -196,7 +235,7 @@ class PARMARUIAdapter:
         response = {
             "status": state,
             "human_control": True,
-            "message": cls._status_message(risk.get("risk_level", "low"), enforcement, bool(decision.get("requires_human_approval"))),
+            "message": cls._status_message(risk.get("risk_level", "unknown"), enforcement, bool(decision.get("requires_human_approval"))),
             "request": request_text,
             "intent": summary.get("intent", {}),
             "risk": risk,
@@ -228,6 +267,12 @@ class PARMARUIAdapter:
                 "detail": voki.get("message", "Human oversight remains active."),
             },
         }
+        attach_voki_contract(
+            response,
+            provider_status="NOT_STARTED",
+            response_disposition="NOT_APPLICABLE",
+            source="PARMARUIAdapter.analyze_request_with_dashboard",
+        )
         return response, dashboard, summary
 
     @staticmethod
@@ -267,6 +312,13 @@ class PARMARUIAdapter:
             "execution_allowed": False,
             "status": "ACTION_BOUNDARY_DENIED",
         }
+        attach_voki_contract(
+            response,
+            provider_status="NOT_STARTED",
+            response_disposition="NOT_APPLICABLE",
+            approval_record_available=False,
+            source="PARMARUIAdapter.process_human_decision",
+        )
         return response
 
     @classmethod
@@ -283,6 +335,16 @@ class PARMARUIAdapter:
         )
         if not summary.get("decision", {}).get("requires_human_approval", False) and not approval_pending:
             return response
+
+        if not isinstance(response.get("request_safety"), dict):
+            request_enforcement = summary.get("enforcement", {})
+            response["request_safety"] = {
+                "status": response.get("status", "UNKNOWN"),
+                "safe": response.get("status") == "SAFE",
+                "risk_level": summary.get("risk", {}).get("risk_level"),
+                "enforcement_status": request_enforcement.get("status", "UNKNOWN"),
+                "execution_allowed": request_enforcement.get("execution_allowed") is True,
+            }
 
         outcome = dashboard.handle_human_decision(summary, decision)
 
@@ -316,4 +378,11 @@ class PARMARUIAdapter:
             response["human_approval_required"] = False
             response["message"] = "The proposal remains within PARMAR's safe review boundary."
 
+        attach_voki_contract(
+            response,
+            provider_status="NOT_STARTED",
+            response_disposition="NOT_APPLICABLE",
+            approval_record_available=False,
+            source="PARMARUIAdapter.apply_pending_human_decision",
+        )
         return response

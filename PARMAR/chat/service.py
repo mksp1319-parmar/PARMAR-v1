@@ -22,7 +22,9 @@ from PARMAR.chat.response_safety import (
 )
 from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.task_routing import infer_task_capability
+from PARMAR.interface.voki_contract import attach_voki_contract
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
+from PARMAR.state import LifecycleState
 
 _RESPONSE_STATUS = {
     PASS: "RESPONSE_VALIDATED",
@@ -31,7 +33,7 @@ _RESPONSE_STATUS = {
     UNCERTAIN: "RESPONSE_UNCERTAIN",
     NOT_CHECKED: "RESPONSE_NOT_CHECKED",
 }
-_SUPPRESSED_RESPONSE_STATES = {BLOCK, UNCERTAIN, NOT_CHECKED}
+_SUPPRESSED_RESPONSE_STATES = {REVIEW, BLOCK, UNCERTAIN, NOT_CHECKED}
 
 
 class ChatService:
@@ -80,10 +82,12 @@ class ChatService:
             "status": status,
             "message": message,
             "provider": "unavailable",
+            "provider_status": "FAILED",
             "provider_error": True,
             "analysis": analysis,
             "request_safety": ChatService._request_safety(analysis),
             "response_safety": response_safety or ResponseSafetyValidator.not_checked("NO_OUTPUT").public_payload(),
+            "response_disposition": "NOT_APPLICABLE",
         }
         if routing is not None:
             response["routing"] = routing
@@ -176,13 +180,15 @@ class ChatService:
         cls,
         orchestration: Any,
         validations: list[ResponseSafetyResult] | None = None,
+        *,
+        suppress_candidates: bool = False,
     ) -> dict[str, Any]:
         payload = orchestration.public_payload()
         if validations is None:
             return payload
         for candidate_payload, validation in zip(payload.get("candidates", []), validations):
             candidate_payload["response_safety"] = validation.public_payload()
-            if validation.status in _SUPPRESSED_RESPONSE_STATES:
+            if suppress_candidates or validation.status in _SUPPRESSED_RESPONSE_STATES:
                 candidate_payload["content"] = None
                 candidate_payload["output"] = None
         return payload
@@ -214,9 +220,44 @@ class ChatService:
 
     @classmethod
     def _visible_response_text(cls, content: str, safety: ResponseSafetyResult) -> str:
-        if safety.status in _SUPPRESSED_RESPONSE_STATES:
+        if safety.status != PASS:
+            if safety.status == REVIEW:
+                return "PARMAR withheld the provider response pending human review."
             return cls._response_message(safety.status)
         return sanitize_provider_text(content.strip())
+
+    def respond_approved(
+        self,
+        prompt: str,
+        *,
+        approved_response: dict[str, Any],
+        dashboard: Any,
+        summary: dict[str, Any],
+        context: ChatContext | None = None,
+        selected_provider: str | None = None,
+        orchestration_mode: str = SINGLE_PROVIDER,
+        recent_messages: object = None,
+    ) -> dict[str, Any]:
+        """Continue a consumed server-side approval using its original reviewed request."""
+        analysis = approved_response.get("analysis")
+        if not isinstance(analysis, dict) or analysis.get("request") != prompt:
+            raise ValueError("Approved chat must match its original server-side review.")
+        approved_analysis = dict(analysis)
+        for key in ("decision", "enforcement", "action_boundary", "lifecycle"):
+            if key in approved_response:
+                approved_analysis[key] = approved_response[key]
+        review = {
+            **approved_response,
+            "analysis": approved_analysis,
+        }
+        return self.respond(
+            prompt,
+            context=context,
+            selected_provider=selected_provider,
+            orchestration_mode=orchestration_mode,
+            recent_messages=recent_messages,
+            _approved_review=(review, dashboard, summary),
+        )
 
     def respond(
         self,
@@ -226,27 +267,74 @@ class ChatService:
         orchestration_mode: str = SINGLE_PROVIDER,
         *,
         recent_messages: object = None,
+        _approved_review: tuple[dict[str, Any], Any, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if orchestration_mode not in {SINGLE_PROVIDER, VERIFIED_MULTI_MODEL}:
             raise ValueError("Unsupported orchestration mode.")
-        analysis = PARMARUIAdapter.analyze_request(prompt)
+        if _approved_review is None:
+            analysis, dashboard, _summary = PARMARUIAdapter.analyze_request_with_dashboard(prompt)
+        else:
+            approved_response, dashboard, summary = _approved_review
+            analysis = approved_response.get("analysis")
+            if not isinstance(analysis, dict) or analysis.get("request") != prompt:
+                raise ValueError("Approved chat must match its original server-side review.")
+            enforcement = summary.get("enforcement", {})
+            action_boundary = summary.get("action_boundary", {})
+            decision = summary.get("decision", {})
+            lifecycle_state = dashboard.lifecycle_snapshot.current_state
+            if (
+                enforcement.get("status") != "READY_FOR_ACTION"
+                or enforcement.get("execution_allowed") is not True
+                or action_boundary.get("status") != "ACTION_BOUNDARY_OK"
+                or action_boundary.get("execution_allowed") is not True
+                or decision.get("human_approval_status") != "APPROVED"
+                or lifecycle_state is not LifecycleState.ENFORCEMENT_ALLOWED
+            ):
+                raise ValueError("Approved chat did not pass the authoritative enforcement boundary.")
         public_analysis = self._public_value(analysis)
         capability = infer_task_capability(prompt)
         provider_prompt = self._provider_prompt(prompt, recent_messages)
 
-        if analysis.get("status") in {"BLOCKED", "APPROVAL_REQUIRED"}:
-            return {
+        if _approved_review is None and analysis.get("status") in {"BLOCKED", "APPROVAL_REQUIRED"}:
+            response = {
                 "safe": None,
                 "status": analysis.get("status"),
                 "message": analysis.get("message", "The request requires a human decision before any proposal is allowed."),
-                "provider": self._provider_label(getattr(getattr(self.router, "provider", None), "name", None)),
+                "provider": self._provider_label(
+                    getattr(getattr(self.router, "provider", None), "name", None)
+                ),
+                "provider_status": "NOT_STARTED",
+                "response_disposition": "NOT_APPLICABLE",
                 "analysis": public_analysis,
                 "request_safety": self._request_safety(public_analysis),
                 "response_safety": self._not_checked("NO_OUTPUT").public_payload(),
             }
+            attach_voki_contract(
+                response,
+                provider_status="NOT_STARTED",
+                response_disposition="NOT_APPLICABLE",
+                source="ChatService.respond",
+            )
+            return response
+
+        if dashboard is None:
+            response = self._provider_failure(
+                public_analysis,
+                "ANALYSIS_UNAVAILABLE",
+                "PARMAR could not establish an authoritative request review. No provider was called.",
+            )
+            response["provider_status"] = "NOT_STARTED"
+            attach_voki_contract(
+                response,
+                provider_status="NOT_STARTED",
+                response_disposition="NOT_APPLICABLE",
+                source="ChatService.respond",
+            )
+            return response
 
         decision = analysis.get("decision", {})
         enforcement = analysis.get("enforcement", {})
+        dashboard.state_machine.transition(LifecycleState.PROVIDER)
         provider_context = ChatContext(
             language=context.language if context else "en",
             persona=context.persona if context else "neutral",
@@ -285,6 +373,22 @@ class ChatService:
 
             response_safety = self._aggregate_response_safety(candidate_validations)
             has_output = any(candidate.output is not None for candidate in orchestration.candidates)
+            if has_output:
+                dashboard.state_machine.transition(LifecycleState.RESPONSE_SAFETY)
+                lifecycle_state = (
+                    LifecycleState.RELEASED if response_safety.status == PASS else LifecycleState.WITHHELD
+                )
+                response_disposition = "RELEASED" if lifecycle_state is LifecycleState.RELEASED else "WITHHELD"
+                provider_status = "COMPLETED"
+                dashboard.state_machine.transition(
+                    lifecycle_state,
+                    response_safety_result=response_safety.public_payload(),
+                )
+            else:
+                dashboard.state_machine.transition(LifecycleState.PROVIDER_FAILED)
+                lifecycle_state = LifecycleState.PROVIDER_FAILED
+                response_disposition = "NOT_APPLICABLE"
+                provider_status = "FAILED"
             messages = {
                 "VERIFIED_AGREEMENT": "Candidate outputs matched under deterministic text normalization. Agreement is not proof of correctness.",
                 "VERIFIED_DISAGREEMENT": "Independent candidate outputs differed. PARMAR did not choose a winner; review them cautiously.",
@@ -296,6 +400,8 @@ class ChatService:
             }
             if response_safety.status in _SUPPRESSED_RESPONSE_STATES and has_output:
                 message = self._response_message(response_safety.status)
+                if response_safety.status == REVIEW:
+                    message = "Candidate responses were withheld pending human review."
             elif response_safety.status == REVIEW:
                 message = "Candidate responses require human review; agreement is not proof of correctness."
             else:
@@ -305,13 +411,26 @@ class ChatService:
                 "status": self._chat_response_status(response_safety) if has_output else orchestration.outcome,
                 "message": message,
                 "provider": "multi-model",
+                "provider_status": provider_status,
+                "response_disposition": response_disposition,
                 "analysis": public_analysis,
                 "request_safety": self._request_safety(public_analysis),
                 "response_safety": response_safety.public_payload(),
-                "orchestration": self._public_orchestration(orchestration, candidate_validations),
+                "orchestration": self._public_orchestration(
+                    orchestration,
+                    candidate_validations,
+                    suppress_candidates=response_safety.status != PASS,
+                ),
+                "lifecycle": PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot),
             }
             if orchestration.outcome in {"ALL_FAILED", "VALIDATION_FAILED", "EXECUTION_DISABLED", "EXECUTION_REJECTED"}:
                 response["provider_error"] = True
+            attach_voki_contract(
+                response,
+                provider_status=provider_status,
+                response_disposition=response_disposition,
+                source="ChatService.respond",
+            )
             return response
 
         orchestration = self.orchestrator.orchestrate(
@@ -325,6 +444,7 @@ class ChatService:
         if not orchestration.available or orchestration.response is None:
             status = orchestration.failure_state or "PROVIDER_UNAVAILABLE"
             message = orchestration.failure_reason or "The configured provider is unavailable. PARMAR took no action."
+            dashboard.state_machine.transition(LifecycleState.PROVIDER_FAILED)
             response = self._provider_failure(
                 public_analysis,
                 status,
@@ -333,6 +453,13 @@ class ChatService:
             )
             response["provider"] = self._provider_label(orchestration.selected_provider)
             response["orchestration"] = self._public_orchestration(orchestration)
+            response["lifecycle"] = PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot)
+            attach_voki_contract(
+                response,
+                provider_status="FAILED",
+                response_disposition="NOT_APPLICABLE",
+                source="ChatService.respond",
+            )
             return response
 
         result = orchestration.response
@@ -345,6 +472,7 @@ class ChatService:
             or not isinstance(result.safe, bool)
             or not isinstance(result.status, str)
         ):
+            dashboard.state_machine.transition(LifecycleState.PROVIDER_FAILED)
             response = self._provider_failure(
                 public_analysis,
                 "PROVIDER_INVALID_RESPONSE",
@@ -360,8 +488,16 @@ class ChatService:
                 candidate["content"] = None
                 candidate["output"] = None
             response["orchestration"] = orchestration_payload
+            response["lifecycle"] = PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot)
+            attach_voki_contract(
+                response,
+                provider_status="FAILED",
+                response_disposition="NOT_APPLICABLE",
+                source="ChatService.respond",
+            )
             return response
 
+        dashboard.state_machine.transition(LifecycleState.RESPONSE_SAFETY)
         response_safety = self._validate_response(
             result.content,
             request_text=prompt,
@@ -369,14 +505,30 @@ class ChatService:
             provider=result.provider,
             decision_id=self._response_decision_id(public_analysis),
         )
-        return {
+        lifecycle_state = LifecycleState.RELEASED if response_safety.status == PASS else LifecycleState.WITHHELD
+        response_disposition = "RELEASED" if lifecycle_state is LifecycleState.RELEASED else "WITHHELD"
+        dashboard.state_machine.transition(
+            lifecycle_state,
+            response_safety_result=response_safety.public_payload(),
+        )
+        response = {
             "safe": None,
             "status": self._chat_response_status(response_safety),
             "message": self._visible_response_text(result.content, response_safety),
             "provider": self._provider_label(result.provider),
+            "provider_status": "COMPLETED",
+            "response_disposition": response_disposition,
             "analysis": public_analysis,
             "request_safety": self._request_safety(public_analysis),
             "response_safety": response_safety.public_payload(),
             "routing": routing.public_payload() if routing else None,
             "orchestration": self._public_orchestration(orchestration, [response_safety]),
+            "lifecycle": PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot),
         }
+        attach_voki_contract(
+            response,
+            provider_status="COMPLETED",
+            response_disposition=response_disposition,
+            source="ChatService.respond",
+        )
+        return response
