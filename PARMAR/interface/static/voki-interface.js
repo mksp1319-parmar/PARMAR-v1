@@ -102,6 +102,10 @@
         : null;
       this.transport = element.querySelector('[data-voki-transport]');
       this.output = element.querySelector('[data-voki-output]');
+      this.history = element.querySelector('[data-voki-history]');
+      this.historyMessages = element.querySelector('[data-voki-history-messages]');
+      this.researchResults = element.querySelector('[data-voki-research-results]');
+      this.researchToggle = element.querySelector('[data-voki-research]');
       this.speechToggle = element.querySelector('[data-voki-speech-toggle]');
       this.speechStatus = element.querySelector('[data-voki-speech-status]');
       this.stopSpeechButton = element.querySelector('[data-voki-stop-speech]');
@@ -129,6 +133,12 @@
       this.approvalId = null;
       this.conversationId = null;
       this.recentMessages = [];
+      this.authenticated = false;
+      this.historyLoading = false;
+      this.historyGeneration = 0;
+      this.loadedConversationId = null;
+      this.conversationGeneration = 0;
+      this.authenticationGeneration = 0;
       const SpeechAdapter = globalThis.PARMARVOKKISpeech?.VOKKISpeechAdapter;
       this.speech = speechAdapterFactory
         ? speechAdapterFactory({
@@ -147,10 +157,63 @@
         state: 'IDLE',
         message: 'The bundled avatar is active. Optional identity setup is local to this device.',
       });
-      this.identityOnboarding?.loadApprovedIdentity();
+      this.identityOnboarding?.setStorageScope(null);
+      this.renderIdentityOnboarding({
+        state: 'IDLE',
+        message: 'Sign in to associate an approved local reference with this session.',
+      });
     }
 
     bind() {
+      globalThis.addEventListener?.('parmar-auth-state-changed', () => {
+        this.authenticationGeneration += 1;
+        this.historyGeneration += 1;
+        this.conversationGeneration += 1;
+        this.authenticated = false;
+        this.speech?.cancel();
+        this.identityOnboarding?.setStorageScope(null);
+        this.approvalId = null;
+        this.conversationId = null;
+        this.recentMessages = [];
+        this.loadedConversationId = null;
+        this.renderHistory([]);
+        if (this.researchToggle) this.researchToggle.checked = false;
+        this.approval.hidden = true;
+        this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
+        this.lifecycle.dataset.lifecycle = 'UNKNOWN';
+        this.setPresence('UNKNOWN');
+        this.output.textContent = 'VOKKI has no active authenticated conversation.';
+        this.researchResults?.replaceChildren();
+        if (this.researchResults) this.researchResults.hidden = true;
+        this.transport.textContent = 'Session state changed. Start a new request.';
+        this.root.dataset.requestReview = 'UNKNOWN';
+        this.root.dataset.enforcement = 'UNKNOWN';
+        this.root.dataset.provider = 'UNKNOWN';
+        this.root.dataset.responseSafety = 'UNKNOWN';
+        this.root.dataset.responseDisposition = 'UNKNOWN';
+        this.root.querySelectorAll('[data-voki-decision]').forEach((button) => {
+          button.disabled = false;
+        });
+      });
+      globalThis.addEventListener?.('parmar-auth-session-ready', (event) => {
+        const detail = event?.detail || {};
+        this.authenticated = detail.authenticated === true;
+        void this.identityOnboarding?.setStorageScope(detail.identityScope);
+        if (this.authenticated && isConversationId(detail.conversationId)) {
+          this.activateConversation(detail.conversationId, { refresh: detail.refresh === true });
+        } else if (!this.authenticated) {
+          this.activateConversation(null);
+        }
+      });
+      globalThis.addEventListener?.('parmar-conversation-selection-changed', (event) => {
+        const detail = event?.detail || {};
+        if (detail.authenticated !== this.authenticated) return;
+        if (this.authenticated && isConversationId(detail.conversationId)) {
+          this.activateConversation(detail.conversationId);
+        } else {
+          this.activateConversation(null);
+        }
+      });
       this.root.querySelector('[data-voki-form]')?.addEventListener('submit', (event) => {
         event.preventDefault();
         this.submitRequest();
@@ -219,6 +282,125 @@
       target?.focus?.();
     }
 
+    activateConversation(conversationId, { refresh = false } = {}) {
+      if (conversationId === this.conversationId
+        && !refresh
+        && (this.historyLoading || this.loadedConversationId === conversationId)) return;
+      this.conversationGeneration += 1;
+      this.conversationId = isConversationId(conversationId) ? conversationId : null;
+      this.recentMessages = [];
+      this.approvalId = null;
+      this.approval.hidden = true;
+      if (this.researchToggle) this.researchToggle.checked = false;
+      this.researchResults?.replaceChildren();
+      if (this.researchResults) this.researchResults.hidden = true;
+      this.root.dataset.historyError = 'false';
+      if (!this.conversationId) {
+        this.historyGeneration += 1;
+        this.historyLoading = false;
+        this.loadedConversationId = null;
+        this.renderHistory([]);
+        this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
+        this.lifecycle.dataset.lifecycle = 'UNKNOWN';
+        this.setPresence('UNKNOWN');
+        this.root.dataset.requestReview = 'UNKNOWN';
+        this.root.dataset.enforcement = 'UNKNOWN';
+        this.root.dataset.provider = 'UNKNOWN';
+        this.root.dataset.responseSafety = 'UNKNOWN';
+        this.root.dataset.responseDisposition = 'UNKNOWN';
+        this.output.textContent = 'Start a request with PARMAR.';
+        this.transport.textContent = 'No request in progress.';
+        return;
+      }
+      this.renderHistory([]);
+      this.output.textContent = 'Loading the selected PARMAR conversation.';
+      if (this.authenticated && (refresh || this.loadedConversationId !== this.conversationId)) {
+        void this.loadConversation(this.conversationId, { force: refresh });
+      }
+    }
+
+    async loadConversation(conversationId, { force = false } = {}) {
+      if (!this.authenticated || !isConversationId(conversationId)
+        || (!force && this.loadedConversationId === conversationId)) return false;
+      const generation = ++this.historyGeneration;
+      const authenticationGeneration = this.authenticationGeneration;
+      const conversationGeneration = this.conversationGeneration;
+      this.historyLoading = true;
+      this.transport.textContent = 'Loading conversation history.';
+      this.submitButton.disabled = true;
+      try {
+        const response = await this.request(
+          `/api/conversations/${encodeURIComponent(conversationId)}`,
+          { cache: 'no-store' },
+        );
+        if (!response.ok) throw new Error('Conversation history is unavailable.');
+        const payload = await response.json();
+        if (generation !== this.historyGeneration
+          || authenticationGeneration !== this.authenticationGeneration
+          || !this.authenticated) return false;
+        if (payload?.conversation_id !== conversationId
+          || !Array.isArray(payload.messages)
+          || !payload.messages.every((message) => (
+            message
+            && ['user', 'assistant'].includes(message.role)
+            && typeof message.content === 'string'
+            && isValidPersistedResearch(message)
+          ))) {
+          throw new TypeError('Conversation history did not match the supported contract.');
+        }
+        this.renderHistory(payload.messages);
+        this.loadedConversationId = conversationId;
+        this.recentMessages = [];
+        this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
+        this.lifecycle.dataset.lifecycle = 'UNKNOWN';
+        this.setPresence('UNKNOWN');
+        this.output.textContent = 'Historical messages are shown below. They were not replayed.';
+        this.transport.textContent = 'Conversation history restored.';
+        return true;
+      } catch (_error) {
+        if (generation !== this.historyGeneration
+          || authenticationGeneration !== this.authenticationGeneration) return false;
+        this.loadedConversationId = null;
+        this.renderHistory([]);
+        this.output.textContent = 'VOKKI could not restore this conversation.';
+        this.transport.textContent = 'Conversation history unavailable. No history was substituted.';
+        this.root.dataset.historyError = 'true';
+        return false;
+      } finally {
+        if (generation === this.historyGeneration
+          && authenticationGeneration === this.authenticationGeneration) {
+          this.historyLoading = false;
+          this.submitButton.disabled = false;
+        }
+      }
+    }
+
+    renderHistory(messages) {
+      if (!this.historyMessages || !this.history) return;
+      const rendered = [];
+      for (const message of messages) {
+        const item = globalThis.document?.createElement?.('article');
+        if (!item) break;
+        item.className = `voki-history-message ${message.role === 'assistant' ? 'assistant' : 'user'}`;
+        item.setAttribute('role', 'group');
+        item.setAttribute('aria-label', message.role === 'assistant' ? 'PARMAR response' : 'Your message');
+        const author = globalThis.document.createElement('strong');
+        author.textContent = message.role === 'assistant' ? 'PARMAR' : 'You';
+        const content = globalThis.document.createElement('p');
+        content.textContent = message.content;
+        item.append(author, content);
+        if (message.role === 'assistant' && message.research) {
+          globalThis.PARMARChatPresentation?.renderResearchResult(item, {
+            research: message.research,
+            persisted_release: true,
+          });
+        }
+        rendered.push(item);
+      }
+      this.historyMessages.replaceChildren(...rendered);
+      this.history.hidden = rendered.length === 0;
+    }
+
     renderIdentityOnboarding({ state, message }) {
       if (!this.identityStatus) return;
       const identityControls = [
@@ -248,6 +430,7 @@
       if (this.identityStart) {
         this.identityStart.hidden = ['PERMISSION_REQUIRED', 'CAPTURE_READY', 'CAPTURED', 'PREVIEW', 'USER_APPROVAL_REQUIRED'].includes(state);
         this.identityStart.hidden ||= approvalRequired || state === 'SAVED';
+        this.identityStart.disabled = !this.identityOnboarding?.store?.scope;
         this.identityStart.textContent = state === 'DENIED' || state === 'ERROR'
           ? 'Try identity setup again'
           : 'Set up an optional visual reference';
@@ -281,11 +464,16 @@
     }
 
     renderResult(result) {
+      this.researchResults?.replaceChildren();
+      if (this.researchResults) this.researchResults.hidden = true;
       const contract = result?.voki_contract;
       const interpreted = interpretContract(contract);
       this.lifecycle.textContent = interpreted.lifecycleLabel;
       this.lifecycle.dataset.lifecycle = interpreted.lifecycleState;
       this.setPresence(interpreted.lifecycleState);
+      dispatchWindowEvent('parmar-voki-lifecycle-updated', {
+        lifecycleState: interpreted.lifecycleState,
+      });
       this.root.dataset.requestReview = interpreted.requestReviewStatus;
       this.root.dataset.enforcement = interpreted.enforcementStatus;
       this.root.dataset.provider = interpreted.providerStatus;
@@ -304,6 +492,16 @@
         this.output.textContent = interpreted.message || 'PARMAR has not released a provider response.';
       } else {
         this.output.textContent = 'PARMAR returned no released response.';
+      }
+      if (
+        this.researchResults
+        && globalThis.PARMARChatPresentation?.isAuthoritativelyReleased(result)
+      ) {
+        const presentation = globalThis.PARMARChatPresentation.renderResearchResult(
+          this.researchResults,
+          result,
+        );
+        this.researchResults.hidden = !presentation;
       }
       this.speech?.speakReleasedResponse(result);
       this.approvalId = typeof result?.approval_id === 'string'
@@ -374,6 +572,7 @@
     }
 
     async submitRequest() {
+      if (this.historyLoading) return;
       const message = this.input.value.trim();
       if (!message) {
         this.input.focus();
@@ -382,11 +581,15 @@
       const requestId = this.beginRequest();
       if (requestId === null || requestId === false) return;
 
+      const authenticationGeneration = this.authenticationGeneration;
+      const conversationGeneration = this.conversationGeneration;
       this.speech?.cancel();
       this.transport.textContent = 'Waiting for PARMAR response.';
       this.submitButton.disabled = true;
       this.approval.hidden = true;
       this.approvalId = null;
+      this.researchResults?.replaceChildren();
+      if (this.researchResults) this.researchResults.hidden = true;
       try {
         const response = await this.request('/api/chat', {
           method: 'POST',
@@ -395,21 +598,29 @@
             message,
             language: this.getLanguage(),
             ...(this.conversationId ? { conversation_id: this.conversationId } : {}),
-            ...(this.recentMessages.length
+            ...(this.researchToggle?.checked === true ? { research: true } : {}),
+            ...(!this.authenticated && this.recentMessages.length
               ? { context: { recent_messages: this.recentMessages.slice(-12) } }
               : {}),
           }),
         });
         if (!response.ok) throw new Error('VOKKI request failed.');
         const result = await response.json();
+        if (authenticationGeneration !== this.authenticationGeneration
+          || conversationGeneration !== this.conversationGeneration) return;
         this.renderResult(result);
-        this.recentMessages = [
-          ...this.recentMessages,
-          { role: 'user', content: message },
-          { role: 'assistant', content: this.output.textContent },
-        ].slice(-12);
+        if (!this.authenticated) {
+          this.recentMessages = [
+            ...this.recentMessages,
+            { role: 'user', content: message },
+            { role: 'assistant', content: this.output.textContent },
+          ].slice(-12);
+        }
+        await this.synchronizeConversation(result);
         this.input.value = '';
       } catch (_error) {
+        if (authenticationGeneration !== this.authenticationGeneration
+          || conversationGeneration !== this.conversationGeneration) return;
         this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
         this.lifecycle.dataset.lifecycle = 'UNKNOWN';
         this.setPresence('UNKNOWN');
@@ -428,6 +639,8 @@
       const requestId = this.beginRequest();
       if (requestId === null || requestId === false) return;
 
+      const authenticationGeneration = this.authenticationGeneration;
+      const conversationGeneration = this.conversationGeneration;
       this.transport.textContent = 'Submitting your decision to PARMAR.';
       this.root.querySelectorAll('[data-voki-decision]').forEach((button) => {
         button.disabled = true;
@@ -439,8 +652,14 @@
           body: JSON.stringify({ approval_id: this.approvalId, decision }),
         });
         if (!response.ok) throw new Error('VOKKI decision request failed.');
-        this.renderResult(await response.json());
+        const result = await response.json();
+        if (authenticationGeneration !== this.authenticationGeneration
+          || conversationGeneration !== this.conversationGeneration) return;
+        this.renderResult(result);
+        await this.synchronizeConversation(result);
       } catch (_error) {
+        if (authenticationGeneration !== this.authenticationGeneration
+          || conversationGeneration !== this.conversationGeneration) return;
         this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
         this.lifecycle.dataset.lifecycle = 'UNKNOWN';
         this.setPresence('UNKNOWN');
@@ -455,6 +674,38 @@
         this.finishRequest(requestId);
       }
     }
+
+    async synchronizeConversation(result) {
+      if (!this.authenticated || !isConversationId(result?.conversation_id)) return;
+      this.conversationId = result.conversation_id;
+      dispatchWindowEvent('parmar-voki-conversation-activated', {
+        conversationId: result.conversation_id,
+      });
+      await this.loadConversation(result.conversation_id, { force: true });
+    }
+  }
+
+  const CONVERSATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  function isConversationId(value) {
+    return typeof value === 'string' && CONVERSATION_ID_PATTERN.test(value);
+  }
+
+  function isValidPersistedResearch(message) {
+    if (message.research === undefined) return true;
+    if (message.role !== 'assistant'
+      || typeof globalThis.PARMARChatPresentation?.researchPresentation !== 'function') return false;
+    const presentation = globalThis.PARMARChatPresentation.researchPresentation({
+      research: message.research,
+      persisted_release: true,
+    });
+    return Boolean(presentation && presentation.status !== 'INVALID_RESULTS');
+  }
+
+  function dispatchWindowEvent(name, detail) {
+    if (typeof globalThis.dispatchEvent === 'function' && typeof globalThis.CustomEvent === 'function') {
+      globalThis.dispatchEvent(new globalThis.CustomEvent(name, { detail }));
+    }
   }
 
   return {
@@ -462,6 +713,8 @@
     interpretContract,
     lifecycleLabels,
     lifecyclePresence,
+    isConversationId,
+    isValidPersistedResearch,
     futurePresentationStates: ['speaking'],
   };
 });

@@ -206,7 +206,8 @@ def test_authenticated_principal_is_server_resolved_and_not_passed_to_chat(monke
     assert calls[0][0] == "hello"
     assert isinstance(calls[0][1], ChatContext)
     assert calls[0][1].memory == []
-    assert calls[0][2] == {}
+    assert set(calls[0][2]) == {"memory_retriever"}
+    assert callable(calls[0][2]["memory_retriever"])
     assert "user_id" not in response["result"]
 
 

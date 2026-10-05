@@ -11,13 +11,16 @@ import pytest
 from PARMAR.audit.decision_logs import DecisionLogManager
 from PARMAR.chat.context import ChatContext
 from PARMAR.chat.models import ChatResponse
+from PARMAR.chat.readiness import ExternalAuthorization
 from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.service import ChatService
+from PARMAR.conversations import InMemoryConversationRepository
 from PARMAR.identity import LocalDemoPrincipalResolver
 from PARMAR.interface import futuristic_app
 from PARMAR.interface.approvals import PendingApprovalStore
 from PARMAR.interface.dashboard import TerminalDashboard
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
+from PARMAR.research.service import SearchService
 from PARMAR.safety.enforcement_gate import CentralEnforcementGate
 from PARMAR.sessions import (
     InMemorySessionRepository,
@@ -51,20 +54,24 @@ def isolate_audit_log(monkeypatch, tmp_path):
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
 
 
-def post(path, payload, *, session=_DEFAULT_SESSION):
+def post(path, payload, *, session=_DEFAULT_SESSION, headers=None):
     if session is _DEFAULT_SESSION:
         session = _TEST_SESSION
     body = json.dumps(payload).encode("utf-8")
     response = {}
-    headers = {"Content-Length": str(len(body))}
+    request_headers = {
+        "Content-Length": str(len(body)),
+        "Content-Type": "application/json",
+    }
     if session is not None:
-        headers["Cookie"] = f"{SESSION_COOKIE_NAME}={session.session_token}"
+        request_headers["Cookie"] = f"{SESSION_COOKIE_NAME}={session.session_token}"
         csrf_token = _TEST_SESSION_MANAGER.csrf_token(session.session.session_id)
         if csrf_token is not None:
-            headers["X-CSRF-Token"] = csrf_token
+            request_headers["X-CSRF-Token"] = csrf_token
+    request_headers.update(headers or {})
     request = SimpleNamespace(
         path=path,
-        headers=headers,
+        headers=request_headers,
         rfile=io.BytesIO(body),
         _send_json=lambda status, result: response.update(status=status, result=result),
         _send_json_with_headers=lambda status, result, extra: response.update(
@@ -148,6 +155,143 @@ def test_chat_approval_creates_the_same_kind_of_owned_server_side_pending_review
     assert decided["result"]["voki_contract"]["provider"]["status"] == "COMPLETED"
 
 
+def test_approved_research_continues_from_the_server_record_through_search_and_release(monkeypatch):
+    request_text = "Transfer $500 from the department budget to buy a laptop."
+    search_calls = []
+    chat_calls = []
+    conversation_repository = InMemoryConversationRepository()
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", conversation_repository)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", conversation_repository)
+    conversation = conversation_repository.create_for_message(
+        _TEST_SESSION.session.user_id,
+        request_text,
+    )
+
+    class Search:
+        provider_id = "http-json-search"
+
+        def search(self, query):
+            search_calls.append(query)
+            return [{
+                "title": "Example source",
+                "url": "https://example.org/research",
+                "domain": "example.org",
+                "source_id": "source-1",
+            }]
+
+    class Provider:
+        name = "approval-research-test"
+        locality = "local"
+
+        def generate(self, prompt, context=None):
+            chat_calls.append((prompt, context))
+            return ChatResponse(
+                provider=self.name,
+                content="The approved request is supported by the retrieved source.",
+                safe=False,
+            )
+
+    authorization = ExternalAuthorization(
+        enabled=True,
+        allowed_providers=frozenset({"http-json-search"}),
+        allowed_capabilities=frozenset({"web_search"}),
+        allow_single_provider=True,
+    )
+    monkeypatch.setattr(futuristic_app, "EXTERNAL_AUTHORIZATION", authorization)
+    monkeypatch.setattr(
+        futuristic_app,
+        "ChatService",
+        lambda external_authorization=None: ChatService(
+            router=ChatRouter(provider=Provider()),
+            research_service=SearchService(Search()),
+            external_authorization=external_authorization,
+        ),
+    )
+
+    pending = post("/api/chat", {
+        "message": request_text,
+        "research": True,
+        "conversation_id": str(conversation.conversation_id),
+    })
+    assert pending["status"] == 200
+    pending_result = pending["result"]
+    assert pending_result["status"] == "APPROVAL_REQUIRED"
+    assert pending_result["research"]["status"] == "BLOCKED"
+    assert pending_result["voki_contract"]["provider"]["status"] == "NOT_STARTED"
+    assert search_calls == []
+    assert chat_calls == []
+
+    stored = futuristic_app.PENDING_APPROVALS.inspect(
+        pending_result["approval_id"],
+        user_id=_TEST_SESSION.session.user_id,
+        session_id=_TEST_SESSION.session.session_id,
+    )
+    assert stored is not None
+    assert stored.request_text == request_text
+    assert stored.execution_context["research"] is True
+    pending_messages = conversation_repository.recent_owned(
+        conversation.conversation_id,
+        _TEST_SESSION.session.user_id,
+        12,
+    )
+    assert pending_messages is not None
+    assert len(pending_messages) == 1
+    assert all(message.research is None for message in pending_messages)
+    assert "sources" not in repr(stored.execution_context)
+
+    altered = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+        "request": "A replacement request",
+        "research": False,
+    })
+    assert altered["status"] == 409
+    assert search_calls == []
+
+    approved = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+        "research": False,
+    })
+    assert approved["status"] == 200
+    result = approved["result"]
+    assert search_calls == [request_text]
+    assert len(chat_calls) == 1
+    assert result["research"]["status"] == "RESULTS"
+    assert result["research"]["sources"][0]["url"] == "https://example.org/research"
+    assert result["voki_contract"]["approval"]["status"] == "APPROVED"
+    assert result["voki_contract"]["provider"]["status"] == "COMPLETED"
+    assert result["voki_contract"]["response_safety"]["status"] == "PASS"
+    assert result["voki_contract"]["response_disposition"] == "RELEASED"
+    approved_messages = conversation_repository.recent_owned(
+        conversation.conversation_id,
+        _TEST_SESSION.session.user_id,
+        12,
+    )
+    assert approved_messages is not None
+    assert approved_messages[-1].research is not None
+    assert approved_messages[-1].research.sources[0].url == "https://example.org/research"
+
+    replay = post("/api/approval", {
+        "approval_id": pending_result["approval_id"],
+        "decision": "APPROVE",
+    })
+    assert replay["status"] == 410
+    assert search_calls == [request_text]
+
+    rejected_pending = post("/api/chat", {
+        "message": request_text,
+        "research": True,
+    })["result"]
+    rejected = post("/api/approval", {
+        "approval_id": rejected_pending["approval_id"],
+        "decision": "REJECT",
+    })
+    assert rejected["status"] == 200
+    assert rejected["result"]["voki_contract"]["approval"]["status"] == "REJECTED"
+    assert search_calls == [request_text]
+
+
 def _install_counting_chat_provider(monkeypatch, *, content="The reviewed proposal can proceed.", error=None):
     calls = []
 
@@ -226,6 +370,53 @@ def test_approved_chat_uses_original_review_calls_provider_once_and_releases_pas
     })
     assert replay["status"] == 410
     assert calls and len(calls) == 1
+
+
+def test_development_auth_browser_path_runs_chat_through_human_approval(monkeypatch):
+    monkeypatch.setenv("PARMAR_ENVIRONMENT", "development")
+    monkeypatch.setenv("PARMAR_DEVELOPMENT_AUTH_ENABLED", "true")
+    monkeypatch.setenv("PARMAR_UI_HOST", "127.0.0.1")
+    monkeypatch.setenv("PARMAR_UI_TLS_CERTFILE", "/test/cert.pem")
+    monkeypatch.setenv("PARMAR_UI_TLS_KEYFILE", "/test/key.pem")
+    monkeypatch.setenv("PARMAR_UI_ORIGIN", "https://127.0.0.1:8080")
+    monkeypatch.setattr(futuristic_app, "_request_is_tls", lambda _request: True)
+    calls = _install_counting_chat_provider(monkeypatch)
+
+    login = post(
+        "/api/auth/development",
+        {},
+        session=None,
+        headers={
+            "Origin": "https://127.0.0.1:8080",
+            "Sec-Fetch-Site": "same-origin",
+        },
+    )
+    assert login["status"] == 201
+    assert login["result"] == {"authenticated": True}
+    token = login["headers"]["Set-Cookie"].split(";", 1)[0].split("=", 1)[1]
+    development_session = SimpleNamespace(
+        session_token=token,
+        session=_TEST_SESSION_MANAGER.resolve(token),
+    )
+    assert development_session.session.user_id == futuristic_app.DEVELOPMENT_AUTH_USER_ID
+
+    message = "Purchase a $500 software license"
+    pending = post("/api/chat", {"message": message}, session=development_session)
+    assert pending["status"] == 200
+    assert pending["result"]["status"] == "APPROVAL_REQUIRED"
+    assert pending["result"]["approval_id"]
+    assert calls == []
+
+    approved = post(
+        "/api/approval",
+        {"approval_id": pending["result"]["approval_id"], "decision": "APPROVE"},
+        session=development_session,
+    )
+    assert approved["status"] == 200
+    assert len(calls) == 1
+    assert calls[0][0] == message
+    assert approved["result"]["voki_contract"]["lifecycle"]["state"] == "RELEASED"
+    assert approved["result"]["voki_contract"]["response_safety"]["status"] == "PASS"
 
 
 @pytest.mark.parametrize("failure", ["invalid", "expired", "wrong_owner", "wrong_session"])

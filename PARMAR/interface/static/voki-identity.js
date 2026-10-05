@@ -17,6 +17,7 @@
   ]);
   const IDENTITY_RECORD_KEY = 'approved-voki-reference';
   const CAMERA_TIMEOUT_MS = 60_000;
+  const IDENTITY_SCOPE_PATTERN = /^[a-f0-9]{64}$/;
   const transitions = Object.freeze({
     IDLE: ['PERMISSION_REQUIRED', 'SAVED'],
     PERMISSION_REQUIRED: ['CAPTURE_READY', 'CANCELLED', 'DENIED', 'ERROR'],
@@ -34,6 +35,18 @@
     constructor(indexedDB = globalThis.indexedDB) {
       this.indexedDB = indexedDB;
       this.databasePromise = null;
+      this.scope = null;
+    }
+
+    setScope(scope) {
+      this.scope = typeof scope === 'string' && IDENTITY_SCOPE_PATTERN.test(scope)
+        ? scope
+        : null;
+    }
+
+    scopedKey() {
+      if (!this.scope) throw new Error('An authenticated session is required for local identity storage.');
+      return `${IDENTITY_RECORD_KEY}:${this.scope}`;
     }
 
     open() {
@@ -55,20 +68,22 @@
     }
 
     async get() {
+      const key = this.scopedKey();
       const database = await this.open();
       return new Promise((resolve, reject) => {
         const transaction = database.transaction('identities', 'readonly');
-        const request = transaction.objectStore('identities').get(IDENTITY_RECORD_KEY);
+        const request = transaction.objectStore('identities').get(key);
         request.onsuccess = () => resolve(request.result || null);
         request.onerror = () => reject(request.error || new Error('Could not read the approved local identity.'));
       });
     }
 
     async save(blob) {
+      const key = this.scopedKey();
       const database = await this.open();
       return new Promise((resolve, reject) => {
         const transaction = database.transaction('identities', 'readwrite');
-        transaction.objectStore('identities').put({ blob }, IDENTITY_RECORD_KEY);
+        transaction.objectStore('identities').put({ blob }, key);
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error || new Error('Could not save the approved local identity.'));
         transaction.onabort = () => reject(transaction.error || new Error('Saving the approved local identity was aborted.'));
@@ -76,10 +91,11 @@
     }
 
     async delete() {
+      const key = this.scopedKey();
       const database = await this.open();
       return new Promise((resolve, reject) => {
         const transaction = database.transaction('identities', 'readwrite');
-        transaction.objectStore('identities').delete(IDENTITY_RECORD_KEY);
+        transaction.objectStore('identities').delete(key);
         transaction.oncomplete = () => resolve();
         transaction.onerror = () => reject(transaction.error || new Error('Could not remove the local identity.'));
         transaction.onabort = () => reject(transaction.error || new Error('Removing the local identity was aborted.'));
@@ -142,6 +158,7 @@
       this.cameraAttempt = 0;
       this.capturePending = false;
       this.approvalPending = false;
+      this.scopeGeneration = 0;
       this.message = '';
       if (!this.video || !this.renderer || typeof this.renderer.setIdentity !== 'function') {
         throw new TypeError('VOKKI identity onboarding requires a video element and avatar renderer.');
@@ -159,9 +176,46 @@
     }
 
     start() {
+      if (!this.store.scope) {
+        this.onStateChange({
+          state: this.state,
+          message: 'Sign in to associate an approved local reference with this session.',
+        });
+        return false;
+      }
       if (['IDLE', 'CANCELLED', 'DENIED', 'ERROR'].includes(this.state)) {
         this.transition('PERMISSION_REQUIRED', 'Camera access is optional. A single still is kept on this device only if you approve it.');
+        return true;
       }
+      return false;
+    }
+
+    async setStorageScope(scope) {
+      const normalizedScope = typeof scope === 'string' && IDENTITY_SCOPE_PATTERN.test(scope)
+        ? scope
+        : null;
+      if (this.store.scope === normalizedScope) return false;
+
+      this.scopeGeneration += 1;
+      this.cameraAttempt += 1;
+      this.cameraRequestPending = false;
+      this.capturePending = false;
+      this.stopStream();
+      this.discardTemporaryCapture();
+      if (this.approvedUrl && typeof this.revokeObjectURL === 'function') {
+        this.revokeObjectURL(this.approvedUrl);
+      }
+      this.approvedUrl = null;
+      this.renderer.setIdentity();
+      if (typeof this.store.setScope === 'function') this.store.setScope(normalizedScope);
+      else this.store.scope = normalizedScope;
+      this.state = 'IDLE';
+      const message = normalizedScope
+        ? 'Loading the optional local reference for this authenticated session.'
+        : 'Sign in to associate an approved local reference with this session.';
+      this.onStateChange({ state: this.state, message });
+      if (normalizedScope) return this.loadApprovedIdentity();
+      return true;
     }
 
     async requestCamera() {
@@ -267,6 +321,7 @@
       if (this.state !== 'USER_APPROVAL_REQUIRED'
         && !(this.state === 'ERROR' && this.temporaryBlob)) return false;
       if (this.approvalPending) return false;
+      const scopeGeneration = this.scopeGeneration;
       this.approvalPending = true;
       this.onStateChange({ state: this.state, message: 'Saving the approved still on this device.' });
       try {
@@ -277,6 +332,7 @@
         return false;
       }
       this.approvalPending = false;
+      if (scopeGeneration !== this.scopeGeneration) return false;
       if (this.approvedUrl && typeof this.revokeObjectURL === 'function') {
         this.revokeObjectURL(this.approvedUrl);
       }
@@ -297,9 +353,18 @@
     }
 
     async loadApprovedIdentity() {
+      const scopeGeneration = this.scopeGeneration;
+      if (!this.store.scope) return false;
       try {
         const record = await this.store.get();
-        if (!record?.blob || typeof this.createObjectURL !== 'function') return false;
+        if (scopeGeneration !== this.scopeGeneration) return false;
+        if (!record?.blob || typeof this.createObjectURL !== 'function') {
+          this.onStateChange({
+            state: this.state,
+            message: 'No approved local reference is saved for this authenticated session. The bundled avatar is active.',
+          });
+          return false;
+        }
         this.approvedUrl = this.createObjectURL(record.blob);
         this.renderer.setIdentity(
           globalThis.PARMARVOKKIAvatar?.APPROVED_REFERENCE_IDENTITY || {
@@ -315,6 +380,7 @@
         else this.onStateChange({ state: this.state, message });
         return true;
       } catch (_error) {
+        if (scopeGeneration !== this.scopeGeneration) return false;
         this.onStateChange({
           state: this.state,
           message: 'Local identity storage could not be read. The bundled avatar remains active.',
@@ -376,6 +442,7 @@
   return {
     ONBOARDING_STATES,
     IDENTITY_RECORD_KEY,
+    IDENTITY_SCOPE_PATTERN,
     CAMERA_TIMEOUT_MS,
     LocalVOKKIIdentityStore,
     VOKKIIdentityOnboarding,

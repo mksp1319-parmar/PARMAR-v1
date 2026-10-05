@@ -7,7 +7,11 @@ import pytest
 
 from PARMAR.chat.context import ChatContext
 from PARMAR import conversations as conversation_module
-from PARMAR.conversations import InMemoryConversationRepository
+from PARMAR.conversations import (
+    ConversationStorageUnavailable,
+    InMemoryConversationRepository,
+    SQLiteConversationRepository,
+)
 from PARMAR.conversations import (
     MAX_CONVERSATIONS_PER_USER,
     MAX_MESSAGE_LENGTH,
@@ -21,7 +25,14 @@ from PARMAR.sessions import (
     SESSION_COOKIE_NAME,
     SessionManager,
     SessionPolicy,
+    SQLiteSessionRepository,
 )
+
+SESSION_STORE_KEY = b"test-only-session-store-integrity-key"
+
+
+def sqlite_session_repository(path):
+    return SQLiteSessionRepository(path, integrity_key=SESSION_STORE_KEY)
 
 
 @pytest.fixture
@@ -71,6 +82,437 @@ def send_chat(monkeypatch, body, *, authenticated=None):
     return request, response, errors
 
 
+def send_get(path, *, authenticated=None):
+    response = {}
+    errors = []
+    headers = {}
+    if authenticated is not None:
+        manager, credentials = authenticated
+        headers["Cookie"] = f"{SESSION_COOKIE_NAME}={credentials.session_token}"
+    request = SimpleNamespace(
+        path=path,
+        headers=headers,
+        send_error=lambda status, message: errors.append((status, message)),
+        _send_json=lambda status, result: response.update(status=status, result=result),
+        _send_json_with_headers=lambda status, result, sent_headers: response.update(
+            status=status,
+            result=result,
+            headers=sent_headers,
+        ),
+    )
+    futuristic_app.PARMARRequestHandler.do_GET(request)
+    return request, response, errors
+
+
+def released_response(message):
+    return {
+        "message": message,
+        "provider_status": "COMPLETED",
+        "response_disposition": "RELEASED",
+        "voki_contract": {
+            "lifecycle": {"state": "RELEASED"},
+            "provider": {"status": "COMPLETED"},
+            "response_safety": {"status": "PASS"},
+            "response_disposition": "RELEASED",
+        },
+    }
+
+
+def test_authenticated_conversation_list_and_load_are_owned_and_include_released_messages(
+    repositories,
+    authenticated_user,
+):
+    owner_user_id = authenticated_user[1].session.user_id
+    empty = repositories.create(owner_user_id)
+    conversation = repositories.create(owner_user_id)
+    repositories.append_owned(
+        conversation.conversation_id,
+        owner_user_id,
+        (("user", "Review the rollout plan."), ("assistant", "The rollout is ready to review.")),
+    )
+
+    _request, listed, errors = send_get("/api/conversations", authenticated=authenticated_user)
+
+    assert errors == []
+    assert listed["status"] == 200
+    assert [item["conversation_id"] for item in listed["result"]["conversations"]] == [
+        str(conversation.conversation_id),
+    ]
+    item = listed["result"]["conversations"][0]
+    assert item["title"] == "Review the rollout plan."
+    assert item["created_at"]
+    assert item["updated_at"]
+    assert str(empty.conversation_id) not in repr(listed["result"])
+
+    _request, loaded, errors = send_get(
+        f"/api/conversations/{conversation.conversation_id}",
+        authenticated=authenticated_user,
+    )
+
+    assert errors == []
+    assert loaded["status"] == 200
+    assert loaded["result"]["conversation_id"] == str(conversation.conversation_id)
+    assert [message["content"] for message in loaded["result"]["messages"]] == [
+        "Review the rollout plan.",
+        "The rollout is ready to review.",
+    ]
+    assert all(message["created_at"] and message["message_id"] for message in loaded["result"]["messages"])
+
+
+def test_authenticated_chat_history_survives_repository_reinitialization(
+    tmp_path,
+    monkeypatch,
+    authenticated_user,
+):
+    database_path = tmp_path / "conversations.sqlite3"
+    repository = SQLiteConversationRepository(database_path)
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", repository)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", repository)
+
+    class ReleasedChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            return released_response("Persisted released response.")
+
+    monkeypatch.setattr(futuristic_app, "ChatService", ReleasedChatService)
+    _request, response, errors = send_chat(
+        monkeypatch,
+        {"message": "Persist this request."},
+        authenticated=authenticated_user,
+    )
+    assert errors == []
+    conversation_id = response["result"]["conversation_id"]
+
+    restarted_repository = SQLiteConversationRepository(database_path)
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", restarted_repository)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", restarted_repository)
+    _request, listed, errors = send_get("/api/conversations", authenticated=authenticated_user)
+    assert errors == []
+    assert [item["conversation_id"] for item in listed["result"]["conversations"]] == [conversation_id]
+
+    _request, loaded, errors = send_get(
+        f"/api/conversations/{conversation_id}",
+        authenticated=authenticated_user,
+    )
+    assert errors == []
+    assert [message["content"] for message in loaded["result"]["messages"]] == [
+        "Persist this request.",
+        "Persisted released response.",
+    ]
+
+
+def test_persistent_session_restart_restores_server_user_and_owned_conversation(
+    tmp_path,
+    monkeypatch,
+):
+    session_path = tmp_path / "sessions.sqlite3"
+    conversation_path = tmp_path / "conversations.sqlite3"
+    session_policy = SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900)
+    first_manager = SessionManager(sqlite_session_repository(session_path), session_policy)
+    credentials = first_manager.create_authenticated_session(uuid4(), "trusted-test-auth")
+    first_conversations = SQLiteConversationRepository(conversation_path)
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", first_manager)
+    monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", first_conversations)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", first_conversations)
+
+    class ReleasedChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            return released_response("The owner remained server-resolved.")
+
+    monkeypatch.setattr(futuristic_app, "ChatService", ReleasedChatService)
+    _request, response, errors = send_chat(
+        monkeypatch,
+        {"message": "Create an owned conversation."},
+        authenticated=(first_manager, credentials),
+    )
+    assert errors == []
+    conversation_id = response["result"]["conversation_id"]
+
+    restarted_manager = SessionManager(sqlite_session_repository(session_path), session_policy)
+    restarted_conversations = SQLiteConversationRepository(conversation_path)
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", restarted_manager)
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", restarted_conversations)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", restarted_conversations)
+    session_request, session_response, errors = send_get(
+        "/api/session",
+        authenticated=(first_manager, credentials),
+    )
+    assert errors == []
+    assert session_response["result"]["authenticated"] is True
+    assert session_request.request_context.principal.user_id == credentials.session.user_id
+
+    _request, loaded, errors = send_get(
+        f"/api/conversations/{conversation_id}",
+        authenticated=(first_manager, credentials),
+    )
+    assert errors == []
+    assert [message["content"] for message in loaded["result"]["messages"]] == [
+        "Create an owned conversation.",
+        "The owner remained server-resolved.",
+    ]
+
+    other_credentials = restarted_manager.create_authenticated_session(uuid4(), "trusted-test-auth")
+    _request, _loaded, errors = send_get(
+        f"/api/conversations/{conversation_id}",
+        authenticated=(restarted_manager, other_credentials),
+    )
+    assert errors == [(404, "Conversation not found")]
+
+
+def test_sqlite_history_never_releases_withheld_provider_candidate(
+    tmp_path,
+    monkeypatch,
+    authenticated_user,
+):
+    database_path = tmp_path / "conversations.sqlite3"
+    repository = SQLiteConversationRepository(database_path)
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", repository)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", repository)
+
+    class WithheldChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            return {
+                "message": "Unreleased provider candidate",
+                "voki_contract": {
+                    "lifecycle": {"state": "WITHHELD"},
+                    "provider": {"status": "COMPLETED"},
+                    "response_safety": {"status": "BLOCK"},
+                    "response_disposition": "WITHHELD",
+                },
+            }
+
+    monkeypatch.setattr(futuristic_app, "ChatService", WithheldChatService)
+    _request, response, errors = send_chat(
+        monkeypatch,
+        {"message": "Persist only this user request."},
+        authenticated=authenticated_user,
+    )
+    assert errors == []
+
+    restarted_repository = SQLiteConversationRepository(database_path)
+    messages = restarted_repository.recent_owned(
+        UUID(response["result"]["conversation_id"]),
+        authenticated_user[1].session.user_id,
+        12,
+    )
+    assert [message.role for message in messages] == ["user"]
+    assert all("Unreleased provider candidate" not in message.content for message in messages)
+
+
+@pytest.mark.parametrize("conversation_id", ["not-a-uuid", str(uuid4())])
+def test_authenticated_conversation_load_rejects_malformed_and_unknown_ids(
+    repositories,
+    authenticated_user,
+    conversation_id,
+):
+    _request, _response, errors = send_get(
+        f"/api/conversations/{conversation_id}",
+        authenticated=authenticated_user,
+    )
+
+    assert errors == [(404, "Conversation not found")]
+
+
+def test_authenticated_conversation_list_and_load_reject_other_users_and_anonymous_requests(
+    repositories,
+    authenticated_user,
+):
+    other_conversation = repositories.create(uuid4())
+    repositories.append_owned(
+        other_conversation.conversation_id,
+        other_conversation.owner_user_id,
+        (("user", "Private conversation"),),
+    )
+
+    _request, listed, errors = send_get("/api/conversations", authenticated=authenticated_user)
+    assert errors == []
+    assert listed["result"]["conversations"] == []
+
+    _request, _loaded, errors = send_get(
+        f"/api/conversations/{other_conversation.conversation_id}",
+        authenticated=authenticated_user,
+    )
+    assert errors == [(404, "Conversation not found")]
+
+    _request, _response, errors = send_get("/api/conversations")
+    assert errors == [(401, "An authenticated session is required")]
+
+
+def test_unavailable_conversation_storage_returns_safe_error_without_fallback(
+    tmp_path,
+    monkeypatch,
+    authenticated_user,
+):
+    database_path = tmp_path / "corrupt.sqlite3"
+    database_path.write_bytes(b"corrupt database")
+    repository = SQLiteConversationRepository(database_path)
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", repository)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", repository)
+
+    _request, _response, errors = send_get("/api/conversations", authenticated=authenticated_user)
+
+    assert errors == [(503, "Conversation storage is unavailable")]
+    assert str(database_path) not in repr(errors)
+
+
+def test_storage_unavailable_does_not_create_conversation_or_call_chat_provider(
+    monkeypatch,
+    authenticated_user,
+):
+    class UnavailableRepository:
+        def create_for_message(self, *_args):
+            raise ConversationStorageUnavailable("private storage details")
+
+    repository = UnavailableRepository()
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", repository)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", repository)
+
+    class UnexpectedChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            pytest.fail("Unavailable storage must fail closed before provider invocation")
+
+    monkeypatch.setattr(futuristic_app, "ChatService", UnexpectedChatService)
+    _request, _response, errors = send_chat(
+        monkeypatch,
+        {"message": "do not lose this request"},
+        authenticated=authenticated_user,
+    )
+    assert errors == [(503, "Conversation storage is unavailable")]
+    assert errors == [(503, "Conversation storage is unavailable")]
+    assert "private storage details" not in repr(errors)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {
+            "message": "Candidate content withheld by PARMAR.",
+            "provider_status": "COMPLETED",
+            "response_disposition": "WITHHELD",
+            "research": {
+                "contract_version": "1.0",
+                "status": "RESULTS",
+                "sources": [{
+                    "title": "Withheld source",
+                    "url": "https://example.org/withheld",
+                    "domain": "example.org",
+                    "provider_id": "http-json-search",
+                    "source_id": "withheld-1",
+                    "snippet": "This source must not reach the client.",
+                    "metadata": {},
+                }],
+                "reason_code": None,
+            },
+            "voki_contract": {
+                "lifecycle": {"state": "WITHHELD"},
+                "provider": {"status": "COMPLETED"},
+                "response_safety": {"status": "BLOCK"},
+                "response_disposition": "WITHHELD",
+            },
+        },
+        {
+            "message": "Provider failure details must not be a released answer.",
+            "provider_error": True,
+            "provider_status": "FAILED",
+            "voki_contract": {
+                "lifecycle": {"state": "PROVIDER_FAILED"},
+                "provider": {"status": "FAILED"},
+                "response_safety": {"status": "NOT_CHECKED"},
+                "response_disposition": "NOT_APPLICABLE",
+            },
+        },
+    ],
+)
+def test_withheld_and_provider_failure_content_are_not_stored_as_released_history(
+    monkeypatch,
+    repositories,
+    authenticated_user,
+    result,
+):
+    class FixedChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            return result
+
+    monkeypatch.setattr(futuristic_app, "ChatService", FixedChatService)
+    _request, response, errors = send_chat(
+        monkeypatch,
+        {"message": "Request that produced a withheld result"},
+        authenticated=authenticated_user,
+    )
+
+    assert errors == []
+    assert "research" not in response["result"]
+    conversation_id = response["result"]["conversation_id"]
+    owner_user_id = authenticated_user[1].session.user_id
+    stored = repositories.recent_owned(UUID(conversation_id), owner_user_id, 12)
+    assert [message.role for message in stored] == ["user"]
+    assert "Candidate content" not in repr(stored)
+    assert "Provider failure details" not in repr(stored)
+
+    _request, loaded, errors = send_get(
+        f"/api/conversations/{conversation_id}",
+        authenticated=authenticated_user,
+    )
+    assert errors == []
+    assert [message["role"] for message in loaded["result"]["messages"]] == ["user"]
+
+
+def test_malformed_released_research_is_not_exposed_or_persisted(
+    monkeypatch,
+    repositories,
+    authenticated_user,
+):
+    class MalformedResearchService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            return {
+                **released_response("A released answer."),
+                "research": {
+                    "contract_version": "1.0",
+                    "status": "RESULTS",
+                    "sources": [{
+                        "title": "Invalid destination",
+                        "url": "http://127.0.0.1/private",
+                        "domain": "127.0.0.1",
+                        "provider_id": "http-json-search",
+                        "source_id": "invalid-1",
+                        "snippet": None,
+                        "metadata": {},
+                    }],
+                    "reason_code": None,
+                },
+            }
+
+    monkeypatch.setattr(futuristic_app, "ChatService", MalformedResearchService)
+    _request, response, errors = send_chat(
+        monkeypatch,
+        {"message": "Research this safely.", "research": True},
+        authenticated=authenticated_user,
+    )
+
+    assert response == {}
+    assert errors == [(503, "Conversation storage is unavailable")]
+    assert "127.0.0.1" not in repr(errors)
+    assert repositories.list_owned(authenticated_user[1].session.user_id) == ()
+
+
 def test_authenticated_chat_creates_owned_conversation_and_ignores_browser_history(
     monkeypatch,
     repositories,
@@ -83,9 +525,11 @@ def test_authenticated_chat_creates_owned_conversation_and_ignores_browser_histo
             pass
 
         def respond(self, prompt, context=None, **options):
+            if options.get("memory_retriever"):
+                context.memory = options["memory_retriever"]()
             calls.append((prompt, context, options))
             return {
-                "message": "Validated response shown to the user.",
+                **released_response("Validated response shown to the user."),
                 "orchestration": {"raw_output": "unvalidated provider output"},
             }
 
@@ -107,7 +551,7 @@ def test_authenticated_chat_creates_owned_conversation_and_ignores_browser_histo
     owner_user_id = authenticated_user[1].session.user_id
     assert repositories.get_owned(conversation_id, owner_user_id) is not None
     assert calls[0][0] == "current request"
-    assert calls[0][2] == {}
+    assert callable(calls[0][2]["memory_retriever"])
     assert [record.content for record in repositories.recent_owned(conversation_id, owner_user_id, 12)] == [
         "current request",
         "Validated response shown to the user.",
@@ -167,7 +611,7 @@ def test_existing_conversation_remains_usable_when_user_conversation_quota_is_fu
 
         def respond(self, prompt, context=None, **options):
             calls.append(prompt)
-            return {"message": "existing conversation response"}
+            return released_response("existing conversation response")
 
     monkeypatch.setattr(futuristic_app, "ChatService", CapturingChatService)
     _request, response, errors = send_chat(
@@ -227,13 +671,13 @@ def test_authenticated_chat_uses_only_server_owned_recent_history(
 
     assert errors == []
     assert response["result"]["conversation_id"] == str(conversation.conversation_id)
-    assert calls == [(
-        "current request",
-        {"recent_messages": [
-            {"role": "user", "content": "server history"},
-            {"role": "assistant", "content": "server reply"},
-        ]},
-    )]
+    assert len(calls) == 1
+    assert calls[0][0] == "current request"
+    assert callable(calls[0][1]["memory_retriever"])
+    assert calls[0][1]["recent_messages"] == [
+        {"role": "user", "content": "server history"},
+        {"role": "assistant", "content": "server reply"},
+    ]
 
 
 def test_authenticated_chat_ignores_browser_and_irrelevant_saved_memory(
@@ -252,6 +696,8 @@ def test_authenticated_chat_ignores_browser_and_irrelevant_saved_memory(
             pass
 
         def respond(self, prompt, context=None, **options):
+            if options.get("memory_retriever"):
+                context.memory = options["memory_retriever"]()
             calls.append((prompt, context, options))
             return {"message": "No memory context was used."}
 
@@ -270,7 +716,7 @@ def test_authenticated_chat_ignores_browser_and_irrelevant_saved_memory(
     assert calls[0][0] == "current request"
     assert isinstance(calls[0][1], ChatContext)
     assert calls[0][1].memory == []
-    assert calls[0][2] == {}
+    assert callable(calls[0][2]["memory_retriever"])
 
 
 def test_authenticated_chat_retrieves_bounded_owned_memory_and_audits_metadata_only(
@@ -298,6 +744,8 @@ def test_authenticated_chat_retrieves_bounded_owned_memory_and_audits_metadata_o
             pass
 
         def respond(self, prompt, context=None, **options):
+            if options.get("memory_retriever"):
+                context.memory = options["memory_retriever"]()
             calls.append((prompt, context, options))
             return {"message": "Validated response."}
 
@@ -326,7 +774,7 @@ def test_authenticated_chat_retrieves_bounded_owned_memory_and_audits_metadata_o
     assert response["status"] == 200
     assert calls[0][0] == "Help with project planning."
     assert calls[0][1].memory == [matching.content]
-    assert calls[0][2] == {}
+    assert callable(calls[0][2]["memory_retriever"])
     audit = audit_path.read_text(encoding="utf-8")
     assert '"operation": "retrieval"' in audit
     assert '"retrieved_count": 1' in audit
@@ -350,6 +798,8 @@ def test_revoked_consent_and_anonymous_chat_receive_no_authenticated_memory(
             pass
 
         def respond(self, prompt, context=None, **options):
+            if options.get("memory_retriever"):
+                context.memory = options["memory_retriever"]()
             calls.append((prompt, context))
             return {"message": "Validated response."}
 

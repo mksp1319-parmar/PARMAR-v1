@@ -105,7 +105,7 @@ def test_browser_does_not_send_memory_as_chat_context():
     assert chat_submit is not None
     assert "memory" not in chat_submit.group(1)
     memory_page = (Path(__file__).parents[1] / "interface" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "Relevant consented notes may be used as untrusted context in authenticated chat" in memory_page
+    assert "Relevant consented notes may be used only as untrusted context in authenticated Chat/VOKKI" in memory_page
 
 
 def test_voki_speech_is_owned_by_the_dedicated_voki_interface():
@@ -207,16 +207,63 @@ def test_authenticated_posts_use_csrf_and_server_history_is_not_faked_in_sidebar
     assert "headers['X-CSRF-Token']" in api_request.group(1)
     assert "authenticated" in api_request.group(1)
     assert "[401, 403, 404].includes(response.status)" in api_request.group(1)
-    assert "Server conversation history is not available in this view yet." in app_source
+    assert "No conversations yet." in app_source
+    assert "async function refreshServerConversationHistory()" in app_source
+    assert "async function selectServerConversation(conversationId)" in app_source
+    assert "apiRequest('/api/conversations'" in app_source
+    assert "apiRequest(`/api/conversations/${encodeURIComponent(conversationId)}`" in app_source
+
+
+def test_voki_and_chat_share_server_selected_conversation_without_history_replay():
+    app_path = Path(__file__).parents[1] / "interface" / "static" / "app.js"
+    html_path = Path(__file__).parents[1] / "interface" / "static" / "index.html"
+    voki_path = Path(__file__).parents[1] / "interface" / "static" / "voki-interface.js"
+    app_source = app_path.read_text(encoding="utf-8")
+    html_source = html_path.read_text(encoding="utf-8")
+    voki_source = voki_path.read_text(encoding="utf-8")
+    new_chat = re.search(
+        r"dom\.newSessionBtn\.addEventListener\('click', \(\) => \{(.*?)\n\s*\}\);",
+        app_source,
+        re.DOTALL,
+    )
+    restore = re.search(
+        r"async function refreshServerConversationHistory\(\) \{(.*?)\n\}",
+        app_source,
+        re.DOTALL,
+    )
+    select = re.search(
+        r"async function selectServerConversation\(conversationId\) \{(.*?)\n\}",
+        app_source,
+        re.DOTALL,
+    )
+    assert new_chat and restore and select
+    assert 'id="parmar-core"' in html_source
+    assert 'data-section="voki"' in html_source
+    assert 'aria-label="Open VOKKI interaction"' in html_source
+    assert "selectSection('voki')" in app_source
+    assert "dom.vokiInput?.focus({ preventScroll: true })" in app_source
+    assert "ACTIVE_CONVERSATION_KEY = 'parmar-active-conversation-v1'" in app_source
+    assert "await selectServerConversation(restoreConversationId)" in restore.group(1)
+    assert "publishConversationSelection(conversationId)" in select.group(1)
+    assert "publishConversationSelection(null)" in new_chat.group(1)
+    assert "parmar-voki-conversation-activated" in app_source
+    assert "parmar-conversation-selection-changed" in voki_source
+    assert "persisted_release: true" in voki_source
+    assert "this.speech?.speakReleasedResponse" not in voki_source.split("async loadConversation", 1)[1].split("renderHistory", 1)[0]
+    lifecycle_setter = re.search(r"function setVokiState\(rawState\) \{(.*?)\n\}", app_source, re.DOTALL)
+    assert lifecycle_setter
+    assert "setTimeout" not in lifecycle_setter.group(1)
 
 
 def test_authenticated_logout_control_is_hidden_until_server_confirms_session():
     html_source = (Path(__file__).parents[1] / "interface" / "static" / "index.html").read_text(encoding="utf-8")
     app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
+    render_auth = re.search(r"function renderAuthenticationControls\(\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert 'id="logout-btn"' in html_source
     assert 'id="logout-btn" type="button" hidden' in html_source
-    assert "if (dom.logoutBtn) dom.logoutBtn.hidden = false;" in app_source
-    assert "if (dom.logoutBtn) dom.logoutBtn.hidden = true;" in app_source
+    assert render_auth is not None
+    assert "dom.logoutBtn.hidden = !authenticated" in render_auth.group(1)
+    assert "renderAuthenticationControls();" in app_source
 
 
 def test_authenticated_memory_uses_server_crud_and_never_browser_memory_storage():
@@ -226,14 +273,17 @@ def test_authenticated_memory_uses_server_crud_and_never_browser_memory_storage(
     save = re.search(r"async function addMemory\(event\) \{(.*?)\n\}", app_source, re.DOTALL)
     update = re.search(r"async function editMemory\(memoryId\) \{(.*?)\n\}", app_source, re.DOTALL)
     delete = re.search(r"async function deleteMemory\(memoryId\) \{(.*?)\n\}", app_source, re.DOTALL)
+    clear_all = re.search(r"async function clearAllMemories\(\) \{(.*?)\n\}", app_source, re.DOTALL)
     persist = re.search(r"function persistMemories\(memories\) \{(.*?)\n\}", app_source, re.DOTALL)
-    assert memory_load and consent and save and update and delete and persist
+    assert memory_load and consent and save and update and delete and clear_all and persist
     assert "apiRequest('/api/memory'" in memory_load.group(1)
     assert "{ action: 'consent', granted }" in consent.group(1)
     assert "action: 'save'" in save.group(1)
     assert "state.memoryConsent" in save.group(1)
     assert "action: 'update'" in update.group(1)
     assert "action: 'delete'" in delete.group(1)
+    assert "action: 'clear_all'" in clear_all.group(1)
+    assert "for (const memory of [...state.memories])" not in clear_all.group(1)
     assert "state.authMode !== 'anonymous'" in persist.group(1)
     assert "persistMemories(nextMemories)" in save.group(1)
     storage_keys = app_source.split("const STORAGE_KEYS", 1)[1].split("};", 1)[0]
@@ -251,8 +301,9 @@ def test_authenticated_chat_does_not_read_or_send_browser_memory_context():
 def test_memory_page_explains_consent_and_controlled_chat_context():
     html_source = (Path(__file__).parents[1] / "interface" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'id="memory-storage-title"' in html_source
-    assert "authenticated notes are stored on the server only after explicit consent" in html_source.casefold()
-    assert "Relevant consented notes may be used as untrusted context in authenticated chat" in html_source
+    assert "authenticated notes are stored durably on this server’s local disk" in html_source.casefold()
+    assert "not encrypted at rest" in html_source
+    assert "Relevant consented notes may be used only as untrusted context in authenticated Chat/VOKKI" in html_source
     assert "if an external provider is selected and authorized, matched notes may be included in its request" in html_source
 
 
@@ -265,7 +316,7 @@ def test_memory_ui_discloses_external_provider_context_conditionally():
     assert "selected provider is local demo; notes are not sent to an external provider" in render.group(1)
 
 
-def test_workspace_toolbar_and_discovery_only_advertise_real_or_unavailable_features():
+def test_workspace_toolbar_routes_real_research_through_chat_without_a_fake_workspace():
     static_dir = Path(__file__).parents[1] / "interface" / "static"
     html_source = (static_dir / "index.html").read_text(encoding="utf-8")
     app_source = (static_dir / "app.js").read_text(encoding="utf-8")
@@ -283,27 +334,48 @@ def test_workspace_toolbar_and_discovery_only_advertise_real_or_unavailable_feat
     for capability in ("Automation and reminders", "Developer and GitHub", "Connected accounts", "Knowledge and documents", "Multimodal input", "Local demo"):
         assert capability in html_source
     assert 'disabled aria-describedby="files-unavailable"' in html_source
-    assert 'data-discovery-state="unavailable"' in html_source
-    assert 'data-discovery-state="disconnected"' in html_source
-    assert 'data-discovery-state="empty"' in html_source
-    assert 'data-research-state="unavailable"' in html_source
-    assert 'id="discovery-query" class="discovery-query" type="search"' in html_source
-    assert 'id="discovery-query" class="discovery-query" type="search" placeholder="Search provider not connected" disabled' in html_source
-    assert '<ol class="discovery-source-list" aria-label="Research sources" aria-live="polite"></ol>' in html_source
-    assert '<ol class="discovery-evidence-list" aria-label="Research evidence" aria-live="polite"></ol>' in html_source
-    assert 'id="discovery-synthesis"' in html_source
+    assert 'id="research-mode" type="checkbox"' in html_source
+    assert 'data-action="research-chat"' in html_source
+    assert "Open Chat with Research enabled" in html_source
+    assert "Enable Research in Chat" in html_source
+    assert "Research uses the configured search provider when available." in html_source
+    assert "Research workflow" not in html_source
+    assert "Ready for evidence" not in html_source
+    assert "discovery-source-list" not in html_source
+    assert "discovery-evidence-list" not in html_source
+    assert "research_client_error" in app_source
+    assert "researchRequestOption(researchRequested)" in app_source
+    assert "Research request in progress… Waiting for PARMAR’s response. This is transport status only." in app_source
     assert "metadata-only" in html_source
-    assert "There is no live news feed." in html_source
+    assert 'id="section-voki"' in html_source
+    assert 'data-section="voki" title="Open the dedicated VOKKI interface"' in html_source
     styles_source = (static_dir / "styles.css").read_text(encoding="utf-8")
     assert 'body[data-theme="aurora"]' in styles_source
     assert 'body[data-theme="violet"]' in styles_source
     assert "--ambient-blue" in styles_source
     assert ".capability-menu {\n  position: fixed;" in styles_source
-    for research_state in ("searching", "gathering-sources", "analyzing", "synthesizing", "completed", "no-results", "unavailable", "error"):
-        assert f'data-research-state="{research_state}"' in html_source + styles_source
     assert "fetch('/api/search'" not in app_source
     assert "fetch('/api/research'" not in app_source
     assert "fetch('/api/news'" not in app_source
+
+
+def test_research_mode_is_an_explicit_chat_option_and_resets_for_new_chat():
+    app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
+    submit = re.search(r"async function submitChatMessage\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    assert submit is not None
+    source = submit.group(1)
+    assert "const researchRequested = Boolean(dom.researchMode?.checked);" in source
+    assert "...window.PARMARChatPresentation.researchRequestOption(researchRequested)" in source
+    assert "const requestId = beginRequest();" in source
+    assert "if (requestId === null) return;" in source
+
+    new_chat = re.search(
+        r"if \(dom\.newSessionBtn\) \{\s*dom\.newSessionBtn\.addEventListener\('click', \(\) => \{(.*?)\n\s*\}\);",
+        app_source,
+        re.DOTALL,
+    )
+    assert new_chat is not None
+    assert "if (dom.researchMode) dom.researchMode.checked = false;" in new_chat.group(1)
 
 
 def test_drawer_state_is_accessible_and_independent_from_voki_lifecycle():
@@ -359,7 +431,7 @@ def test_chat_history_entrance_motion_only_applies_to_explicitly_new_messages():
     assert "if (animateLatest && index === session.messages.length - 1) wrapper.classList.add('message-entering')" in renderer.group(1)
     assert "revealLatestAssistant" in renderer.group(1)
     assert "window.PARMARChatPresentation?.isAuthoritativelyReleased(message.analysis)" in renderer.group(1)
-    waiting = re.search(r"function appendWaitingIndicator\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    waiting = re.search(r"function appendWaitingIndicator\(researchRequested = false\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert waiting is not None
     assert "Waiting for PARMAR…" in waiting.group(1)
     assert "thinking" not in waiting.group(1).casefold()

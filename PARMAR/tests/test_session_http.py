@@ -1,11 +1,13 @@
 import io
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from PARMAR.conversations import InMemoryConversationRepository
 from PARMAR.identity import LocalDemoPrincipalResolver
 from PARMAR.interface import futuristic_app
 from PARMAR.sessions import (
@@ -13,7 +15,14 @@ from PARMAR.sessions import (
     SESSION_COOKIE_NAME,
     SessionManager,
     SessionPolicy,
+    SQLiteSessionRepository,
 )
+
+SESSION_STORE_KEY = b"test-only-session-store-integrity-key"
+
+
+def sqlite_repository(path):
+    return SQLiteSessionRepository(path, integrity_key=SESSION_STORE_KEY)
 
 
 @pytest.fixture
@@ -25,6 +34,9 @@ def authenticated_session(monkeypatch):
     credentials = manager.create_authenticated_session(uuid4(), "http-test")
     monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    conversations = InMemoryConversationRepository()
+    monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", conversations)
+    monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", conversations)
     monkeypatch.setattr(futuristic_app, "PENDING_APPROVALS", futuristic_app.PendingApprovalStore())
     return manager, credentials
 
@@ -118,7 +130,22 @@ def test_authenticated_get_needs_no_csrf_and_session_endpoint_never_returns_cook
     assert response["status"] == 200
     assert response["result"]["authenticated"] is True
     assert response["result"]["csrf_token"]
+    assert re.fullmatch(r"[a-f0-9]{64}", response["result"]["identity_scope"])
     assert credentials.session_token not in json.dumps(response["result"])
+    assert str(credentials.session.session_id) not in json.dumps(response["result"])
+
+    reloaded_request, reloaded, reloaded_errors = make_request(
+        "/api/session",
+        credentials=credentials,
+        csrf=False,
+    )
+    futuristic_app.PARMARRequestHandler.do_GET(reloaded_request)
+
+    assert reloaded_errors == []
+    assert reloaded["result"]["authenticated"] is True
+    assert reloaded["result"]["identity_scope"] == response["result"]["identity_scope"]
+    assert reloaded_request.request_context.principal.user_id == credentials.session.user_id
+    assert reloaded_request.request_context.session_id == credentials.session.session_id
 
 
 def test_trusted_session_issuance_sets_cookie_without_returning_session_token(
@@ -154,6 +181,7 @@ def test_trusted_session_issuance_sets_cookie_without_returning_session_token(
 
 def test_trusted_rotation_replaces_cookie_and_invalidates_old_token(authenticated_session):
     manager, existing = authenticated_session
+    old_csrf_token = manager.csrf_token(existing.session.session_id)
     response = {}
     errors = []
     request = SimpleNamespace(
@@ -174,7 +202,106 @@ def test_trusted_rotation_replaces_cookie_and_invalidates_old_token(authenticate
     assert rotated.session_token in response["headers"]["Set-Cookie"]
     assert rotated.session_token not in json.dumps(response["result"])
     assert manager.resolve(existing.session_token) is None
+    assert manager.validate_csrf(existing.session.session_id, old_csrf_token) is False
     assert manager.resolve(rotated.session_token) is not None
+
+
+def test_persistent_session_cookie_resolves_after_http_server_state_reinitialization(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "sessions.sqlite3"
+    policy = SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900)
+    first_manager = SessionManager(sqlite_repository(database_path), policy)
+    credentials = first_manager.create_authenticated_session(uuid4(), "trusted-test-auth")
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", first_manager)
+    monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    request, response, errors = make_request(
+        "/api/session",
+        credentials=credentials,
+        csrf=False,
+    )
+    futuristic_app.PARMARRequestHandler.do_GET(request)
+    assert errors == []
+    assert response["result"]["authenticated"] is True
+
+    restarted_manager = SessionManager(sqlite_repository(database_path), policy)
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", restarted_manager)
+    restarted_request, restarted_response, errors = make_request(
+        "/api/session",
+        credentials=credentials,
+        csrf=False,
+    )
+    futuristic_app.PARMARRequestHandler.do_GET(restarted_request)
+
+    assert errors == []
+    assert restarted_response["result"]["authenticated"] is True
+    assert restarted_request.request_context.principal.user_id == credentials.session.user_id
+    assert restarted_request.request_context.session_id == credentials.session.session_id
+    assert credentials.session_token not in json.dumps(restarted_response["result"])
+
+
+def test_unknown_or_tampered_persistent_cookie_is_never_authenticated(
+    tmp_path,
+    monkeypatch,
+):
+    manager = SessionManager(
+        sqlite_repository(tmp_path / "sessions.sqlite3"),
+        SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900),
+    )
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
+    monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    request, response, errors = make_request("/api/session")
+    request.headers["Cookie"] = f"{SESSION_COOKIE_NAME}={'A' * 43}"
+
+    futuristic_app.PARMARRequestHandler.do_GET(request)
+
+    assert errors == []
+    assert response["result"] == {"authenticated": False}
+    assert request.request_context.principal.authenticated is False
+
+
+def test_persistent_logout_remains_revoked_after_manager_restart(tmp_path, monkeypatch):
+    database_path = tmp_path / "sessions.sqlite3"
+    policy = SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900)
+    manager = SessionManager(sqlite_repository(database_path), policy)
+    credentials = manager.create_authenticated_session(uuid4(), "trusted-test-auth")
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
+    monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    logout_request, logout_response, errors = make_request("/api/logout", credentials=credentials)
+
+    futuristic_app.PARMARRequestHandler.do_POST(logout_request)
+
+    assert errors == []
+    assert logout_response["result"]["logged_out"] is True
+    restarted_manager = SessionManager(sqlite_repository(database_path), policy)
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", restarted_manager)
+    request, response, errors = make_request("/api/session", credentials=credentials, csrf=False)
+    futuristic_app.PARMARRequestHandler.do_GET(request)
+
+    assert errors == []
+    assert response["result"] == {"authenticated": False}
+
+
+def test_unavailable_persistent_session_store_returns_generic_service_error(
+    tmp_path,
+    monkeypatch,
+):
+    database_path = tmp_path / "corrupt.sqlite3"
+    database_path.write_bytes(b"invalid session storage")
+    manager = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900),
+    )
+    monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
+    request, _response, errors = make_request("/api/session")
+    request.headers["Cookie"] = f"{SESSION_COOKIE_NAME}={'B' * 43}"
+
+    futuristic_app.PARMARRequestHandler.do_GET(request)
+
+    assert errors == [(503, "Authenticated session storage is unavailable")]
+    assert str(database_path) not in repr(errors)
+    assert "invalid session storage" not in repr(errors)
 
 
 def test_authenticated_readiness_get_does_not_require_csrf(authenticated_session):

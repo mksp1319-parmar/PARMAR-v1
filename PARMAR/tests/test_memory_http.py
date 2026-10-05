@@ -8,7 +8,10 @@ import pytest
 
 from PARMAR.identity import LocalDemoPrincipalResolver
 from PARMAR.interface import futuristic_app
-from PARMAR.memories import InMemoryMemoryRepository
+from PARMAR.memories import (
+    InMemoryMemoryRepository,
+    SQLiteMemoryRepository,
+)
 from PARMAR.sessions import (
     InMemorySessionRepository,
     SESSION_COOKIE_NAME,
@@ -334,3 +337,85 @@ def test_memory_audit_contains_only_fixed_metadata(monkeypatch, memory_setup):
     assert "explicit_user_save" not in audit
     assert secretish_note not in audit
     assert "content" not in audit
+
+
+def test_durable_memory_is_shared_across_sessions_for_same_user_only(monkeypatch, tmp_path):
+    repository = SQLiteMemoryRepository(tmp_path / "memories.sqlite3")
+    monkeypatch.setattr(futuristic_app, "MEMORY_REPOSITORY", repository)
+    owner = uuid4()
+    manager, first_credentials = make_session(monkeypatch, user_id=owner)
+    second_credentials = manager.create_authenticated_session(owner, "second-session")
+    other_credentials = manager.create_authenticated_session(uuid4(), "other-user")
+    repository.set_consent(owner, True)
+    record = repository.create_owned(owner, "Shared project preference")
+
+    first, first_errors = memory_request(
+        "/api/memory",
+        credentials=(manager, first_credentials),
+    )
+    second, second_errors = memory_request(
+        "/api/memory",
+        credentials=(manager, second_credentials),
+    )
+    other, other_errors = memory_request(
+        "/api/memory",
+        credentials=(manager, other_credentials),
+    )
+
+    assert first_errors == second_errors == other_errors == []
+    assert first["result"]["storage"] == "DURABLE_LOCAL"
+    assert [item["memory_id"] for item in first["result"]["memories"]] == [str(record.memory_id)]
+    assert second["result"]["memories"] == first["result"]["memories"]
+    assert other["result"]["consent"] is False
+    assert other["result"]["memories"] == []
+
+
+def test_authenticated_clear_all_is_csrf_protected_and_owner_scoped(monkeypatch, tmp_path):
+    repository = SQLiteMemoryRepository(tmp_path / "memories.sqlite3")
+    monkeypatch.setattr(futuristic_app, "MEMORY_REPOSITORY", repository)
+    owner_credentials = make_session(monkeypatch)
+    owner = owner_credentials[1].session.user_id
+    other_credentials = make_session(monkeypatch, manager=owner_credentials[0])
+    other = other_credentials[1].session.user_id
+    repository.set_consent(owner, True)
+    repository.set_consent(other, True)
+    repository.create_owned(owner, "First owned note")
+    repository.create_owned(owner, "Second owned note")
+    other_record = repository.create_owned(other, "Other user's note")
+
+    refused, refused_errors = memory_request(
+        "/api/memory",
+        method="POST",
+        body={"action": "clear_all"},
+        credentials=owner_credentials,
+        csrf=False,
+    )
+    assert refused == {}
+    assert refused_errors == [(403, "CSRF validation failed")]
+    assert len(repository.list_owned(owner)) == 2
+
+    result, errors = memory_request(
+        "/api/memory",
+        method="POST",
+        body={"action": "clear_all"},
+        credentials=owner_credentials,
+    )
+    assert errors == []
+    assert result["status"] == 200
+    assert result["result"] == {"deleted": True, "deleted_count": 2}
+    assert repository.list_owned(owner) == ()
+    assert repository.list_owned(other) == (other_record,)
+
+
+def test_durable_memory_storage_failure_returns_503_without_fallback(monkeypatch, tmp_path):
+    database = tmp_path / "corrupt.sqlite3"
+    database.write_text("not a sqlite database", encoding="utf-8")
+    repository = SQLiteMemoryRepository(database)
+    monkeypatch.setattr(futuristic_app, "MEMORY_REPOSITORY", repository)
+    credentials = make_session(monkeypatch)
+
+    result, errors = memory_request("/api/memory", credentials=credentials)
+
+    assert result == {}
+    assert errors == [(503, "Durable memory storage is unavailable")]
+    assert isinstance(repository, SQLiteMemoryRepository)

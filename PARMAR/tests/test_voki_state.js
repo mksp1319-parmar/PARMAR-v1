@@ -142,6 +142,79 @@ test('historical rendering and workspace changes invalidate any in-flight reveal
   assert.match(bindEvents, /invalidatePendingRequest\(\);[\s\S]*?renderSessionMessages\(\);/);
 });
 
+test('authenticated history is fetched, selected, and rendered immediately without changing VOKKI state', () => {
+  const appSource = fs.readFileSync(
+    path.join(__dirname, '..', 'interface', 'static', 'app.js'),
+    'utf8',
+  );
+  const renderHistory = functionSource('renderHistory');
+  const refreshHistory = appSource.match(/async function refreshServerConversationHistory\(\) \{[\s\S]*?\n\}/)?.[0];
+  const selectHistory = appSource.match(/async function selectServerConversation\(conversationId\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(refreshHistory);
+  assert.ok(selectHistory);
+  assert.match(refreshHistory, /apiRequest\('\/api\/conversations'/);
+  assert.match(refreshHistory, /const serverIds = new Set/);
+  assert.match(renderHistory, /state\.serverConversationIds\.has\(session\.id\)/);
+  assert.match(renderHistory, /button\.classList\.toggle\('active', session\.id === state\.currentSessionId\)/);
+  assert.match(renderHistory, /void selectServerConversation\(selected\.id\)/);
+  assert.match(selectHistory, /apiRequest\(`\/api\/conversations\/\$\{encodeURIComponent\(conversationId\)\}`/);
+  assert.match(selectHistory, /cancelChatResponseReveal\(\)/);
+  assert.match(selectHistory, /historySelectionGeneration/);
+  assert.doesNotMatch(selectHistory, /historyLoadGeneration/);
+  assert.match(selectHistory, /state\.currentSessionId = conversationId/);
+  assert.match(selectHistory, /renderSessionMessages\(\)/);
+  assert.doesNotMatch(selectHistory, /renderSessionMessages\([^)]*,\s*true\)/);
+  assert.doesNotMatch(selectHistory, /resetReviewState|setVokiState|updateState/);
+  assert.match(renderHistory, /No conversations yet\./);
+});
+
+test('authenticated reload restores only a server-listed conversation and clears stale selections', () => {
+  const appSource = fs.readFileSync(
+    path.join(__dirname, '..', 'interface', 'static', 'app.js'),
+    'utf8',
+  );
+  const refreshHistory = appSource.match(/async function refreshServerConversationHistory\(\) \{[\s\S]*?\n\}/)?.[0];
+  const selectHistory = appSource.match(/async function selectServerConversation\(conversationId\) \{[\s\S]*?\n\}/)?.[0];
+  const storageRead = functionSource('readActiveConversationId');
+  const storageWrite = functionSource('storeActiveConversationId');
+  const storageClear = functionSource('clearActiveConversationId');
+  const unauthenticatedTransition = functionSource('clearAuthenticatedState');
+  const authRefresh = appSource.match(/async function refreshAuthenticationState\([\s\S]*?\n\}/)?.[0];
+  assert.ok(refreshHistory);
+  assert.ok(selectHistory);
+  assert.ok(authRefresh);
+  assert.match(authRefresh, /await refreshServerConversationHistory\(\)/);
+  assert.match(authRefresh, /state\.csrfToken !== payload\.csrf_token/);
+  assert.match(authRefresh, /if \(authenticatedSessionChanged\) clearActiveConversationId\(\)/);
+  assert.match(refreshHistory, /const storedConversationId = readActiveConversationId\(\)/);
+  assert.match(refreshHistory, /serverIds\.has\(storedConversationId\)/);
+  assert.match(refreshHistory, /void selectServerConversation\(restoreConversationId\)/);
+  assert.match(refreshHistory, /clearActiveConversationId\(\)/);
+  assert.match(selectHistory, /storeActiveConversationId\(conversationId\)/);
+  assert.match(storageRead, /sessionStorage\.getItem/);
+  assert.match(storageRead, /return typeof value === 'string'[\s\S]*?test\(value\)/);
+  assert.match(storageWrite, /sessionStorage\.setItem/);
+  assert.match(storageWrite, /ACTIVE_CONVERSATION_KEY, conversationId/);
+  assert.match(storageClear, /sessionStorage\.removeItem/);
+  assert.match(unauthenticatedTransition, /state\.csrfToken = null/);
+  assert.match(unauthenticatedTransition, /clearActiveConversationId\(\)/);
+  assert.match(authRefresh, /payload\?\.authenticated === true/);
+  assert.match(authRefresh, /clearAuthenticatedState\(/);
+  assert.doesNotMatch(storageWrite, /localStorage/);
+  assert.doesNotMatch(storageWrite, /session_token|csrf|user_id|owner/i);
+  assert.doesNotMatch(storageRead, /csrf|session.token|user_id|owner/i);
+});
+
+test('New Chat cancels reveals and clears the active conversation without creating history', () => {
+  const bindEvents = functionSource('bindEvents');
+  assert.match(bindEvents, /dom\.newSessionBtn\.addEventListener\('click', \(\) => \{[\s\S]*?cancelChatResponseReveal\(\)/);
+  assert.match(bindEvents, /state\.currentSessionId = null;[\s\S]*?state\.conversationId = null;/);
+  assert.match(bindEvents, /state\.historyLoadGeneration \+= 1/);
+  assert.match(bindEvents, /state\.pendingApprovalId = null/);
+  assert.match(bindEvents, /if \(state\.authMode === 'authenticated'\) clearActiveConversationId\(\)/);
+  assert.doesNotMatch(bindEvents.split("dom.newSessionBtn.addEventListener('click', () => {")[1]?.split('\n    });')[0] || '', /apiRequest\(['"]\/api\/chat/);
+});
+
 test('the existing composer still submits once on Enter and preserves Shift+Enter and IME input', () => {
   assert.match(appSource, /event\.key === 'Enter' && !event\.shiftKey && !event\.isComposing/);
   assert.match(appSource, /function beginRequest\(\) \{[\s\S]*?state\.requestInFlight/);

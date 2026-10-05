@@ -68,6 +68,7 @@ _PROVIDER_ENV_REQUIREMENTS = {
 }
 _EXTERNAL_AUTHORIZATION_CAPABILITIES = frozenset({
     "text_generation",
+    "web_search",
     "reasoning",
     "code_generation",
     "summarization",
@@ -137,18 +138,19 @@ _OFFICIAL_VERIFICATION_RECORDS = (
         provider="gemini",
         access_type="official Gemini Developer API",
         free_status=FREE_API,
-        model_scope=(),
-        quota_status=FREE_STATUS_UNKNOWN,
-        payment_requirement="documented Free Tier; Paid Tier requires linked billing and prepaid credits",
+        model_scope=("gemini-3.7-flash",),
+        quota_status=FREE_QUOTA_AVAILABLE,
+        payment_requirement="gemini-3.7-flash Standard input and output are free of charge on the Free Tier; Paid Tier rates apply on paid projects",
         authorization_requirement="separate explicit PARMAR authorization required",
         source_reference=(
             "https://ai.google.dev/gemini-api/docs/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash",
             "https://ai.google.dev/gemini-api/docs/billing",
             "https://ai.google.dev/gemini-api/docs/rate-limits",
             "https://ai.google.dev/gemini-api/terms",
         ),
-        verification_date="2026-10-01",
-        limitations="Official docs say only certain models have free-tier access. Configured model IDs are not mapped to an exact verified free-model allow-list here, and live per-project quota is unknown. Unpaid-tier content/data terms may differ by region.",
+        verification_date="2026-10-05",
+        limitations="Only the exact gemini-3.7-flash model is allow-listed by this record. Use a Google Free Tier project; this record cannot verify project billing tier, live quota, key validity, or reachability. Google states that rate limits and capacity vary and are not guaranteed. Free-tier content terms apply.",
     ),
     ProviderVerificationRecord(
         provider="claude",
@@ -333,7 +335,7 @@ def external_authorization_from_environment(
         return ExternalAuthorization()
 
     allow_single_provider = parse_boolean(EXTERNAL_CHAT_ALLOW_SINGLE_PROVIDER_ENV)
-    external_providers = frozenset(PROVIDER_REGISTRY) - {"local-demo"}
+    external_providers = (frozenset(PROVIDER_REGISTRY) - {"local-demo"}) | {"http-json-search"}
     allowed_providers = parse_allowlist(
         EXTERNAL_CHAT_ALLOWED_PROVIDERS_ENV,
         external_providers,

@@ -1,10 +1,13 @@
+import hmac
 import io
 import json
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+from urllib.request import Request
 
 import pytest
 
+import PARMAR.chat.providers as provider_module
 from PARMAR.chat.context import ChatContext
 from PARMAR.chat.orchestration import AIOrchestrator
 from PARMAR.chat.providers import (
@@ -119,7 +122,7 @@ def test_http_provider_sends_structured_context_and_parses_untrusted_response():
     response = provider.generate("Plan a team lunch.", context=context)
 
     assert captured["method"] == "POST"
-    assert captured["headers"]["Authorization"] == f"Bearer {API_KEY}"
+    assert hmac.compare_digest(captured["headers"]["Authorization"], f"Bearer {API_KEY}")
     assert captured["timeout"] == 7.5
     assert captured["body"] == {
         "model": "test-model",
@@ -197,6 +200,37 @@ def test_http_provider_rejects_unsafe_endpoint_configuration(endpoint):
         HTTPChatProvider(endpoint, "test-model", API_KEY)
 
 
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_http_provider_default_transport_does_not_follow_redirects(monkeypatch, status):
+    handlers = []
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            raise HTTPError(request.full_url, status, "redirect", {}, io.BytesIO(b""))
+
+    def fake_build_opener(handler):
+        handlers.append(handler)
+        return FakeOpener()
+
+    monkeypatch.setattr(provider_module, "build_opener", fake_build_opener)
+    provider = make_provider(None)
+    assert provider._opener is provider_module._open_without_redirects
+
+    with pytest.raises(ProviderRequestError):
+        provider.generate("Question")
+
+    assert len(handlers) == 1
+    request = Request(provider.endpoint)
+    assert handlers[0].redirect_request(
+        request,
+        None,
+        status,
+        "Found",
+        {},
+        "https://redirect.example/collect",
+    ) is None
+
+
 @pytest.mark.parametrize("endpoint", ["http://localhost/chat", "http://127.0.0.1/chat", "http://[::1]/chat"])
 def test_http_provider_allows_loopback_http_endpoint(endpoint):
     provider = HTTPChatProvider(endpoint, "test-model", API_KEY, opener=lambda *_args, **_kwargs: None)
@@ -208,7 +242,11 @@ def test_local_demo_is_default_and_unknown_selection_never_uses_network(monkeypa
     import PARMAR.chat.providers as provider_module
 
     network_calls = []
-    monkeypatch.setattr(provider_module, "urlopen", lambda *args, **kwargs: network_calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        provider_module,
+        "build_opener",
+        lambda *args, **kwargs: network_calls.append((args, kwargs)),
+    )
     assert isinstance(provider_from_environment({}), LocalDemoProvider)
     assert isinstance(provider_from_environment({PROVIDER_ENV: "unknown"}), UnavailableProvider)
     assert isinstance(provider_from_environment({PROVIDER_ENV: "http-json", **BASE_ENV}), HTTPChatProvider)

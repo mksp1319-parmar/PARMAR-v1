@@ -1,5 +1,7 @@
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -9,12 +11,19 @@ from PARMAR.sessions import (
     SESSION_COOKIE_NAME,
     SessionManager,
     SessionPolicy,
+    SessionStorageUnavailable,
+    SQLiteSessionRepository,
     clear_session_cookie_header,
     session_cookie_header,
     session_manager_from_environment,
 )
 
 START = datetime(2026, 10, 3, tzinfo=timezone.utc)
+SESSION_STORE_KEY = b"test-only-session-store-integrity-key"
+
+
+def sqlite_repository(path, integrity_key=SESSION_STORE_KEY):
+    return SQLiteSessionRepository(path, integrity_key=integrity_key)
 
 
 def make_manager(*, idle=10, absolute=30, csrf_secret=b"c" * 32):
@@ -133,12 +142,207 @@ def test_session_timeouts_must_be_explicit_and_valid(monkeypatch):
     with pytest.raises(ValueError):
         session_manager_from_environment({"PARMAR_SESSION_IDLE_SECONDS": "10"})
     with pytest.raises(ValueError):
+        session_manager_from_environment({
+            "PARMAR_SESSION_IDLE_SECONDS": "10",
+            "PARMAR_SESSION_ABSOLUTE_SECONDS": "20",
+        })
+    with pytest.raises(ValueError):
         SessionPolicy(idle_timeout_seconds=0, absolute_timeout_seconds=20)
 
     manager = session_manager_from_environment({
         "PARMAR_SESSION_IDLE_SECONDS": "10",
         "PARMAR_SESSION_ABSOLUTE_SECONDS": "20",
+        "PARMAR_SESSION_STORE_KEY": SESSION_STORE_KEY.decode("ascii"),
     })
     assert manager is not None
     assert manager.policy.idle_timeout_seconds == 10
     assert manager.policy.absolute_timeout_seconds == 20
+
+
+def test_sqlite_session_is_resolved_after_repository_and_manager_restart(tmp_path):
+    database_path = tmp_path / "private" / "sessions.sqlite3"
+    user_id = uuid4()
+    first_repository = sqlite_repository(database_path)
+    first_manager = SessionManager(
+        first_repository,
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    credentials = first_manager.create_authenticated_session(user_id, "trusted-test-auth", now=START)
+    token_hash = sha256(credentials.session_token.encode("ascii")).hexdigest()
+
+    restarted_manager = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    restored = restarted_manager.resolve(
+        credentials.session_token,
+        now=START + timedelta(seconds=1),
+    )
+
+    assert restored is not None
+    assert restored.user_id == user_id
+    assert restored.session_id == credentials.session.session_id
+    assert restored.authentication_source == "trusted-test-auth"
+    assert credentials.session_token.encode("ascii") not in database_path.read_bytes()
+    assert token_hash.encode("ascii") in database_path.read_bytes()
+    assert database_path.stat().st_mode & 0o777 == 0o600
+    assert database_path.parent.stat().st_mode & 0o077 == 0
+    wrong_key_manager = SessionManager(
+        sqlite_repository(database_path, integrity_key=b"x" * 32),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    with pytest.raises(SessionStorageUnavailable):
+        wrong_key_manager.resolve(credentials.session_token, now=START + timedelta(seconds=2))
+
+
+def test_sqlite_session_enforces_idle_and_absolute_expiry_after_restart(tmp_path):
+    database_path = tmp_path / "sessions.sqlite3"
+    manager = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=5, absolute_timeout_seconds=20),
+    )
+    credentials = manager.create_authenticated_session(uuid4(), "trusted-test-auth", now=START)
+
+    idle_restart = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=5, absolute_timeout_seconds=20),
+    )
+    assert idle_restart.resolve(
+        credentials.session_token,
+        now=START + timedelta(seconds=5),
+    ) is None
+    assert idle_restart.repository.get_by_session_id(credentials.session.session_id).status == "EXPIRED"
+
+    absolute_database_path = tmp_path / "absolute.sqlite3"
+    absolute_manager = SessionManager(
+        sqlite_repository(absolute_database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=20),
+    )
+    absolute_credentials = absolute_manager.create_authenticated_session(
+        uuid4(),
+        "trusted-test-auth",
+        now=START,
+    )
+    for elapsed in (9, 18):
+        assert SessionManager(
+            sqlite_repository(absolute_database_path),
+            SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=20),
+        ).resolve(absolute_credentials.session_token, now=START + timedelta(seconds=elapsed)) is not None
+    restarted = SessionManager(
+        sqlite_repository(absolute_database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=20),
+    )
+    assert restarted.resolve(
+        absolute_credentials.session_token,
+        now=START + timedelta(seconds=20),
+    ) is None
+
+
+def test_sqlite_session_rejects_tampered_unknown_and_revoked_tokens_after_restart(tmp_path):
+    database_path = tmp_path / "sessions.sqlite3"
+    manager = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    credentials = manager.create_authenticated_session(uuid4(), "trusted-test-auth", now=START)
+    assert manager.logout(credentials.session_token, now=START + timedelta(seconds=1)) is True
+
+    restarted = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    assert restarted.resolve(credentials.session_token, now=START + timedelta(seconds=2)) is None
+    assert restarted.resolve("A" * 43, now=START + timedelta(seconds=2)) is None
+    assert restarted.resolve("not-a-token", now=START + timedelta(seconds=2)) is None
+
+
+def test_sqlite_session_rotation_survives_restart_and_revokes_old_token(tmp_path):
+    database_path = tmp_path / "sessions.sqlite3"
+    manager = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    credentials = manager.create_authenticated_session(uuid4(), "trusted-test-auth", now=START)
+
+    rotated = manager.rotate(credentials.session_token, now=START + timedelta(seconds=2))
+    assert rotated is not None
+
+    restarted = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    assert restarted.resolve(credentials.session_token, now=START + timedelta(seconds=3)) is None
+    restored_replacement = restarted.resolve(rotated.session_token, now=START + timedelta(seconds=3))
+    assert restored_replacement is not None
+    assert restored_replacement.user_id == credentials.session.user_id
+    assert restored_replacement.absolute_expires_at == credentials.session.absolute_expires_at
+
+
+def test_sqlite_session_storage_fails_closed_for_corrupt_missing_or_incompatible_store(tmp_path):
+    corrupt_path = tmp_path / "corrupt.sqlite3"
+    corrupt_path.write_bytes(b"not sqlite")
+    with pytest.raises(SessionStorageUnavailable):
+        sqlite_repository(corrupt_path).get_by_session_id(uuid4())
+
+    missing_path = tmp_path / "missing.sqlite3"
+    missing_repository = sqlite_repository(missing_path)
+    missing_manager = SessionManager(
+        missing_repository,
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    credentials = missing_manager.create_authenticated_session(uuid4(), "trusted-test-auth", now=START)
+    missing_path.unlink()
+    with pytest.raises(SessionStorageUnavailable):
+        missing_manager.resolve(credentials.session_token, now=START + timedelta(seconds=1))
+    assert not missing_path.exists()
+
+    incompatible_path = tmp_path / "incompatible.sqlite3"
+    sqlite_repository(incompatible_path).get_by_session_id(uuid4())
+    with sqlite3.connect(incompatible_path) as connection:
+        connection.execute("PRAGMA user_version = 999")
+    with pytest.raises(SessionStorageUnavailable):
+        sqlite_repository(incompatible_path).get_by_session_id(uuid4())
+
+
+def test_sqlite_session_rejects_malformed_persisted_identity_after_tampering(tmp_path):
+    database_path = tmp_path / "tampered.sqlite3"
+    manager = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    credentials = manager.create_authenticated_session(uuid4(), "trusted-test-auth", now=START)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE sessions SET user_id = ? WHERE session_id = ?",
+            (str(uuid4()), str(credentials.session.session_id)),
+        )
+
+    restarted = SessionManager(
+        sqlite_repository(database_path),
+        SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30),
+    )
+    with pytest.raises(SessionStorageUnavailable):
+        restarted.resolve(credentials.session_token, now=START + timedelta(seconds=1))
+
+
+def test_session_manager_configuration_selects_persistent_repository(tmp_path):
+    database_path = tmp_path / "configured-sessions.sqlite3"
+    manager = session_manager_from_environment({
+        "PARMAR_SESSION_IDLE_SECONDS": "10",
+        "PARMAR_SESSION_ABSOLUTE_SECONDS": "20",
+        "PARMAR_SESSION_DB_PATH": str(database_path),
+        "PARMAR_SESSION_STORE_KEY": SESSION_STORE_KEY.decode("ascii"),
+    })
+
+    assert manager is not None
+    assert isinstance(manager.repository, SQLiteSessionRepository)
+    assert manager.repository.database_path == Path(database_path)
+
+    with pytest.raises(ValueError):
+        session_manager_from_environment({
+            "PARMAR_SESSION_IDLE_SECONDS": "10",
+            "PARMAR_SESSION_ABSOLUTE_SECONDS": "20",
+            "PARMAR_SESSION_DB_PATH": "",
+            "PARMAR_SESSION_STORE_KEY": SESSION_STORE_KEY.decode("ascii"),
+        })

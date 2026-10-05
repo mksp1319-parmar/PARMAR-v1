@@ -57,12 +57,16 @@ def test_generic_http_and_unconfigured_local_runtime_are_unknown_and_blocked():
     assert policy.record_for("http-json").free_status == UNKNOWN
 
 
-def test_gemini_documented_free_tier_does_not_authorize_unknown_model_or_quota():
+def test_gemini_free_tier_allows_only_the_officially_priced_model():
     policy = ProviderFreePolicy()
 
     assert policy.record_for("gemini").free_status == FREE_API
-    assert policy.record_for("gemini").quota_status == FREE_STATUS_UNKNOWN
+    assert policy.record_for("gemini").model_scope == ("gemini-3.7-flash",)
+    assert policy.record_for("gemini").quota_status == FREE_QUOTA_AVAILABLE
+    assert policy.evaluate("gemini", "gemini-3.7-flash").outcome == "FREE_ALLOWED"
+    assert policy.evaluate("gemini", "gemini-3.7-flash").eligible is True
     assert policy.evaluate("gemini", "unmapped-gemini-model").outcome == "UNKNOWN_PRICING_BLOCKED"
+    assert policy.evaluate("gemini", "gemini-2.5-flash").outcome == "UNKNOWN_PRICING_BLOCKED"
 
 
 def test_verified_free_api_requires_exact_model_scope_and_available_quota():

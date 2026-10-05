@@ -23,6 +23,7 @@ const {
   ONBOARDING_STATES,
   VOKKIIdentityOnboarding,
 } = require('../interface/static/voki-identity.js');
+require('../interface/static/chat-presentation.js');
 
 class Element {
   constructor() {
@@ -35,6 +36,8 @@ class Element {
     this.buttons = [];
     this.attributes = {};
     this.focusCount = 0;
+    this.children = [];
+    this.checked = false;
   }
 
   addEventListener(eventName, callback) {
@@ -51,6 +54,19 @@ class Element {
 
   setAttribute(name, value) {
     this.attributes[name] = value;
+  }
+
+  append(...children) {
+    this.children.push(...children);
+  }
+
+  appendChild(child) {
+    this.children.push(child);
+    return child;
+  }
+
+  replaceChildren(...children) {
+    this.children = children;
   }
 
   removeAttribute(name) {
@@ -77,6 +93,10 @@ function makeInterface(request, speechAdapterFactory) {
     '[data-voki-presence-label]': new Element(),
     '[data-voki-transport]': new Element(),
     '[data-voki-output]': new Element(),
+    '[data-voki-history]': new Element(),
+    '[data-voki-history-messages]': new Element(),
+    '[data-voki-research-results]': new Element(),
+    '[data-voki-research]': new Element(),
     '[data-voki-speech-toggle]': new Element(),
     '[data-voki-speech-status]': new Element(),
     '[data-voki-stop-speech]': new Element(),
@@ -193,14 +213,22 @@ function makeIdentityHarness(options = {}) {
     },
   };
   const store = {
-    async get() { return calls.saved ? { blob: calls.saved } : null; },
+    scope: 'a'.repeat(64),
+    records: new Map(),
+    setScope(scope) { this.scope = scope; },
+    async get() { return this.records.has(this.scope) ? { blob: this.records.get(this.scope) } : null; },
     async save(blob) {
       calls.saves += 1;
       if (options.saveError) throw new Error('storage unavailable');
       if (options.savePromise) await options.savePromise;
       calls.saved = blob;
+      this.records.set(this.scope, blob);
     },
-    async delete() { calls.deleted += 1; calls.saved = null; },
+    async delete() {
+      calls.deleted += 1;
+      this.records.delete(this.scope);
+      calls.saved = null;
+    },
   };
   const changes = [];
   let nextUrl = 0;
@@ -355,6 +383,109 @@ test('camera permission is requested only from the explicit enable action and ne
   assert.deepEqual(calls.media, [{ video: true, audio: false }]);
   assert.equal(onboarding.state, 'CAPTURE_READY');
   assert.equal(onboarding.video.srcObject !== null, true);
+});
+
+test('local identity storage is namespaced by opaque authenticated-session scope', () => {
+  const { LocalVOKKIIdentityStore } = require('../interface/static/voki-identity.js');
+  const store = new LocalVOKKIIdentityStore(null);
+  const firstScope = 'a'.repeat(64);
+  const secondScope = 'b'.repeat(64);
+  store.setScope(firstScope);
+  assert.equal(store.scopedKey(), `approved-voki-reference:${firstScope}`);
+  store.setScope(secondScope);
+  assert.equal(store.scopedKey(), `approved-voki-reference:${secondScope}`);
+  store.setScope(null);
+  assert.throws(() => store.scopedKey(), /authenticated session/);
+});
+
+test('switching authenticated identity scope never displays another session local reference', async () => {
+  const { onboarding, calls, renderer } = makeIdentityHarness();
+  onboarding.start();
+  await onboarding.requestCamera();
+  await onboarding.capture();
+  assert.equal(await onboarding.approve(), true);
+  const firstScope = onboarding.store.scope;
+  assert.equal(renderer.identity.kind, 'approved-reference');
+
+  await onboarding.setStorageScope('b'.repeat(64));
+  assert.equal(onboarding.store.scope, 'b'.repeat(64));
+  assert.equal(renderer.identity, DEFAULT_VOKKI_IDENTITY);
+  assert.equal(calls.saved instanceof Blob, true);
+  await onboarding.setStorageScope(firstScope);
+  assert.equal(renderer.identity.kind, 'approved-reference');
+});
+
+test('anonymous identity setup fails closed without requesting camera permission', async () => {
+  const { onboarding, calls } = makeIdentityHarness();
+  await onboarding.setStorageScope(null);
+  assert.equal(onboarding.start(), false);
+  assert.equal(onboarding.state, 'IDLE');
+  assert.deepEqual(calls.media, []);
+});
+
+test('authenticated VOKKI history restores persisted messages and sources without speaking or fetching research', async () => {
+  const priorDocument = globalThis.document;
+  globalThis.document = { createElement: () => new Element() };
+  try {
+    const history = {
+      conversation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      messages: [
+        { role: 'user', content: 'Research the subject.' },
+        {
+          role: 'assistant',
+          content: 'A released response.',
+          research: {
+            contract_version: '1.0',
+            status: 'RESULTS',
+            reason_code: null,
+            sources: [{
+              title: 'Persisted source',
+              url: 'https://example.org/research',
+              domain: 'example.org',
+              provider_id: 'http-json-search',
+              source_id: 'source-1',
+              snippet: 'Persisted excerpt.',
+              metadata: {},
+            }],
+          },
+        },
+      ],
+    };
+    const calls = [];
+    const harness = makeSpeechHarness();
+    const { instance, root } = makeInterface(async (url) => {
+      calls.push(url);
+      return apiResponse(history);
+    }, ({ getLanguage, onStateChange }) => new VOKKISpeechAdapter({
+      synthesis: harness.synthesis,
+      Utterance: class FakeUtterance { constructor(text) { this.text = text; } },
+      getLanguage,
+      onStateChange,
+    }));
+    instance.authenticated = true;
+    instance.speech.setEnabled(true);
+
+    assert.equal(await instance.loadConversation(history.conversation_id), true);
+    const historyMessages = root.elements['[data-voki-history-messages]'];
+    assert.equal(historyMessages.children.length, 2);
+    assert.equal(historyMessages.children[1].children[1].textContent, 'A released response.');
+    assert.equal(historyMessages.children[1].children[2].children[2].children[0].children[4].href, 'https://example.org/research');
+    assert.deepEqual(calls, [`/api/conversations/${history.conversation_id}`]);
+    assert.equal(harness.synthesis.spoken.length, 0);
+    assert.equal(root.elements['[data-voki-lifecycle]'].dataset.lifecycle, 'UNKNOWN');
+  } finally {
+    if (priorDocument === undefined) delete globalThis.document;
+    else globalThis.document = priorDocument;
+  }
+});
+
+test('home VOKKI presence opens the real interface and no longer runs an acknowledgment-only click path', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
+  const homeButton = html.match(/<button class="parmar-core[^>]+id="parmar-core"[^>]*>/)?.[0] || '';
+  assert.match(homeButton, /aria-label="Open VOKKI interaction"/);
+  assert.match(app, /dom\.parmarCore\?\.addEventListener\('click', \(\) => \{\s*selectSection\('voki'\);\s*dom\.vokiInput\?\.focus/);
+  assert.doesNotMatch(app, /classList\.add\('acknowledged'\)/);
 });
 
 test('repeated permission actions cannot open untracked concurrent camera streams', async () => {
@@ -776,7 +907,7 @@ test('VOKKI is an independent interface and Chat remains a separate section', ()
   assert.match(app, /selectSection\(button\.dataset\.section, button\.dataset\.navKey \|\| button\.dataset\.section\)/);
   assert.match(chatSection, /class="composer-tool composer-voki"[^>]*data-section="voki"/);
   assert.doesNotMatch(chatSection, /chat-voki|voki-voice-toggle|voki-visibility-toggle/);
-  assert.match(vokiSection, /data-voki-speech-toggle/);
+  assert.match(html, /data-voki-speech-toggle/);
   assert.doesNotMatch(chatSection, /data-voki-speech-toggle/);
 });
 
@@ -812,13 +943,78 @@ test('VOKKI sends through the chat API and releases only a passing response', as
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/chat');
-  assert.equal(JSON.parse(calls[0].options.body).message, 'Consider this request');
+  const request = JSON.parse(calls[0].options.body);
+  assert.equal(request.message, 'Consider this request');
+  assert.equal(Object.hasOwn(request.context || {}, 'memory'), false);
   assert.equal(root.elements['[data-voki-lifecycle]'].dataset.lifecycle, 'RELEASED');
   assert.equal(root.elements['[data-voki-presence]'].dataset.presenceState, 'completed');
   assert.equal(root.dataset.presenceState, 'completed');
   assert.equal(root.dataset.responseSafety, 'PASS');
   assert.equal(root.dataset.responseDisposition, 'RELEASED');
   assert.equal(root.elements['[data-voki-output]'].textContent, 'Validated response.');
+});
+
+test('VOKKI requests research explicitly and displays sources only for a released response', async () => {
+  const priorDocument = globalThis.document;
+  globalThis.document = { createElement: () => new Element() };
+  try {
+    const calls = [];
+    const { instance, root } = makeInterface(async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      return apiResponse(releasedResponse({
+        research: {
+          contract_version: '1.0',
+          status: 'RESULTS',
+          sources: [{
+            title: 'A real source',
+            url: 'https://example.org/article',
+            domain: 'example.org',
+            provider_id: 'http-json-search',
+            source_id: 'result-1',
+            snippet: 'Provider-returned excerpt.',
+            metadata: { author: 'Example Institute' },
+          }],
+          reason_code: null,
+        },
+      }));
+    });
+    root.elements['[data-voki-research]'].checked = true;
+    instance.input.value = 'Research this question.';
+    await instance.submitRequest();
+
+    assert.equal(calls[0].research, true);
+    const results = root.elements['[data-voki-research-results]'];
+    assert.equal(results.hidden, false);
+    assert.equal(results.children[0].className, 'message-research');
+    assert.equal(results.children[0].children[2].children[0].children[4].href, 'https://example.org/article');
+
+    instance.renderResult(releasedResponse({
+      research: {
+        contract_version: '1.0',
+        status: 'RESULTS',
+        sources: [{
+          title: 'Withheld source',
+          url: 'https://example.org/withheld',
+          domain: 'example.org',
+          provider_id: 'http-json-search',
+          source_id: 'result-2',
+          snippet: null,
+          metadata: {},
+        }],
+        reason_code: null,
+      },
+      voki_contract: contract({
+        lifecycle: { state: 'WITHHELD' },
+        response_safety: { status: 'BLOCK' },
+        response_disposition: 'WITHHELD',
+      }),
+    }));
+    assert.equal(results.hidden, true);
+    assert.deepEqual(results.children, []);
+  } finally {
+    if (priorDocument === undefined) delete globalThis.document;
+    else globalThis.document = priorDocument;
+  }
 });
 
 test('a non-PASS provider response is withheld even if the response includes candidate text', async () => {
@@ -942,6 +1138,33 @@ test('a canonical pending approval is submitted once and its result does not loo
   assert.equal(calls[1].body.approval_id, 'server-issued-review-token');
   assert.equal(root.elements['[data-voki-approval]'].hidden, true);
   assert.equal(root.elements['[data-voki-output]'].textContent, 'Released after approval.');
+});
+
+test('authentication boundary clears VOKKI conversation and pending approval state', () => {
+  const originalAddEventListener = globalThis.addEventListener;
+  let authenticationChanged;
+  globalThis.addEventListener = (eventName, callback) => {
+    if (eventName === 'parmar-auth-state-changed') authenticationChanged = callback;
+  };
+  try {
+    const { instance, root } = makeInterface(async () => apiResponse(releasedResponse()));
+    instance.approvalId = 'opaque-pending-approval';
+    instance.conversationId = 'server-conversation-selector';
+    instance.recentMessages = [{ role: 'user', content: 'private prior turn' }];
+    root.elements['[data-voki-approval]'].hidden = false;
+
+    authenticationChanged();
+
+    assert.equal(instance.approvalId, null);
+    assert.equal(instance.conversationId, null);
+    assert.deepEqual(instance.recentMessages, []);
+    assert.equal(root.elements['[data-voki-approval]'].hidden, true);
+    assert.equal(root.dataset.presenceState, 'unknown');
+    assert.equal(root.elements['[data-voki-output]'].textContent, 'VOKKI has no active authenticated conversation.');
+  } finally {
+    if (originalAddEventListener) globalThis.addEventListener = originalAddEventListener;
+    else delete globalThis.addEventListener;
+  }
 });
 
 test('approval controls are hidden when no canonical server record is available', async () => {

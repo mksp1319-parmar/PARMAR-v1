@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import json
-from typing import Any
+from typing import Any, Callable
 
 from PARMAR.audit.decision_logs import DecisionLogManager
 from PARMAR.chat.context import ChatContext, sanitize_provider_text, sanitize_recent_messages
@@ -24,6 +24,9 @@ from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.task_routing import infer_task_capability
 from PARMAR.interface.voki_contract import attach_voki_contract
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
+from PARMAR.memories import MemoryStorageUnavailable
+from PARMAR.research.models import ResearchResult, ResearchStatus
+from PARMAR.research.service import SearchService, research_prompt_section
 from PARMAR.state import LifecycleState
 
 _RESPONSE_STATUS = {
@@ -44,6 +47,7 @@ class ChatService:
         router: ChatRouter | None = None,
         orchestrator: AIOrchestrator | None = None,
         external_authorization: ExternalAuthorization | None = None,
+        research_service: SearchService | None = None,
     ):
         self.router = router or (orchestrator.router if orchestrator else ChatRouter())
         self.orchestrator = orchestrator or AIOrchestrator(
@@ -52,6 +56,7 @@ class ChatService:
         )
         if orchestrator is not None and external_authorization is not None:
             self.orchestrator.external_authorization = external_authorization
+        self.research_service = research_service or SearchService()
         self.response_safety_validator = ResponseSafetyValidator()
         self.logger = DecisionLogManager()
 
@@ -237,6 +242,8 @@ class ChatService:
         selected_provider: str | None = None,
         orchestration_mode: str = SINGLE_PROVIDER,
         recent_messages: object = None,
+        research: bool = False,
+        memory_retriever: Callable[[], list[str]] | None = None,
     ) -> dict[str, Any]:
         """Continue a consumed server-side approval using its original reviewed request."""
         analysis = approved_response.get("analysis")
@@ -256,6 +263,8 @@ class ChatService:
             selected_provider=selected_provider,
             orchestration_mode=orchestration_mode,
             recent_messages=recent_messages,
+            research=research,
+            memory_retriever=memory_retriever,
             _approved_review=(review, dashboard, summary),
         )
 
@@ -267,10 +276,14 @@ class ChatService:
         orchestration_mode: str = SINGLE_PROVIDER,
         *,
         recent_messages: object = None,
+        research: bool = False,
+        memory_retriever: Callable[[], list[str]] | None = None,
         _approved_review: tuple[dict[str, Any], Any, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if orchestration_mode not in {SINGLE_PROVIDER, VERIFIED_MULTI_MODEL}:
             raise ValueError("Unsupported orchestration mode.")
+        if not isinstance(research, bool):
+            raise ValueError("Research mode must be a boolean.")
         if _approved_review is None:
             analysis, dashboard, _summary = PARMARUIAdapter.analyze_request_with_dashboard(prompt)
         else:
@@ -309,6 +322,11 @@ class ChatService:
                 "request_safety": self._request_safety(public_analysis),
                 "response_safety": self._not_checked("NO_OUTPUT").public_payload(),
             }
+            if research:
+                response["research"] = ResearchResult(
+                    ResearchStatus.BLOCKED,
+                    reason_code="REQUEST_REQUIRES_REVIEW",
+                ).public_payload()
             attach_voki_contract(
                 response,
                 provider_status="NOT_STARTED",
@@ -324,6 +342,11 @@ class ChatService:
                 "PARMAR could not establish an authoritative request review. No provider was called.",
             )
             response["provider_status"] = "NOT_STARTED"
+            if research:
+                response["research"] = ResearchResult(
+                    ResearchStatus.BLOCKED,
+                    reason_code="REQUEST_REVIEW_UNAVAILABLE",
+                ).public_payload()
             attach_voki_contract(
                 response,
                 provider_status="NOT_STARTED",
@@ -334,11 +357,10 @@ class ChatService:
 
         decision = analysis.get("decision", {})
         enforcement = analysis.get("enforcement", {})
-        dashboard.state_machine.transition(LifecycleState.PROVIDER)
         provider_context = ChatContext(
             language=context.language if context else "en",
             persona=context.persona if context else "neutral",
-            memory=context.memory if context else [],
+            memory=context.memory if context and memory_retriever is None else [],
             policy_rules=list(PARMARUIAdapter.POLICY_RULES),
             safety_status=analysis.get("status"),
             risk_level=analysis.get("risk", {}).get("risk_level"),
@@ -350,6 +372,97 @@ class ChatService:
                 "execution_allowed": enforcement.get("execution_allowed") is True,
             },
         )
+
+        research_result = None
+        if research:
+            action_boundary = analysis.get("action_boundary", {})
+            if (
+                enforcement.get("status") != "READY_FOR_ACTION"
+                or enforcement.get("execution_allowed") is not True
+                or not isinstance(action_boundary, dict)
+                or action_boundary.get("status") != "ACTION_BOUNDARY_OK"
+                or action_boundary.get("execution_allowed") is not True
+            ):
+                research_result = ResearchResult(
+                    ResearchStatus.BLOCKED,
+                    reason_code="REQUEST_NOT_AUTHORIZED_FOR_RESEARCH",
+                )
+            else:
+                research_result = self.research_service.search(
+                    prompt,
+                    authorization=self.orchestrator.external_authorization,
+                )
+            if research_result.status in {
+                ResearchStatus.BLOCKED,
+                ResearchStatus.PROVIDER_UNAVAILABLE,
+                ResearchStatus.PROVIDER_FAILED,
+                ResearchStatus.INVALID_RESULTS,
+            }:
+                status = f"RESEARCH_{research_result.status.value}"
+                messages = {
+                    ResearchStatus.BLOCKED: "PARMAR did not authorize external research for this request.",
+                    ResearchStatus.PROVIDER_UNAVAILABLE: "No configured search provider is available; PARMAR did not generate a research answer.",
+                    ResearchStatus.PROVIDER_FAILED: "The configured search provider failed; PARMAR did not generate a research answer.",
+                    ResearchStatus.INVALID_RESULTS: "The configured search provider returned invalid results; PARMAR withheld the research answer.",
+                }
+                response = {
+                    "safe": None,
+                    "status": status,
+                    "message": messages[research_result.status],
+                    "provider": "not_started",
+                    "provider_status": "NOT_STARTED",
+                    "provider_error": False,
+                    "response_disposition": "NOT_APPLICABLE",
+                    "analysis": public_analysis,
+                    "request_safety": self._request_safety(public_analysis),
+                    "response_safety": self._not_checked("NO_OUTPUT").public_payload(),
+                    "research": research_result.public_payload(),
+                    "lifecycle": PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot),
+                }
+                attach_voki_contract(
+                    response,
+                    provider_status="NOT_STARTED",
+                    response_disposition="NOT_APPLICABLE",
+                    source="ChatService.respond",
+                )
+                return response
+            provider_prompt = (
+                provider_prompt + "\n\n" + research_prompt_section(research_result)
+            )
+
+        if memory_retriever is not None:
+            action_boundary = analysis.get("action_boundary", {})
+            if (
+                enforcement.get("status") == "READY_FOR_ACTION"
+                and enforcement.get("execution_allowed") is True
+                and isinstance(action_boundary, dict)
+                and action_boundary.get("status") == "ACTION_BOUNDARY_OK"
+                and action_boundary.get("execution_allowed") is True
+            ):
+                try:
+                    provider_context.memory = memory_retriever()
+                except MemoryStorageUnavailable:
+                    response = {
+                        "safe": None,
+                        "status": "MEMORY_STORAGE_UNAVAILABLE",
+                        "message": "Durable memory storage is unavailable. PARMAR did not call a provider.",
+                        "provider": "not_started",
+                        "provider_status": "NOT_STARTED",
+                        "provider_error": False,
+                        "response_disposition": "NOT_APPLICABLE",
+                        "analysis": public_analysis,
+                        "request_safety": self._request_safety(public_analysis),
+                        "response_safety": self._not_checked("NO_OUTPUT").public_payload(),
+                    }
+                    attach_voki_contract(
+                        response,
+                        provider_status="NOT_STARTED",
+                        response_disposition="NOT_APPLICABLE",
+                        source="ChatService.respond",
+                    )
+                    return response
+
+        dashboard.state_machine.transition(LifecycleState.PROVIDER)
 
         if orchestration_mode == VERIFIED_MULTI_MODEL:
             orchestration = self.orchestrator.execute_verified_multi_model(
@@ -423,6 +536,8 @@ class ChatService:
                 ),
                 "lifecycle": PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot),
             }
+            if research_result is not None:
+                response["research"] = research_result.public_payload()
             if orchestration.outcome in {"ALL_FAILED", "VALIDATION_FAILED", "EXECUTION_DISABLED", "EXECUTION_REJECTED"}:
                 response["provider_error"] = True
             attach_voki_contract(
@@ -454,6 +569,8 @@ class ChatService:
             response["provider"] = self._provider_label(orchestration.selected_provider)
             response["orchestration"] = self._public_orchestration(orchestration)
             response["lifecycle"] = PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot)
+            if research_result is not None:
+                response["research"] = research_result.public_payload()
             attach_voki_contract(
                 response,
                 provider_status="FAILED",
@@ -489,6 +606,8 @@ class ChatService:
                 candidate["output"] = None
             response["orchestration"] = orchestration_payload
             response["lifecycle"] = PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot)
+            if research_result is not None:
+                response["research"] = research_result.public_payload()
             attach_voki_contract(
                 response,
                 provider_status="FAILED",
@@ -525,6 +644,8 @@ class ChatService:
             "orchestration": self._public_orchestration(orchestration, [response_safety]),
             "lifecycle": PARMARUIAdapter._lifecycle_payload(dashboard.lifecycle_snapshot),
         }
+        if research_result is not None:
+            response["research"] = research_result.public_payload()
         attach_voki_contract(
             response,
             provider_status="COMPLETED",

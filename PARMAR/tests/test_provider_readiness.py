@@ -61,7 +61,7 @@ def test_external_provider_missing_credentials_is_not_configured():
             "PARMAR_OPENAI_API_KEY": "openai-test-secret",
         }),
         ("gemini", {
-            "PARMAR_GEMINI_MODEL": "gemini-model",
+            "PARMAR_GEMINI_MODEL": "gemini-3.7-flash",
             "PARMAR_GEMINI_API_KEY": "gemini-test-secret",
         }),
         ("claude", {
@@ -99,6 +99,75 @@ def test_configured_external_provider_remains_unauthorized_by_default():
     assert openai["authorized"] is False
     assert openai["single_provider_eligible"] is False
     assert "readiness-test-secret" not in repr(result)
+
+
+def test_gemini_free_tier_readiness_keeps_configuration_authorization_and_reachability_distinct():
+    environment = {
+        PROVIDER_ENV: "gemini",
+        "PARMAR_GEMINI_MODEL": "gemini-3.7-flash",
+        "PARMAR_GEMINI_API_KEY": "gemini-test-secret",
+    }
+    denied = ProviderConfigurationRegistry.discover(environ=environment).public_payload()
+    denied_gemini = next(item for item in denied["providers"] if item["id"] == "gemini")
+
+    assert denied_gemini["configuration_status"] == "CONFIGURED"
+    assert denied_gemini["free_policy_outcome"] == "FREE_ALLOWED"
+    assert denied_gemini["authorized"] is False
+    assert denied_gemini["authorization_status"] == "EXTERNAL_AUTH_REQUIRED"
+    assert denied_gemini["single_provider_eligible"] is False
+    assert denied["reachability"] == "NOT_CHECKED"
+
+    authorization = ExternalAuthorization(
+        enabled=True,
+        allowed_providers=frozenset({"gemini"}),
+        allowed_capabilities=frozenset({"text_generation"}),
+        allow_single_provider=True,
+    )
+    ready = ProviderConfigurationRegistry.discover(
+        environ=environment,
+        authorization=authorization,
+    ).public_payload()
+    ready_gemini = next(item for item in ready["providers"] if item["id"] == "gemini")
+
+    assert ready_gemini["model_id"] == "gemini-3.7-flash"
+    assert ready_gemini["free_status"] == "FREE_API"
+    assert ready_gemini["free_policy_outcome"] == "FREE_ALLOWED"
+    assert ready_gemini["authorization_status"] == "EXTERNAL_AUTHORIZED"
+    assert ready_gemini["single_provider_eligible"] is True
+    assert ready_gemini["readiness"] == "READY_FOR_TESTING"
+    assert ready["reachability"] == "NOT_CHECKED"
+    assert "gemini-test-secret" not in repr(ready)
+
+
+def test_gemini_readiness_keeps_missing_key_and_unknown_model_blocked():
+    missing_key = ProviderConfigurationRegistry.discover(environ={
+        PROVIDER_ENV: "gemini",
+        "PARMAR_GEMINI_MODEL": "gemini-3.7-flash",
+    }).public_payload()
+    missing_key_entry = next(item for item in missing_key["providers"] if item["id"] == "gemini")
+
+    assert missing_key_entry["configuration_status"] == "NOT_CONFIGURED"
+    assert missing_key_entry["credential_configured"] is False
+    assert missing_key_entry["single_provider_eligible"] is False
+
+    unknown_model = ProviderConfigurationRegistry.discover(
+        environ={
+            PROVIDER_ENV: "gemini",
+            "PARMAR_GEMINI_MODEL": "gemini-unverified-model",
+            "PARMAR_GEMINI_API_KEY": "gemini-test-secret",
+        },
+        authorization=ExternalAuthorization(
+            enabled=True,
+            allowed_providers=frozenset({"gemini"}),
+            allowed_capabilities=frozenset({"text_generation"}),
+            allow_single_provider=True,
+        ),
+    ).public_payload()
+    unknown_entry = next(item for item in unknown_model["providers"] if item["id"] == "gemini")
+
+    assert unknown_entry["configuration_status"] == "CONFIGURED"
+    assert unknown_entry["free_policy_outcome"] == "UNKNOWN_PRICING_BLOCKED"
+    assert unknown_entry["single_provider_eligible"] is False
 
 
 def test_explicit_authorization_enables_only_allow_listed_provider_and_capability():

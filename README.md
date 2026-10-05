@@ -82,7 +82,7 @@ Configuration variables:
 | `gemini` | `PARMAR_GEMINI_MODEL`, `PARMAR_GEMINI_API_KEY` | `PARMAR_GEMINI_ENDPOINT` defaults to Google's `v1beta` API base |
 | `claude` | `PARMAR_CLAUDE_MODEL`, `PARMAR_CLAUDE_API_KEY` | `PARMAR_CLAUDE_ENDPOINT` defaults to `https://api.anthropic.com/v1/messages` |
 
-`PARMAR_CHAT_TIMEOUT_SECONDS` configures a shared request timeout (default 30, maximum 120). Vendor adapters use provider-specific authentication headers. Credentials are read only from environment variables; they are not put in prompts, `ChatContext`, logs, or API responses. External access requires the user's own provider credentials and may incur provider charges.
+`PARMAR_CHAT_TIMEOUT_SECONDS` configures a shared request timeout (default 30, maximum 120). Vendor adapters use provider-specific authentication headers. Credentials are read only from environment variables; they are not put in prompts, `ChatContext`, logs, or API responses. The official Free Tier model allow-list includes only Gemini `gemini-3.7-flash`; use an API key from a Free Tier project, since this application cannot inspect the provider project's billing tier or remaining quota. Other external provider access requires the user's own provider credentials and may incur provider charges.
 
 `GET /api/providers` returns allow-listed configuration metadata only: provider ID/type, safe model ID where possible, capability/modality metadata, whether required configuration is present, credential-presence boolean, authorization status, and orchestration eligibility. It never returns endpoint values, credentials, headers, or environment values. `NOT_CHECKED` reachability means no ping, DNS lookup, or provider request was made. “Configured” does not mean reachable.
 
@@ -126,4 +126,3 @@ Simulated:
 - local AI demo provider
 - UI scenarios
 - VOKI presentation state
-

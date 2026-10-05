@@ -1,3 +1,4 @@
+import hmac
 import io
 import json
 from urllib.error import HTTPError
@@ -42,13 +43,13 @@ CASES = {
     "gemini": {
         "adapter": GeminiChatProvider,
         "environment": {
-            "PARMAR_GEMINI_MODEL": "gemini-test-model",
+            "PARMAR_GEMINI_MODEL": "gemini-3.7-flash",
             "PARMAR_GEMINI_API_KEY": "gemini-test-secret",
         },
-        "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent",
         "credential_header": "x-goog-api-key",
         "credential_value": "gemini-test-secret",
-        "model": "gemini-test-model",
+        "model": "gemini-3.7-flash",
         "response": {"candidates": [{"content": {"parts": [{"text": "Gemini reviewed."}]}}]},
         "content": "Gemini reviewed.",
     },
@@ -151,7 +152,10 @@ def test_vendor_request_auth_context_and_response(name):
     ))
 
     assert captured["url"] == case["endpoint"]
-    assert captured["headers"][case["credential_header"]] == case["credential_value"]
+    assert hmac.compare_digest(
+        captured["headers"][case["credential_header"]],
+        case["credential_value"],
+    )
     assert captured["headers"]["content-type"] == "application/json"
     if name == "claude":
         assert captured["headers"]["anthropic-version"] == "2023-06-01"
@@ -184,6 +188,41 @@ def test_vendor_request_auth_context_and_response(name):
     assert response.safe is False
     assert response.status == "UNTRUSTED"
     assert case["environment"][f"PARMAR_{name.upper()}_API_KEY"] not in repr(response)
+
+
+def test_free_tier_gemini_uses_default_policy_and_existing_release_gate():
+    case = CASES["gemini"]
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request)
+        return FakeResponse(json.dumps(case["response"]).encode())
+
+    authorization = ExternalAuthorization(
+        enabled=True,
+        allowed_providers=frozenset({"gemini"}),
+        allowed_capabilities=frozenset({"text_generation"}),
+        allow_single_provider=True,
+    )
+    service = ChatService(
+        router=ChatRouter(provider=make_provider("gemini", opener)),
+        external_authorization=authorization,
+    )
+
+    released = service.respond("Plan a team lunch.")
+
+    assert len(calls) == 1
+    assert released["provider"] == "gemini"
+    assert released["response_safety"]["status"] == "PASS"
+    assert released["response_disposition"] == "RELEASED"
+    assert released["voki_contract"]["provider"]["status"] == "COMPLETED"
+    assert released["voki_contract"]["response_disposition"] == "RELEASED"
+    assert case["environment"]["PARMAR_GEMINI_API_KEY"] not in repr(released)
+
+    approval = service.respond("Transfer $500 from the department budget to buy a laptop.")
+
+    assert approval["status"] == "APPROVAL_REQUIRED"
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -278,7 +317,7 @@ def test_registry_contains_only_implemented_providers_and_local_demo():
     assert provider_from_environment({PROVIDER_ENV: ""}).name == "local-demo"
 
 
-@pytest.mark.parametrize("name", CASES)
+@pytest.mark.parametrize("name", ["openai", "claude"])
 def test_paid_vendor_is_not_called_by_chat_service(name):
     case = CASES[name]
     calls = []
@@ -327,7 +366,7 @@ def test_selected_vendor_configuration_failure_is_safe_at_chat_service_boundary(
     assert "secret" not in repr(response).lower()
 
 
-@pytest.mark.parametrize("name", CASES)
+@pytest.mark.parametrize("name", ["openai", "claude"])
 def test_paid_vendor_cannot_be_activated_by_external_authorization_alone(name):
     secret = CASES[name]["environment"][f"PARMAR_{name.upper()}_API_KEY"]
 
@@ -343,7 +382,7 @@ def test_paid_vendor_cannot_be_activated_by_external_authorization_alone(name):
     assert secret not in repr(response)
 
 
-@pytest.mark.parametrize("name", CASES)
+@pytest.mark.parametrize("name", ["openai", "claude"])
 def test_paid_vendor_response_is_not_requested_or_mislabeled_safe(name):
     secret = CASES[name]["environment"][f"PARMAR_{name.upper()}_API_KEY"]
     responses = {
