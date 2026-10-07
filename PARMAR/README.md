@@ -59,7 +59,7 @@ What it does:
 
 What it does not do:
 - it does not read real private messages, photos, contacts, or chat content
-- it does not access microphones, cameras, or location data without explicit permission and a future feature that requires it
+- it does not access microphones, cameras, or location data without explicit permission and a feature that requires it; VOKKI voice input, when supported, starts only after a Talk press and uses browser-enforced on-device speech recognition
 - it does not attempt to bypass device, OS, browser, or app security controls
 - it does not run hidden background monitoring
 
@@ -145,4 +145,4 @@ The request lifecycle reaches `ENFORCEMENT_ALLOWED` only when the authoritative 
 
 Both `/api/analyze` and `/api/chat` create pending approvals through the same server-side store when an authenticated session may create one. Decisions are bound to the original server-held review and owner/session, expire, are one-use, and rerun `CentralEnforcementGate`; approval never bypasses enforcement or triggers real-world execution.
 
-Browser interaction and speech remain client-only: HTTP waiting, text-input focus, CSS animation, and browser speech do not alter the backend lifecycle. Browser speech tracks `IDLE`, `QUEUED`, `SPEAKING`, `ENDED`, `ERROR`, and `CANCELLED`; `SPEAKING` is set only by actual browser speech-start activity. Voice uses browser speech synthesis only; there is no microphone capture, speech-recognition provider, or generated voice service. Genuine VOKKI volume control is not supported and no volume control is represented as available.
+Browser waiting and speech do not alter the backend lifecycle. VOKKI speech output uses browser speech synthesis and speaks only contract-confirmed released responses. Voice input uses the browser Web Speech API only when on-device recognition is explicitly supported and the selected language pack is already installed. `processLocally` is required and checked; no language packs are downloaded by PARMAR and no cloud transcription fallback is used. The browser requests microphone access only after the user presses Talk, and recognition is single-utterance, cancellable, and stopped when VOKKI is hidden or the page leaves. Raw audio is not sent to a recognition service; the resulting transcript is submitted through the existing `/api/chat` flow like typed text. This experimental browser capability is unavailable on unsupported browsers or languages. Genuine VOKKI volume control is not supported and no volume control is represented as available.

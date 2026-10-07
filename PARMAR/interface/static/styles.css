@@ -7523,6 +7523,41 @@ body[data-animation="reduced"] .voki-presence * {
   border-top: 1px solid var(--line-soft);
 }
 
+.voki-input-controls {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.voki-input-controls [data-voki-talk] {
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.voki-input-controls [data-voki-talk]:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.voki-input-privacy {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--type-tertiary);
+  font-size: 0.66rem;
+  line-height: 1.55;
+}
+
+.voki-presence[data-voice-input-state="LISTENING"] {
+  filter: drop-shadow(0 0 24px rgba(156, 228, 232, 0.2));
+}
+
+.voki-presence[data-voice-input-state="LISTENING"] .field-middle {
+  border-color: rgba(156, 228, 232, 0.48);
+  box-shadow: 0 0 22px rgba(90, 191, 212, 0.1);
+}
+
 .voki-speech-toggle {
   display: inline-flex;
   align-items: center;

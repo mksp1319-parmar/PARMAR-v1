@@ -221,7 +221,13 @@
                 <div class="voki-history-messages" data-voki-history-messages role="log" aria-live="off" aria-relevant="additions"></div>
               </section>
               <section class="voki-research-results" data-voki-research-results hidden aria-label="Sources from PARMAR's released response"></section>
-              <div class="voki-speech-controls" aria-label="VOKKI speech output">
+              <div class="voki-speech-controls" aria-label="VOKKI voice controls">
+                <div class="voki-input-controls" role="group" aria-label="VOKKI voice input">
+                  <button class="secondary-btn" type="button" data-voki-talk disabled aria-describedby="voki-input-status voki-input-privacy">Talk</button>
+                  <button class="voki-stop-speech" type="button" data-voki-cancel-voice hidden>Cancel listening</button>
+                  <p class="voki-speech-status voki-input-status" data-voki-input-status id="voki-input-status" role="status" aria-live="polite">Checking on-device speech recognition support.</p>
+                  <p class="voki-input-privacy" id="voki-input-privacy">When available, speech is recognized on this device only; raw audio is not sent to a recognition service. The transcript is sent through PARMAR’s existing chat flow, like typed text. No cloud transcription fallback is used.</p>
+                </div>
                 <label class="voki-speech-toggle" for="voki-speech-toggle">
                   <input id="voki-speech-toggle" type="checkbox" data-voki-speech-toggle aria-describedby="voki-speech-status" />
                   <span>Read released responses aloud</span>
@@ -264,7 +270,7 @@
                 <span class="sr-only" id="voki-research-help">Request research through the configured search provider. PARMAR safety and approval checks still apply.</span>
                 <button class="primary-btn" type="submit" data-voki-submit><span>Send to PARMAR</span><span class="button-arrow" aria-hidden="true">↗</span></button>
               </form>
-              <p class="voki-interface-note">Text interaction only in this phase. VOKKI does not make safety decisions or execute actions.</p>
+              <p class="voki-interface-note">Voice input requires supported on-device speech recognition and an installed local language pack. VOKKI does not make safety decisions or execute actions.</p>
             </section>
           </section>
 
@@ -415,7 +421,7 @@
                   <li><strong>Developer and GitHub</strong><span>No repository, issue, pull-request, or code-hosting connector is connected.</span></li>
                   <li><strong>Connected accounts</strong><span>No external account connection or integration authorization surface is configured.</span></li>
                   <li><strong>Knowledge and documents</strong><span>No file corpus, document retrieval, or project knowledge store is available.</span></li>
-                  <li><strong>Multimodal input</strong><span>No image/document upload or microphone input is available. Optional voice is browser speech synthesis only.</span></li>
+                  <li><strong>Multimodal input</strong><span>VOKKI microphone input is available only in browsers with on-device recognition and an installed local language pack. No image or document upload is available.</span></li>
                 </ul>
               </div>
             </section>

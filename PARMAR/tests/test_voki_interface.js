@@ -10,7 +10,9 @@ const {
 } = require('../interface/static/voki-interface.js');
 const {
   SPEECH_STATES,
+  VOICE_INPUT_STATES,
   VOKKISpeechAdapter,
+  VOKKIRecognitionAdapter,
   isReleasedResponse,
 } = require('../interface/static/voki-speech.js');
 const {
@@ -79,7 +81,7 @@ class Element {
   }
 }
 
-function makeInterface(request, speechAdapterFactory) {
+function makeInterface(request, speechAdapterFactory, voiceInputAdapterFactory) {
   const root = new Element();
   const presence = new Element();
   const avatar = new Element();
@@ -100,6 +102,9 @@ function makeInterface(request, speechAdapterFactory) {
     '[data-voki-speech-toggle]': new Element(),
     '[data-voki-speech-status]': new Element(),
     '[data-voki-stop-speech]': new Element(),
+    '[data-voki-talk]': new Element(),
+    '[data-voki-cancel-voice]': new Element(),
+    '[data-voki-input-status]': new Element(),
     '[data-voki-approval]': new Element(),
     '[data-voki-approval-message]': new Element(),
     '[data-voki-form]': new Element(),
@@ -119,8 +124,54 @@ function makeInterface(request, speechAdapterFactory) {
     beginRequest: () => ++nextRequestId,
     finishRequest: (requestId) => completed.push(requestId),
     speechAdapterFactory,
+    voiceInputAdapterFactory,
   });
   return { instance, root, completed };
+}
+
+function makeRecognitionHarness(availability = 'available') {
+  const calls = { availability: [], starts: 0, aborts: 0, recognitions: [] };
+  class FakeRecognition {
+    constructor() {
+      this.processLocally = false;
+      calls.recognitions.push(this);
+    }
+
+    start() {
+      calls.starts += 1;
+    }
+
+    abort() {
+      calls.aborts += 1;
+      this.onend?.();
+    }
+
+    emitResult(transcript) {
+      const result = [{ transcript }];
+      result.isFinal = true;
+      this.onresult?.({ results: [result] });
+    }
+
+    emitError(error) {
+      this.onerror?.({ error });
+      this.onend?.();
+    }
+  }
+  FakeRecognition.available = async (options) => {
+    calls.availability.push(options);
+    return availability;
+  };
+  return { calls, Recognition: FakeRecognition };
+}
+
+async function makeAvailableRecognitionAdapter(harness, onStateChange = () => {}, getLanguage = () => 'en') {
+  const adapter = new VOKKIRecognitionAdapter({
+    Recognition: harness.Recognition,
+    getLanguage,
+    onStateChange,
+  });
+  await adapter.refreshAvailability();
+  return adapter;
 }
 
 function apiResponse(value, ok = true) {
@@ -918,6 +969,110 @@ test('speech adapter initializes disabled with an explicit client-only speech st
   assert.equal(unavailable.setEnabled(true), false);
 });
 
+test('VOKKI exposes an explicit, accessible Talk control and local-processing disclosure', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
+  const vokiStart = html.indexOf('id="section-voki"');
+  const vokiEnd = html.indexOf('<section class="section-view" data-section="aether"', vokiStart);
+  const voki = html.slice(vokiStart, vokiEnd);
+  assert.ok(vokiStart >= 0 && vokiEnd > vokiStart);
+  assert.match(voki, /<button[^>]*type="button"[^>]*data-voki-talk[^>]*disabled/);
+  assert.match(voki, /data-voki-cancel-voice/);
+  assert.match(voki, /data-voki-input-status[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(voki, /raw audio is not sent to a recognition service/);
+  assert.match(voki, /No cloud transcription fallback is used/);
+  assert.deepEqual(VOICE_INPUT_STATES, [
+    'IDLE',
+    'ERROR',
+    'REQUESTING_PERMISSION',
+    'LISTENING',
+    'CANCELLING',
+    'TRANSCRIBING',
+    'SUBMITTING',
+    'SPEAKING',
+  ]);
+});
+
+test('recognition is unsupported unless on-device processing and a local language pack are confirmed', async () => {
+  const unsupported = new VOKKIRecognitionAdapter({
+    Recognition: class UnsupportedRecognition {},
+  });
+  await unsupported.refreshAvailability();
+  assert.equal(unsupported.available, false);
+  assert.match(unsupported.message, /unsupported/);
+  assert.equal(unsupported.start(() => {}), false);
+
+  const downloadable = makeRecognitionHarness('downloadable');
+  const adapter = await makeAvailableRecognitionAdapter(downloadable);
+  assert.equal(adapter.available, false);
+  assert.match(adapter.message, /language pack is not installed/);
+  assert.equal(downloadable.calls.starts, 0);
+  assert.deepEqual(downloadable.calls.availability.at(-1), {
+    langs: ['en-US'],
+    processLocally: true,
+  });
+});
+
+test('a Talk press alone starts one-shot local recognition and routes its transcript through VOKKI chat', async () => {
+  const recognition = makeRecognitionHarness();
+  const adapter = await makeAvailableRecognitionAdapter(recognition);
+  const requests = [];
+  const { instance, root } = makeInterface(async (url, options) => {
+    requests.push({ url, body: JSON.parse(options.body) });
+    return apiResponse(releasedResponse());
+  }, null, ({ getLanguage, onStateChange }) => {
+    adapter.getLanguage = getLanguage;
+    adapter.onStateChange = onStateChange;
+    return adapter;
+  });
+
+  assert.equal(recognition.calls.starts, 0);
+  assert.equal(root.elements['[data-voki-talk]'].disabled, false);
+  root.elements['[data-voki-talk]'].listeners.click();
+  assert.equal(recognition.calls.starts, 1);
+  assert.equal(root.dataset.voiceInputState, 'REQUESTING_PERMISSION');
+  const activeRecognition = recognition.calls.recognitions.at(-1);
+  assert.equal(activeRecognition.processLocally, true);
+  assert.equal(activeRecognition.continuous, false);
+  assert.equal(activeRecognition.interimResults, false);
+  activeRecognition.onstart();
+  assert.equal(root.dataset.voiceInputState, 'LISTENING');
+  assert.equal(root.elements['[data-voki-presence]'].dataset.voiceInputState, 'LISTENING');
+  activeRecognition.emitResult('Transcript from local recognition');
+  assert.equal(requests.length, 0);
+  activeRecognition.onend();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(requests, [{
+    url: '/api/chat',
+    body: {
+      message: 'Transcript from local recognition',
+      language: 'en',
+    },
+  }]);
+  assert.equal(root.elements['[data-voki-lifecycle]'].dataset.lifecycle, 'RELEASED');
+  assert.equal(root.dataset.responseSafety, 'PASS');
+  assert.equal(root.elements['[data-voki-output]'].textContent, 'Validated response.');
+  assert.equal(root.dataset.voiceInputState, 'IDLE');
+});
+
+test('microphone denial reports an error and cancellation waits for browser capture to end', async () => {
+  const denied = makeRecognitionHarness();
+  const deniedAdapter = await makeAvailableRecognitionAdapter(denied);
+  deniedAdapter.start(() => assert.fail('A denied microphone must not produce a transcript.'));
+  denied.calls.recognitions.at(-1).emitError('not-allowed');
+  assert.equal(deniedAdapter.state, 'ERROR');
+  assert.match(deniedAdapter.message, /permission was denied/);
+  assert.equal(deniedAdapter.recognition, null);
+
+  const cancelled = makeRecognitionHarness();
+  const cancelledAdapter = await makeAvailableRecognitionAdapter(cancelled);
+  cancelledAdapter.start(() => assert.fail('A cancelled utterance must not be submitted.'));
+  assert.equal(cancelledAdapter.cancel(), true);
+  assert.equal(cancelled.calls.aborts, 1);
+  assert.equal(cancelledAdapter.state, 'IDLE');
+  assert.match(cancelledAdapter.message, /capture has stopped/);
+});
+
 test('speech accepts only a contract-confirmed released response', () => {
   const harness = makeSpeechHarness();
   harness.adapter.setEnabled(true);
@@ -963,6 +1118,7 @@ test('SPEAKING begins only on the real speech start event and ends at the contra
 
   utterance.onstart();
   assert.equal(root.dataset.speechState, 'SPEAKING');
+  assert.equal(root.dataset.voiceState, 'SPEAKING');
   assert.equal(root.elements['[data-voki-presence]'].dataset.speechState, 'SPEAKING');
   assert.equal(root.elements['[data-voki-lifecycle]'].dataset.lifecycle, 'RELEASED');
   assert.equal(root.elements['[data-voki-presence]'].elements['[data-voki-avatar]'].dataset.expression, 'resolved');
@@ -1019,7 +1175,9 @@ test('speech adapter uses browser events without timer-based SPEAKING simulation
   assert.doesNotMatch(speechSource, /setTimeout|setInterval|requestAnimationFrame/);
   assert.match(speechSource, /utterance\.onstart = \(\) =>/);
   assert.match(speechSource, /this\.setState\('SPEAKING'\)/);
-  assert.doesNotMatch(speechSource, /getUserMedia|mediaDevices|MediaRecorder|SpeechRecognition/);
+  assert.match(speechSource, /recognition\.processLocally = true/);
+  assert.match(speechSource, /recognition\.continuous = false/);
+  assert.doesNotMatch(speechSource, /getUserMedia|mediaDevices|MediaRecorder|fetch\s*\(|XMLHttpRequest/);
 });
 
 test('VOKKI is an independent interface and Chat remains a separate section', () => {

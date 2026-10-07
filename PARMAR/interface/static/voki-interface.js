@@ -36,6 +36,16 @@
     PROVIDER_FAILED: 'error',
     BLOCKED: 'withheld',
   };
+  const VOICE_INPUT_STATES = new Set([
+    'IDLE',
+    'ERROR',
+    'REQUESTING_PERMISSION',
+    'LISTENING',
+    'CANCELLING',
+    'TRANSCRIBING',
+    'SUBMITTING',
+    'SPEAKING',
+  ]);
 
   function interpretContract(contract) {
     const lifecycleState = typeof contract?.lifecycle?.state === 'string'
@@ -82,6 +92,7 @@
       beginRequest,
       finishRequest,
       speechAdapterFactory,
+      voiceInputAdapterFactory,
       getLocalConversation,
       appendLocalConversationMessage,
     }) {
@@ -113,6 +124,11 @@
       this.speechToggle = element.querySelector('[data-voki-speech-toggle]');
       this.speechStatus = element.querySelector('[data-voki-speech-status]');
       this.stopSpeechButton = element.querySelector('[data-voki-stop-speech]');
+      this.talkButton = element.querySelector('[data-voki-talk]');
+      this.cancelVoiceButton = element.querySelector('[data-voki-cancel-voice]');
+      this.voiceInputStatus = element.querySelector('[data-voki-input-status]');
+      this.voiceInputState = 'IDLE';
+      this.voiceInputMessage = '';
       this.identityStatus = element.querySelector('[data-voki-identity-status]');
       this.identityVideo = element.querySelector('[data-voki-identity-video]');
       this.identityPreview = element.querySelector('[data-voki-identity-preview]');
@@ -155,8 +171,25 @@
             onStateChange: (state) => this.handleSpeechState(state),
           })
           : null;
+      const RecognitionAdapter = globalThis.PARMARVOKKISpeech?.VOKKIRecognitionAdapter;
+      this.voiceInput = voiceInputAdapterFactory
+        ? voiceInputAdapterFactory({
+          getLanguage: this.getLanguage,
+          onStateChange: (state) => this.handleVoiceInputState(state),
+        })
+        : RecognitionAdapter
+          ? new RecognitionAdapter({
+            getLanguage: this.getLanguage,
+            onStateChange: (state) => this.handleVoiceInputState(state),
+          })
+          : null;
       this.bind();
       this.handleSpeechState({ state: this.speech?.state || 'IDLE', boundary: null });
+      this.handleVoiceInputState({
+        state: this.voiceInput?.state || 'ERROR',
+        message: this.voiceInput?.message || 'On-device speech recognition is unsupported in this browser.',
+        available: this.voiceInput?.available === true,
+      });
       this.renderIdentityOnboarding({
         state: 'IDLE',
         message: 'VOKKI’s PARMAR reference avatar is active. Optional identity setup is local to this device.',
@@ -178,6 +211,7 @@
         this.historyLoading = false;
         if (historyWasLoading) this.submitButton.disabled = false;
         this.speech?.cancel();
+        this.cancelVoiceInput();
         this.identityOnboarding?.setStorageScope(null);
         this.approvalId = null;
         this.conversationId = null;
@@ -227,7 +261,17 @@
       });
       this.root.querySelector('[data-voki-form]')?.addEventListener('submit', (event) => {
         event.preventDefault();
+        this.cancelVoiceInput();
         this.submitRequest();
+      });
+      this.talkButton?.addEventListener('click', () => {
+        this.voiceInput?.start((transcript) => this.submitVoiceTranscript(transcript));
+      });
+      this.cancelVoiceButton?.addEventListener('click', () => this.voiceInput?.cancel());
+      const languageSelect = globalThis.document?.getElementById?.('language-select');
+      languageSelect?.addEventListener('change', () => {
+        this.cancelVoiceInput();
+        void this.voiceInput?.refreshAvailability();
       });
       this.identityStart?.addEventListener('click', () => {
         this.identityOnboarding?.start();
@@ -266,16 +310,24 @@
         };
         globalThis.document?.addEventListener('visibilitychange', stopCameraWhenHidden);
         globalThis.addEventListener?.('pagehide', () => this.identityOnboarding.cancel());
-        const section = this.root.closest?.('.section-view');
-        if (section && typeof globalThis.MutationObserver === 'function') {
-          this.identitySectionObserver = new globalThis.MutationObserver(() => {
-            if (!section.classList.contains('active')
+      }
+      const stopVoiceWhenHidden = () => {
+        if (globalThis.document?.hidden) this.cancelVoiceInput();
+      };
+      globalThis.document?.addEventListener?.('visibilitychange', stopVoiceWhenHidden);
+      globalThis.addEventListener?.('pagehide', () => this.cancelVoiceInput());
+      const section = this.root.closest?.('.section-view');
+      if (section && typeof globalThis.MutationObserver === 'function') {
+        this.identitySectionObserver = new globalThis.MutationObserver(() => {
+          if (!section.classList.contains('active')) {
+            this.cancelVoiceInput();
+            if (this.identityOnboarding
               && (this.identityOnboarding.stream || this.identityOnboarding.cameraRequestPending)) {
               this.identityOnboarding.cancel();
             }
-          });
-          this.identitySectionObserver.observe(section, { attributes: true, attributeFilter: ['class'] });
-        }
+          }
+        });
+        this.identitySectionObserver.observe(section, { attributes: true, attributeFilter: ['class'] });
       }
       this.root.querySelectorAll('[data-voki-decision]').forEach((button) => {
         button.addEventListener('click', () => this.submitDecision(button.dataset.vokiDecision));
@@ -297,6 +349,7 @@
       if (conversationId === this.conversationId
         && !refresh
         && (this.historyLoading || this.loadedConversationId === conversationId)) return;
+      this.cancelVoiceInput();
       this.conversationGeneration += 1;
       this.conversationId = isConversationId(conversationId) ? conversationId : null;
       this.localSessionId = null;
@@ -336,6 +389,7 @@
       if (this.authenticated || typeof sessionId !== 'string' || !sessionId) return;
       const isCurrentConversation = sessionId === this.localSessionId;
       if (isCurrentConversation && !refresh) return;
+      this.cancelVoiceInput();
       if (!isCurrentConversation) {
         this.conversationGeneration += 1;
         this.historyGeneration += 1;
@@ -613,6 +667,8 @@
         this.stopSpeechButton.hidden = !['QUEUED', 'SPEAKING'].includes(speechState);
       }
       this.syncSpeechControls();
+      this.renderVoiceState();
+      this.syncVoiceInputControls();
     }
 
     syncSpeechControls() {
@@ -621,9 +677,91 @@
       this.speechToggle.checked = Boolean(this.speech?.enabled);
     }
 
-    async submitRequest() {
+    handleVoiceInputState({ state, message, available }) {
+      this.voiceInputState = VOICE_INPUT_STATES.has(state) ? state : 'ERROR';
+      this.root.dataset.voiceInputState = this.voiceInputState;
+      if (this.presence) this.presence.dataset.voiceInputState = this.voiceInputState;
+      if (typeof message === 'string' && this.voiceInputStatus) {
+        this.voiceInputMessage = message;
+        this.voiceInputStatus.textContent = message;
+      }
+      if (this.cancelVoiceButton) {
+        this.cancelVoiceButton.hidden = !['REQUESTING_PERMISSION', 'LISTENING'].includes(this.voiceInputState);
+      }
+      this.root.dataset.voiceInputAvailable = available === true ? 'true' : 'false';
+      this.renderVoiceState();
+      this.syncVoiceInputControls();
+    }
+
+    renderVoiceState() {
+      const state = this.speech?.state === 'SPEAKING' ? 'SPEAKING' : this.voiceInputState;
+      this.root.dataset.voiceState = state;
+      if (this.presence) this.presence.dataset.voiceState = state;
+      if (state === 'SPEAKING' && this.voiceInputStatus) {
+        this.voiceInputStatus.textContent = 'VOKKI is speaking PARMAR’s released response.';
+      } else if (this.voiceInputStatus) {
+        this.voiceInputStatus.textContent = this.voiceInputMessage;
+      }
+    }
+
+    syncVoiceInputControls() {
+      if (!this.talkButton) return;
+      const busySpeech = ['QUEUED', 'SPEAKING'].includes(this.speech?.state);
+      const busyVoice = [
+        'REQUESTING_PERMISSION',
+        'LISTENING',
+        'CANCELLING',
+        'TRANSCRIBING',
+        'SUBMITTING',
+      ].includes(this.voiceInputState);
+      this.talkButton.disabled = this.voiceInput?.available !== true
+        || busySpeech
+        || busyVoice
+        || Boolean(this.voiceInput?.recognition)
+        || this.historyLoading
+        || this.submitButton?.disabled === true;
+      this.cancelVoiceButton?.toggleAttribute?.(
+        'aria-hidden',
+        !['REQUESTING_PERMISSION', 'LISTENING'].includes(this.voiceInputState),
+      );
+    }
+
+    cancelVoiceInput() {
+      if (this.voiceInput?.recognition
+        || ['REQUESTING_PERMISSION', 'LISTENING'].includes(this.voiceInput?.state)) {
+        this.voiceInput.cancel();
+      }
+    }
+
+    async submitVoiceTranscript(transcript) {
+      if (typeof transcript !== 'string' || !transcript.trim()) {
+        this.handleVoiceInputState({
+          state: 'ERROR',
+          message: 'No transcript was produced. Try again when ready.',
+          available: this.voiceInput?.available === true,
+        });
+        return;
+      }
+      this.input.value = transcript.trim();
+      this.handleVoiceInputState({
+        state: 'SUBMITTING',
+        message: 'Transcript received. Submitting it through PARMAR’s existing chat flow.',
+        available: this.voiceInput?.available === true,
+      });
+      try {
+        await this.submitRequest(transcript);
+      } finally {
+        this.handleVoiceInputState({
+          state: 'IDLE',
+          message: 'Voice input complete. Press Talk when you are ready to speak again.',
+          available: this.voiceInput?.available === true,
+        });
+      }
+    }
+
+    async submitRequest(messageOverride = null) {
       if (this.historyLoading) return;
-      const message = this.input.value.trim();
+      const message = (typeof messageOverride === 'string' ? messageOverride : this.input.value).trim();
       if (!message) {
         this.input.focus();
         return;
@@ -640,6 +778,7 @@
       this.speech?.cancel();
       this.transport.textContent = 'Waiting for PARMAR response.';
       this.submitButton.disabled = true;
+      this.syncVoiceInputControls();
       this.approval.hidden = true;
       this.approvalId = null;
       this.researchResults?.replaceChildren();
@@ -677,6 +816,7 @@
         this.approvalId = null;
       } finally {
         this.submitButton.disabled = false;
+        this.syncVoiceInputControls();
         this.finishRequest(requestId);
       }
     }
