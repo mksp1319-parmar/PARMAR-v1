@@ -479,6 +479,45 @@ test('authenticated VOKKI history restores persisted messages and sources withou
   }
 });
 
+test('authenticated VOKKI synchronization delegates history loading to shared Chat activation', async () => {
+  const previousDispatchEvent = globalThis.dispatchEvent;
+  const previousCustomEvent = globalThis.CustomEvent;
+  let activationEvent = null;
+  let historyLoads = 0;
+  globalThis.CustomEvent = class CustomEventStub {
+    constructor(type, options) {
+      this.type = type;
+      this.detail = options?.detail;
+    }
+  };
+  globalThis.dispatchEvent = (event) => {
+    activationEvent = event;
+    return true;
+  };
+  try {
+    const { instance } = makeInterface(async () => apiResponse({}));
+    instance.authenticated = true;
+    instance.loadConversation = async () => {
+      historyLoads += 1;
+      return true;
+    };
+
+    await instance.synchronizeConversation({
+      conversation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
+
+    assert.equal(instance.conversationId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    assert.equal(activationEvent.type, 'parmar-voki-conversation-activated');
+    assert.equal(activationEvent.detail.conversationId, instance.conversationId);
+    assert.equal(historyLoads, 0);
+  } finally {
+    if (previousDispatchEvent === undefined) delete globalThis.dispatchEvent;
+    else globalThis.dispatchEvent = previousDispatchEvent;
+    if (previousCustomEvent === undefined) delete globalThis.CustomEvent;
+    else globalThis.CustomEvent = previousCustomEvent;
+  }
+});
+
 test('home VOKKI presence opens the real interface and no longer runs an acknowledgment-only click path', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
@@ -488,6 +527,79 @@ test('home VOKKI presence opens the real interface and no longer runs an acknowl
   assert.doesNotMatch(app, /classList\.add\('acknowledged'\)/);
 });
 
+test('VOKKI approval decisions stay scoped to VOKKI and use the approval backend', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
+  const voki = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'voki-interface.js'), 'utf8');
+  assert.match(app, /function bindHomeApprovalActions\(\) \{\s*dom\.approvalActions\?\.querySelectorAll\('button\[data-decision\]'\)/);
+  assert.doesNotMatch(app, /document\.querySelectorAll\('\.approve-btn,\s*\.reject-btn/);
+  assert.match(voki, /this\.root\.querySelectorAll\('\[data-voki-decision\]'\)[\s\S]*?this\.submitDecision\(button\.dataset\.vokiDecision\)/);
+  assert.match(voki, /async submitDecision\(decision\)[\s\S]*?this\.request\('\/api\/approval'/);
+  assert.match(html, /data-voki-approval[\s\S]*?data-voki-decision="APPROVE"[\s\S]*?data-voki-decision="REJECT"/);
+});
+
+test('Home workspace launches use section navigation and AETHER reports its unavailable runtime', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
+  assert.match(app, /\.workspace-launch\[data-section\]/);
+  assert.match(html, /class="workspace-launch workspace-launch-voki"[^>]+data-section="voki"/);
+  assert.match(html, /class="workspace-launch"[^>]+data-section="chat"/);
+  assert.match(html, /class="workspace-launch"[^>]+data-section="aether"/);
+  assert.match(html, /data-section="aether" id="section-aether"/);
+  assert.match(html, /No browser session is connected\.[\s\S]*?No websites have been opened or inspected\./);
+  assert.match(app, /selectSection\('home'\);\s*configureCrossTabAuthentication/);
+});
+
+test('local VOKKI requests use and update the selected Chat session instead of a second transcript', async () => {
+  const messages = [{ role: 'user', content: 'Earlier question.' }];
+  const appended = [];
+  const { instance, root } = makeInterface(async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.conversation_id, undefined);
+    assert.deepEqual(body.context.recent_messages, messages);
+    return apiResponse(releasedResponse({ conversation_id: undefined }));
+  });
+  instance.authenticated = false;
+  instance.localSessionId = 'session-local-1';
+  instance.getLocalConversation = (sessionId) => ({
+    sessionId,
+    messages: messages.slice(),
+  });
+  instance.appendLocalConversationMessage = (entry) => {
+    appended.push(entry);
+    messages.push({ role: 'user', content: entry.userMessage });
+    messages.push({ role: 'assistant', content: entry.response.message });
+    return true;
+  };
+  instance.input.value = 'Follow-up question.';
+
+  await instance.submitRequest();
+
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].sessionId, 'session-local-1');
+  assert.equal(appended[0].userMessage, 'Follow-up question.');
+  assert.deepEqual(messages.map((message) => message.role), ['user', 'user', 'assistant']);
+  assert.equal(Object.hasOwn(instance, 'recentMessages'), false);
+});
+
+test('refreshing a selected local conversation renders history without replaying lifecycle state', () => {
+  const { instance, root } = makeInterface(async () => apiResponse(releasedResponse()));
+  const rendered = [];
+  instance.localSessionId = 'session-local-1';
+  instance.lifecycle.dataset.lifecycle = 'RELEASED';
+  instance.getLocalConversation = (sessionId) => ({
+    sessionId,
+    messages: [{ role: 'assistant', content: 'Earlier released response.' }],
+  });
+  instance.renderHistory = (messages) => rendered.push(messages);
+
+  instance.activateLocalConversation('session-local-1', { refresh: true });
+
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0][0].content, 'Earlier released response.');
+  assert.equal(root.elements['[data-voki-lifecycle]'].dataset.lifecycle, 'RELEASED');
+  assert.equal(root.elements['[data-voki-lifecycle]'].textContent, '');
+});
 test('repeated permission actions cannot open untracked concurrent camera streams', async () => {
   let grantPermission;
   const mediaPromise = new Promise((resolve) => { grantPermission = resolve; });
@@ -715,7 +827,7 @@ test('approved local identity can be restored and explicitly removed', async () 
   await first.onboarding.approve();
 
   const restored = makeIdentityHarness();
-  restored.calls.saved = first.calls.saved;
+  restored.onboarding.store.records.set(restored.onboarding.store.scope, first.calls.saved);
   assert.equal(await restored.onboarding.loadApprovedIdentity(), true);
   assert.equal(restored.onboarding.state, 'SAVED');
   assert.equal(restored.renderer.identity.kind, 'approved-reference');
@@ -1150,14 +1262,14 @@ test('authentication boundary clears VOKKI conversation and pending approval sta
     const { instance, root } = makeInterface(async () => apiResponse(releasedResponse()));
     instance.approvalId = 'opaque-pending-approval';
     instance.conversationId = 'server-conversation-selector';
-    instance.recentMessages = [{ role: 'user', content: 'private prior turn' }];
+    instance.localSessionId = 'local-session';
     root.elements['[data-voki-approval]'].hidden = false;
 
     authenticationChanged();
 
     assert.equal(instance.approvalId, null);
     assert.equal(instance.conversationId, null);
-    assert.deepEqual(instance.recentMessages, []);
+    assert.equal(instance.localSessionId, null);
     assert.equal(root.elements['[data-voki-approval]'].hidden, true);
     assert.equal(root.dataset.presenceState, 'unknown');
     assert.equal(root.elements['[data-voki-output]'].textContent, 'VOKKI has no active authenticated conversation.');

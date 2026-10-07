@@ -326,7 +326,6 @@ const dom = {
   loadDemo: document.getElementById('load-demo'),
   navButtons: Array.from(document.querySelectorAll('.nav-item')),
   views: Array.from(document.querySelectorAll('.section-view')),
-  wakeBtn: document.getElementById('wake-btn'),
   vokiState: document.getElementById('voki-state'),
   providerStatus: document.getElementById('provider-status'),
   settingsProvider: document.getElementById('settings-provider'),
@@ -544,7 +543,7 @@ function clearAuthenticatedState(message, { broadcast = false } = {}) {
     state.audit = loadAudit();
     renderAuthenticationControls();
     window.dispatchEvent(new CustomEvent('parmar-auth-state-changed'));
-    publishConversationSelection(null);
+    publishConversationSelection(state.currentSessionId);
     if (dom.authStatus) {
       dom.authStatus.hidden = !message;
       dom.authStatus.textContent = message || '';
@@ -810,9 +809,13 @@ function displayList(value, fallback) {
 function setVokiState(rawState) {
   const key = normalizeStatus(rawState);
   const presentation = lifecyclePresentation[key] || lifecyclePresentation.UNKNOWN;
+  const previousState = document.body.dataset.vokiState;
 
   if (dom.parmarCore) {
     dom.parmarCore.className = `parmar-core ${presentation.className}`;
+    if (key === 'RELEASED' && previousState !== 'RELEASED' && !motionIsReduced()) {
+      dom.parmarCore.classList.add('response-arrived');
+    }
   }
 
   document.body.dataset.vokiState = lifecyclePresentation[key] ? key : 'UNKNOWN';
@@ -901,7 +904,9 @@ function syncWorkspaceAccessibility(activeSide = null) {
   for (const side of ['left', 'right']) {
     const panel = panelElement(side);
     if (!panel) continue;
-    const visible = !compact || (active && side === activeSide);
+    const visible = compact
+      ? active && side === activeSide
+      : ['opening', 'open'].includes(workspacePanels[side]);
     panel.inert = !visible;
     panel.setAttribute('aria-hidden', String(!visible));
     if (compact && visible) {
@@ -921,9 +926,7 @@ function syncWorkspaceAccessibility(activeSide = null) {
           ? expanded ? 'Close navigation' : 'Open navigation'
           : expanded ? 'Collapse navigation' : 'Expand navigation');
       } else if (trigger === dom.discoveryToggle) {
-        trigger.setAttribute('aria-label', compact
-          ? expanded ? 'Close Discovery' : 'Open Discovery'
-          : 'Focus Discovery panel');
+        trigger.setAttribute('aria-label', expanded ? 'Close Discovery' : 'Open Discovery');
       }
     }
   }
@@ -1054,6 +1057,14 @@ function openDiscoveryTarget(targetId, trigger) {
   });
   openWorkspacePanel('right', trigger);
   section?.scrollIntoView({ behavior: motionIsReduced() ? 'auto' : 'smooth', block: 'nearest' });
+}
+
+function bindHomeApprovalActions() {
+  dom.approvalActions?.querySelectorAll('button[data-decision]').forEach((button) => {
+    const decision = button.dataset.decision;
+    if (!decision) return;
+    button.addEventListener('click', () => submitDecision(decision));
+  });
 }
 
 function onWorkspacePanelTransitionEnd(event, side) {
@@ -1190,6 +1201,9 @@ function finishPanelGesture(event, cancelled = false) {
 }
 
 function selectSection(sectionName, navKey = sectionName) {
+  const sectionChanged = document.body.dataset.activeSection !== sectionName;
+  if (workspacePanels.right !== 'closed') closeWorkspacePanel('right');
+
   dom.navButtons.forEach((button) => {
     const active = button.dataset.navKey
       ? button.dataset.navKey === navKey
@@ -1201,6 +1215,9 @@ function selectSection(sectionName, navKey = sectionName) {
     const active = view.dataset.section === sectionName;
     view.classList.toggle('active', active);
   });
+  if (sectionChanged && window.scrollY > 0) {
+    window.scrollTo({ top: 0, behavior: motionIsReduced() ? 'auto' : 'smooth' });
+  }
 
   document.querySelectorAll('.capability-toolbar [data-section]').forEach((button) => {
     const active = button.dataset.section === sectionName;
@@ -1213,6 +1230,7 @@ function selectSection(sectionName, navKey = sectionName) {
     home: 'PARMAR Core',
     chat: 'Chats / History',
     voki: 'VOKKI',
+    aether: 'AETHER',
     safety: 'Risk & Safety',
     phone: 'Phone Awareness',
     simulator: 'Simulation',
@@ -1644,7 +1662,7 @@ function renderHistory() {
       invalidatePendingRequest();
       state.currentSessionId = selected.id;
       state.conversationId = state.authMode === 'authenticated' ? selected.id : null;
-      publishConversationSelection(null);
+      publishConversationSelection(selected.id, true);
       state.pendingApprovalId = null;
       if (dom.chatInput) dom.chatInput.value = '';
       resizeChatInput();
@@ -1764,7 +1782,7 @@ async function selectServerConversation(conversationId) {
     state.currentSessionId = conversationId;
     state.conversationId = conversationId;
     storeActiveConversationId(conversationId);
-    publishConversationSelection(conversationId);
+    publishConversationSelection(conversationId, true);
     if (dom.chatInput) dom.chatInput.value = '';
     resizeChatInput();
     renderSessionMessages();
@@ -2055,6 +2073,29 @@ function appendMessageToSession(sessionId, role, text, analysis) {
     renderSessionMessages(true, Boolean(releasedAssistant));
   }
   return true;
+}
+
+function getLocalVokiConversation(sessionId = null) {
+  if (state.authMode === 'authenticated') return null;
+  const session = sessionId
+    ? state.sessions.find((entry) => entry.id === sessionId)
+    : ensureCurrentSession();
+  if (!session || (sessionId && session.id !== state.currentSessionId)) return null;
+  return {
+    sessionId: session.id,
+    messages: session.messages.slice(-12).map((message) => ({
+      role: message.role,
+      content: message.text,
+    })),
+  };
+}
+
+function appendLocalVokiConversationMessage({ sessionId, userMessage, response }) {
+  if (state.authMode === 'authenticated' || state.currentSessionId !== sessionId) return false;
+  if (typeof userMessage === 'string' && !appendMessageToSession(sessionId, 'user', userMessage, {})) return false;
+  const reply = safeChatReply(response);
+  if (typeof reply !== 'string' || !reply) return false;
+  return appendMessageToSession(sessionId, 'assistant', reply, response);
 }
 
 function renderAuditEntries() {
@@ -2559,7 +2600,7 @@ async function submitChatMessage() {
     if (!updateState(result)) throw new TypeError('Invalid chat response');
     if (authenticated) state.serverConversationIds.add(result.conversation_id);
     appendMessageToSession(sessionId, 'assistant', reply, result);
-    if (authenticated) publishConversationSelection(result.conversation_id, true);
+    publishConversationSelection(authenticated ? result.conversation_id : sessionId, true);
     dom.requestInput.value = text;
   } catch {
     if (requestId !== state.requestSequence) return;
@@ -2723,7 +2764,7 @@ function bindEvents() {
     }
   });
 
-  document.querySelectorAll('.nav-item, .text-button[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section]').forEach((button) => {
+  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section]').forEach((button) => {
     button.addEventListener('click', () => {
       if (button.dataset.action === 'new-chat') {
         dom.newSessionBtn?.click();
@@ -2796,8 +2837,7 @@ function bindEvents() {
   }
 
   dom.discoveryToggle?.addEventListener('click', () => {
-    if (isCompactPanelViewport()) toggleWorkspacePanel('right', dom.discoveryToggle);
-    else dom.discoveryPanel?.focus({ preventScroll: true });
+    toggleWorkspacePanel('right', dom.discoveryToggle);
   });
   dom.sidebarClose?.addEventListener('click', () => closeWorkspacePanel('left'));
   dom.discoveryClose?.addEventListener('click', () => closeWorkspacePanel('right'));
@@ -2843,7 +2883,6 @@ function bindEvents() {
       state.settings.language = dom.languageSelect.value;
       persistSettings();
       if (dom.settingsLanguage) dom.settingsLanguage.value = state.settings.language;
-      if (dom.requestInput.value.trim()) analyzeRequest();
     });
   }
 
@@ -2896,11 +2935,7 @@ function bindEvents() {
     dom.simulatePhoneRisk.addEventListener('click', () => runPhoneSimulation('risk'));
   }
 
-  document.querySelectorAll('.approve-btn, .reject-btn, .info-btn, .alt-btn').forEach((button) => {
-    button.addEventListener('click', () => {
-      submitDecision(button.dataset.decision || 'APPROVE');
-    });
-  });
+  bindHomeApprovalActions();
 
   if (dom.runScenario) {
     dom.runScenario.addEventListener('click', () => {
@@ -2963,10 +2998,10 @@ function bindEvents() {
       state.currentSessionId = null;
       state.conversationId = null;
       if (state.authMode === 'authenticated') clearActiveConversationId();
-      publishConversationSelection(null);
       state.pendingApprovalId = null;
       if (dom.researchMode) dom.researchMode.checked = false;
-      if (state.authMode !== 'authenticated') ensureCurrentSession();
+      const session = state.authMode === 'authenticated' ? null : ensureCurrentSession();
+      publishConversationSelection(session?.id ?? null);
       renderSessionMessages();
       renderHistory();
       selectSection('chat', 'chat');
@@ -2991,12 +3026,6 @@ function bindEvents() {
       if (dom.approvalAlternative) dom.approvalAlternative.textContent = 'A recommendation will appear when available.';
       if (dom.systemState) dom.systemState.textContent = 'NOT ASSESSED';
       if (dom.statusMessage) dom.statusMessage.textContent = 'PARMAR is ready for a request.';
-    });
-  }
-
-  if (dom.wakeBtn) {
-    dom.wakeBtn.addEventListener('click', () => {
-      if (dom.statusMessage) dom.statusMessage.textContent = 'Enter a request for PARMAR to review.';
     });
   }
 
@@ -3043,6 +3072,8 @@ function initialize() {
     new window.PARMARVOKKIInterface.VOKKIInterface({
       root: vokiRoot,
       request: apiRequest,
+      getLocalConversation: getLocalVokiConversation,
+      appendLocalConversationMessage: appendLocalVokiConversationMessage,
       getLanguage: () => dom.languageSelect?.value || state.settings.language,
       beginRequest,
       finishRequest,
@@ -3055,7 +3086,7 @@ function initialize() {
   document.body.dataset.state = 'UNKNOWN';
   renderAuthenticationControls();
   syncWorkspacePanels();
-  selectSection(window.innerWidth <= 640 ? 'chat' : 'home');
+  selectSection('home');
   configureCrossTabAuthentication();
   refreshAuthenticationState();
 }

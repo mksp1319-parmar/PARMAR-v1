@@ -6,10 +6,10 @@
     <title>PARMAR | Human-Controlled AI Governance</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body data-state="IDLE" data-active-section="home" data-theme="midnight" data-animation="normal" data-voki-state="IDLE" data-left-panel-state="closed" data-right-panel-state="closed" data-gesture-state="idle">
+  <body data-state="UNKNOWN" data-active-section="home" data-theme="midnight" data-animation="normal" data-voki-state="UNKNOWN" data-left-panel-state="closed" data-right-panel-state="closed" data-gesture-state="idle">
     <div class="app-shell">
       <aside class="sidebar" id="sidebar" aria-label="PARMAR workspace" aria-hidden="true" inert tabindex="-1">
-        <a class="brand-block sidebar-brand" href="#section-home" aria-label="PARMAR home">
+        <a class="brand-block sidebar-brand" href="#section-home" data-section="home" data-nav-key="home" aria-label="PARMAR home">
           <span class="brand-mark" aria-hidden="true"><span>P</span></span>
           <span class="brand-copy">
             <span class="brand-title">PARMAR</span>
@@ -23,6 +23,7 @@
         <nav class="nav" aria-label="Main navigation">
           <button class="nav-item active" data-section="chat" data-nav-key="chat" aria-label="Chats / History" title="Chats / History"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 5.75h14a1.25 1.25 0 0 1 1.25 1.25v8A1.25 1.25 0 0 1 19 16.25H10l-4.5 3v-3.1A1.25 1.25 0 0 1 4.25 15V7A1.25 1.25 0 0 1 5.5 5.75Z" /><path d="M8 10h8M8 13h5" /></svg></span><span>Chats / History</span></button>
           <button class="nav-item" data-section="voki" aria-label="VOKKI interface" title="VOKKI interface"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><path d="m8 9 4 6 4-6" /></svg></span><span>VOKKI</span></button>
+          <button class="nav-item" data-section="aether" aria-label="AETHER browser workspace" title="AETHER browser workspace"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1.5" /><path d="M4 9h16M7 7h.01M10 7h.01" /></svg></span><span>AETHER</span></button>
           <button class="nav-item" data-section="home" data-nav-key="home" aria-label="PARMAR Core" title="PARMAR Core"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><circle cx="12" cy="12" r="4.75" /><circle cx="12" cy="12" r="1.25" /></svg></span><span>PARMAR Core</span></button>
           <button class="nav-item" data-section="safety" aria-label="Risk & Safety" title="Risk & Safety"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span><span>Risk &amp; Safety</span></button>
           <button class="nav-item" data-section="simulator" aria-label="Simulation" title="Simulation"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.25 7.25A2.25 2.25 0 0 1 7.5 5h9A2.25 2.25 0 0 1 18.75 7.25v9.5A2.25 2.25 0 0 1 16.5 19h-9a2.25 2.25 0 0 1-2.25-2.25Z" /><path d="m10 9 5 3-5 3Z" /></svg></span><span>Simulation</span></button>
@@ -58,19 +59,15 @@
             <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Overview</span></div>
           </div>
           <div class="header-controls">
-            <div class="status-pill status-safe" id="status-pill" aria-live="polite">READY</div>
+            <div class="status-pill" id="status-pill" aria-live="polite">NOT ASSESSED</div>
             <div class="human-pill"><span class="human-mark" aria-hidden="true">+</span> Human in control</div>
+            <button class="capability-button discovery-toggle" id="discovery-toggle" type="button" aria-label="Open research guidance" aria-expanded="false" aria-controls="discovery-panel" title="Research runs from Chat">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1" /></svg><span>Research</span>
+            </button>
             <button class="new-session-btn auth-logout-btn" id="logout-btn" type="button" hidden>Sign out</button>
             <button class="new-session-btn" id="new-session-btn"><span aria-hidden="true">+</span> New session</button>
           </div>
           <nav class="capability-toolbar" role="toolbar" aria-label="PARMAR capabilities">
-            <button class="capability-button capability-new-chat" type="button" data-action="new-chat" title="Start a new chat">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span>New Chat</span>
-            </button>
-            <span class="toolbar-divider" aria-hidden="true"></span>
-            <button class="capability-button discovery-toggle" id="discovery-toggle" type="button" aria-label="Open research guidance" aria-expanded="false" aria-controls="discovery-panel" title="Research runs from Chat">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1" /></svg><span>Research</span>
-            </button>
             <button class="capability-button" type="button" data-action="research-chat" title="Enable Research in Chat">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.75h14v14.5H5zM8.5 8.5h7M8.5 12h7M8.5 15.5h4" /></svg><span>Research in Chat</span>
             </button>
@@ -156,7 +153,7 @@
                 <textarea id="request-input" rows="3" placeholder="Tell PARMAR what you’re considering…"></textarea>
                 <button id="analyze-btn" class="primary-btn" type="button"><span>Review request</span><span class="button-arrow" aria-hidden="true">↗</span></button>
               </div>
-              <div class="interaction-footnote"><span>Safety review only</span><span class="footnote-divider"></span><span>No action is taken on your behalf</span><button class="wake-btn" id="wake-btn" type="button">About VOKKI</button></div>
+              <div class="interaction-footnote"><span>Safety review only</span><span class="footnote-divider"></span><span>No action is taken on your behalf</span><button class="text-button wake-btn" id="wake-btn" type="button" data-section="voki" title="Open the dedicated VOKKI interface">Open VOKKI</button></div>
             </section>
 
             <section class="home-summary" aria-label="Current review context">
@@ -172,10 +169,24 @@
               <div id="scenario-list" class="scenario-list" aria-hidden="true"></div>
             </section>
             <section class="home-activity" aria-label="Recent activity"><div class="section-title-row"><h2>Recent activity</h2><button class="text-button" type="button" data-section="audit">View all <span aria-hidden="true">↗</span></button></div><div id="audit-list" class="audit-list"></div></section>
+            <section class="home-workspaces" aria-labelledby="workspace-title">
+              <div class="section-title-row"><div><span class="eyebrow">Your environment</span><h2 id="workspace-title">Workspaces</h2></div><span class="workspace-governance">Separate tools. One human authority.</span></div>
+              <div class="workspace-launch-grid">
+                <button class="workspace-launch workspace-launch-voki" type="button" data-section="voki">
+                  <span class="workspace-launch-index">01 / PRESENCE</span><strong>VOKKI</strong><span>Meet PARMAR in a focused, private conversation.</span><span class="workspace-launch-action">Enter experience <span aria-hidden="true">↗</span></span>
+                </button>
+                <button class="workspace-launch" type="button" data-section="chat">
+                  <span class="workspace-launch-index">02 / INTELLIGENCE</span><strong>Chat</strong><span>Think through a question with PARMAR’s review flow.</span><span class="workspace-launch-action">Open conversation <span aria-hidden="true">↗</span></span>
+                </button>
+                <button class="workspace-launch" type="button" data-section="aether">
+                  <span class="workspace-launch-index">03 / BROWSER</span><strong>AETHER</strong><span>A governed browser workspace. Runtime not connected.</span><span class="workspace-launch-action">View workspace status <span aria-hidden="true">↗</span></span>
+                </button>
+              </div>
+            </section>
           </section>
 
           <section class="section-view" data-section="voki" id="section-voki" aria-labelledby="voki-interface-title">
-            <div class="view-heading"><div><span class="eyebrow">VOKKI interface</span><h1 id="voki-interface-title">Present with you.</h1></div><p>VOKKI communicates PARMAR’s result. PARMAR’s review, enforcement, approval, and response checks remain authoritative.</p></div>
+            <div class="view-heading voki-view-heading"><div><span class="eyebrow">PARMAR / PRIVATE SESSION</span><h1 id="voki-interface-title">VOKKI</h1></div><p>VOKKI communicates PARMAR’s result. PARMAR’s review, enforcement, approval, and response checks remain authoritative.</p><button class="text-button voki-exit" type="button" data-section="home" aria-label="Return to PARMAR workspace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7M8 12h12" /></svg><span>Workspace</span></button></div>
             <section class="voki-interface-surface" data-voki-interface data-presence-state="unknown" aria-label="VOKKI interaction">
               <div class="voki-presence-stage" aria-hidden="true">
                 <div class="voki-presence" data-voki-presence data-presence-state="unknown" data-lifecycle-state="UNKNOWN">
@@ -202,10 +213,16 @@
                       <path class="voki-avatar-hair" d="M68 108c-5-53 14-82 52-82 38 0 57 29 52 82l-12-21-11-28c-18 14-43 20-70 16l-5 32Z" />
                       <path class="voki-avatar-brow brow-left" d="M83 111q13-9 27-2" />
                       <path class="voki-avatar-brow brow-right" d="M130 109q14-7 27 2" />
-                      <path class="voki-avatar-eye eye-left" d="M84 125q12-9 25 0" />
-                      <path class="voki-avatar-eye eye-right" d="M131 125q13-9 25 0" />
+                      <path class="voki-avatar-eye eye-left" d="M84 125q12-7 25 0" />
+                      <path class="voki-avatar-eye eye-right" d="M131 125q13-7 25 0" />
+                      <g class="voki-avatar-pupils">
+                        <circle class="voki-avatar-pupil" cx="96" cy="126" r="3.4" />
+                        <circle class="voki-avatar-pupil" cx="143" cy="126" r="3.4" />
+                        <circle class="voki-avatar-eye-light" cx="97" cy="125" r="0.9" />
+                        <circle class="voki-avatar-eye-light" cx="144" cy="125" r="0.9" />
+                      </g>
                       <path class="voki-avatar-nose" d="m119 123-6 31 8 3" />
-                      <path class="voki-avatar-mouth" d="M103 174q16 5 32 0" />
+                      <path class="voki-avatar-mouth" d="M103 173q16 1 32 0" />
                       <path class="voki-avatar-collar" d="m95 204 25 23 25-23 13 13-19 29h-38l-19-29Z" />
                     </svg>
                     <img class="voki-avatar-approved-reference" data-voki-approved-image alt="" hidden />
@@ -235,11 +252,9 @@
                 <p class="voki-speech-status" data-voki-speech-status role="status" aria-live="polite">Checking browser speech availability.</p>
                 <button class="voki-stop-speech" type="button" data-voki-stop-speech hidden>Stop speaking</button>
               </div>
-              <section class="voki-identity-onboarding" aria-label="Optional VOKKI visual identity setup">
-                <div>
-                  <strong>Optional visual reference</strong>
-                  <p>A camera is not needed to use VOKKI. During an authenticated session, if you choose setup, one still is captured on this device and saved only after your approval. It is isolated to that session and is not uploaded.</p>
-                </div>
+              <details class="voki-identity-onboarding">
+                <summary><strong>Optional visual reference</strong><span>Local to this device · saved only with your approval</span></summary>
+                <p>A camera is not needed to use VOKKI. During an authenticated session, if you choose setup, one still is captured on this device and saved only after your approval. It is isolated to that session. No image is uploaded.</p>
                 <p class="voki-identity-status" data-voki-identity-status role="status" aria-live="polite" tabindex="-1">The bundled avatar is active.</p>
                 <video class="voki-identity-video" data-voki-identity-video autoplay muted playsinline hidden aria-label="Temporary local camera preview"></video>
                 <img class="voki-identity-preview" data-voki-identity-preview alt="Temporary VOKKI reference preview. Not saved." hidden />
@@ -252,8 +267,10 @@
                   <button type="button" data-voki-identity-cancel hidden>Cancel / Not now</button>
                   <button type="button" data-voki-identity-remove hidden>Remove saved reference</button>
                 </div>
-              </section>
-              <div class="voki-interface-approval" data-voki-approval hidden>
+              </details>
+              <div class="voki-interface-approval" data-voki-approval hidden aria-live="polite">
+                <span class="approval-eyebrow">A decision is yours</span>
+                <strong class="approval-waiting-title">PARMAR is waiting for your decision.</strong>
                 <p data-voki-approval-message></p>
                 <div class="voki-interface-actions">
                   <button class="approve-btn" type="button" data-voki-decision="APPROVE">Approve</button>
@@ -271,6 +288,34 @@
                 <button class="primary-btn" type="submit" data-voki-submit><span>Send to PARMAR</span><span class="button-arrow" aria-hidden="true">↗</span></button>
               </form>
               <p class="voki-interface-note">Text interaction only in this phase. VOKKI does not make safety decisions or execute actions.</p>
+            </section>
+          </section>
+
+          <section class="section-view" data-section="aether" id="section-aether" aria-labelledby="aether-title">
+            <div class="view-heading"><div><span class="eyebrow">AETHER / BROWSER ENVIRONMENT</span><h1 id="aether-title">A considered place to browse.</h1></div><p>AETHER is the browser workspace. PARMAR remains responsible for intelligence, safety, and governance.</p></div>
+            <section class="aether-workspace" aria-label="AETHER browser environment status">
+              <div class="aether-toolbar">
+                <span class="aether-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5" /><path d="M3.5 9h17M7 6.8h.01M10 6.8h.01" /></svg></span>
+                <div class="aether-identity"><strong>AETHER</strong><span>Browser environment</span></div>
+                <span class="aether-runtime-state"><span class="runtime-indicator"></span>Runtime unavailable</span>
+              </div>
+              <div class="aether-viewport">
+                <span class="aether-viewport-kicker">BROWSER SESSION</span>
+                <h2>No browser session is connected.</h2>
+                <p>This build does not include an AETHER browser runtime. No websites have been opened or inspected.</p>
+                <span class="aether-unavailable">UNAVAILABLE IN THIS BUILD</span>
+              </div>
+              <div class="aether-governance" aria-label="Future governed interaction model">
+                <span class="eyebrow">A governed interaction model</span>
+                <ol>
+                  <li><span>01</span><strong>Your instruction</strong></li>
+                  <li><span>02</span><strong>PARMAR reasoning</strong></li>
+                  <li><span>03</span><strong>Safety &amp; permission</strong></li>
+                  <li><span>04</span><strong>Human decision, when required</strong></li>
+                  <li><span>05</span><strong>Verified result</strong></li>
+                </ol>
+                <p>Future browser actions will require explicit permission and follow the same PARMAR governance boundary.</p>
+              </div>
             </section>
           </section>
 
@@ -408,7 +453,7 @@
             <div class="view-heading"><div><span class="eyebrow">Your interface preferences</span><h1 id="settings-title">Preferences</h1></div><p>Adjust presentation and language. These settings do not alter PARMAR’s safety decisions.</p></div>
             <section class="settings-grid">
               <label class="setting-card"><span>Language</span><select id="settings-language" class="language-select"><option value="en">English</option><option value="hi">Hindi</option><option value="mix">Hinglish</option></select></label>
-              <label class="setting-card"><span>Appearance</span><select id="settings-theme" class="language-select"><option value="midnight">Midnight</option><option value="aurora">Aurora</option><option value="violet">Violet</option></select></label>
+              <label class="setting-card"><span>Appearance</span><select id="settings-theme" class="language-select"><option value="midnight">Obsidian</option><option value="aurora">Graphite</option><option value="violet">Warm stone</option></select></label>
               <label class="setting-card"><span>Motion intensity</span><select id="settings-animation" class="language-select"><option value="normal">Normal</option><option value="reduced">Reduced</option></select></label>
               <label class="setting-card toggle-setting"><span><strong>Reduced motion</strong><small>Reduce movement and transitions.</small></span><input id="settings-reduced-motion" type="checkbox" /></label>
               <label class="setting-card toggle-setting"><span><strong>Phone awareness permission</strong><small>Local simulated events only.</small></span><input id="settings-phone-toggle" type="checkbox" /></label>

@@ -82,6 +82,8 @@
       beginRequest,
       finishRequest,
       speechAdapterFactory,
+      getLocalConversation,
+      appendLocalConversationMessage,
     }) {
       if (!element || typeof request !== 'function') {
         throw new TypeError('VOKKI interface requires a root element and a request function.');
@@ -89,6 +91,8 @@
       this.root = element;
       this.request = request;
       this.getLanguage = getLanguage || (() => 'en');
+      this.getLocalConversation = getLocalConversation || (() => null);
+      this.appendLocalConversationMessage = appendLocalConversationMessage || (() => false);
       this.beginRequest = beginRequest || (() => true);
       this.finishRequest = finishRequest || (() => {});
       this.input = element.querySelector('[data-voki-input]');
@@ -132,7 +136,7 @@
       this.approvalMessage = element.querySelector('[data-voki-approval-message]');
       this.approvalId = null;
       this.conversationId = null;
-      this.recentMessages = [];
+      this.localSessionId = null;
       this.authenticated = false;
       this.historyLoading = false;
       this.historyGeneration = 0;
@@ -170,11 +174,14 @@
         this.historyGeneration += 1;
         this.conversationGeneration += 1;
         this.authenticated = false;
+        const historyWasLoading = this.historyLoading;
+        this.historyLoading = false;
+        if (historyWasLoading) this.submitButton.disabled = false;
         this.speech?.cancel();
         this.identityOnboarding?.setStorageScope(null);
         this.approvalId = null;
         this.conversationId = null;
-        this.recentMessages = [];
+        this.localSessionId = null;
         this.loadedConversationId = null;
         this.renderHistory([]);
         if (this.researchToggle) this.researchToggle.checked = false;
@@ -201,6 +208,8 @@
         void this.identityOnboarding?.setStorageScope(detail.identityScope);
         if (this.authenticated && isConversationId(detail.conversationId)) {
           this.activateConversation(detail.conversationId, { refresh: detail.refresh === true });
+        } else if (!this.authenticated && typeof detail.conversationId === 'string') {
+          this.activateLocalConversation(detail.conversationId);
         } else if (!this.authenticated) {
           this.activateConversation(null);
         }
@@ -209,7 +218,9 @@
         const detail = event?.detail || {};
         if (detail.authenticated !== this.authenticated) return;
         if (this.authenticated && isConversationId(detail.conversationId)) {
-          this.activateConversation(detail.conversationId);
+          this.activateConversation(detail.conversationId, { refresh: detail.refresh === true });
+        } else if (!this.authenticated && typeof detail.conversationId === 'string') {
+          this.activateLocalConversation(detail.conversationId, { refresh: detail.refresh === true });
         } else {
           this.activateConversation(null);
         }
@@ -288,7 +299,7 @@
         && (this.historyLoading || this.loadedConversationId === conversationId)) return;
       this.conversationGeneration += 1;
       this.conversationId = isConversationId(conversationId) ? conversationId : null;
-      this.recentMessages = [];
+      this.localSessionId = null;
       this.approvalId = null;
       this.approval.hidden = true;
       if (this.researchToggle) this.researchToggle.checked = false;
@@ -297,7 +308,9 @@
       this.root.dataset.historyError = 'false';
       if (!this.conversationId) {
         this.historyGeneration += 1;
+        const historyWasLoading = this.historyLoading;
         this.historyLoading = false;
+        if (historyWasLoading) this.submitButton.disabled = false;
         this.loadedConversationId = null;
         this.renderHistory([]);
         this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
@@ -317,6 +330,44 @@
       if (this.authenticated && (refresh || this.loadedConversationId !== this.conversationId)) {
         void this.loadConversation(this.conversationId, { force: refresh });
       }
+    }
+
+    activateLocalConversation(sessionId, { refresh = false } = {}) {
+      if (this.authenticated || typeof sessionId !== 'string' || !sessionId) return;
+      const isCurrentConversation = sessionId === this.localSessionId;
+      if (isCurrentConversation && !refresh) return;
+      if (!isCurrentConversation) {
+        this.conversationGeneration += 1;
+        this.historyGeneration += 1;
+        const historyWasLoading = this.historyLoading;
+        this.historyLoading = false;
+        if (historyWasLoading) this.submitButton.disabled = false;
+        this.conversationId = null;
+        this.approvalId = null;
+        this.approval.hidden = true;
+        if (this.researchToggle) this.researchToggle.checked = false;
+        this.researchResults?.replaceChildren();
+        if (this.researchResults) this.researchResults.hidden = true;
+        this.root.dataset.historyError = 'false';
+        this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
+        this.lifecycle.dataset.lifecycle = 'UNKNOWN';
+        this.setPresence('UNKNOWN');
+        this.root.dataset.requestReview = 'UNKNOWN';
+        this.root.dataset.enforcement = 'UNKNOWN';
+        this.root.dataset.provider = 'UNKNOWN';
+        this.root.dataset.responseSafety = 'UNKNOWN';
+        this.root.dataset.responseDisposition = 'UNKNOWN';
+      }
+      this.localSessionId = sessionId;
+      const conversation = this.getLocalConversation(sessionId);
+      const messages = conversation?.sessionId === sessionId && Array.isArray(conversation.messages)
+        ? conversation.messages
+        : [];
+      this.renderHistory(messages);
+      this.output.textContent = messages.length
+        ? 'Historical messages are shown below. They were not replayed.'
+        : 'Start a request with PARMAR.';
+      this.transport.textContent = 'Local conversation selected.';
     }
 
     async loadConversation(conversationId, { force = false } = {}) {
@@ -350,7 +401,6 @@
         }
         this.renderHistory(payload.messages);
         this.loadedConversationId = conversationId;
-        this.recentMessages = [];
         this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
         this.lifecycle.dataset.lifecycle = 'UNKNOWN';
         this.setPresence('UNKNOWN');
@@ -583,6 +633,10 @@
 
       const authenticationGeneration = this.authenticationGeneration;
       const conversationGeneration = this.conversationGeneration;
+      const localConversation = this.authenticated
+        ? null
+        : this.getLocalConversation(this.localSessionId);
+      if (localConversation?.sessionId) this.localSessionId = localConversation.sessionId;
       this.speech?.cancel();
       this.transport.textContent = 'Waiting for PARMAR response.';
       this.submitButton.disabled = true;
@@ -599,8 +653,8 @@
             language: this.getLanguage(),
             ...(this.conversationId ? { conversation_id: this.conversationId } : {}),
             ...(this.researchToggle?.checked === true ? { research: true } : {}),
-            ...(!this.authenticated && this.recentMessages.length
-              ? { context: { recent_messages: this.recentMessages.slice(-12) } }
+            ...(!this.authenticated && localConversation?.messages?.length
+              ? { context: { recent_messages: localConversation.messages.slice(-12) } }
               : {}),
           }),
         });
@@ -609,14 +663,7 @@
         if (authenticationGeneration !== this.authenticationGeneration
           || conversationGeneration !== this.conversationGeneration) return;
         this.renderResult(result);
-        if (!this.authenticated) {
-          this.recentMessages = [
-            ...this.recentMessages,
-            { role: 'user', content: message },
-            { role: 'assistant', content: this.output.textContent },
-          ].slice(-12);
-        }
-        await this.synchronizeConversation(result);
+        await this.synchronizeConversation(result, message);
         this.input.value = '';
       } catch (_error) {
         if (authenticationGeneration !== this.authenticationGeneration
@@ -675,13 +722,23 @@
       }
     }
 
-    async synchronizeConversation(result) {
-      if (!this.authenticated || !isConversationId(result?.conversation_id)) return;
+    async synchronizeConversation(result, userMessage = null) {
+      if (!this.authenticated) {
+        if (!this.localSessionId) return;
+        await this.appendLocalConversationMessage({
+          sessionId: this.localSessionId,
+          userMessage,
+          response: result,
+        });
+        const conversation = this.getLocalConversation(this.localSessionId);
+        if (conversation?.sessionId === this.localSessionId) this.renderHistory(conversation.messages);
+        return;
+      }
+      if (!isConversationId(result?.conversation_id)) return;
       this.conversationId = result.conversation_id;
       dispatchWindowEvent('parmar-voki-conversation-activated', {
         conversationId: result.conversation_id,
       });
-      await this.loadConversation(result.conversation_id, { force: true });
     }
   }
 

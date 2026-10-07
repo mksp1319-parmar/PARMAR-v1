@@ -244,8 +244,8 @@ def test_voki_and_chat_share_server_selected_conversation_without_history_replay
     assert "dom.vokiInput?.focus({ preventScroll: true })" in app_source
     assert "ACTIVE_CONVERSATION_KEY = 'parmar-active-conversation-v1'" in app_source
     assert "await selectServerConversation(restoreConversationId)" in restore.group(1)
-    assert "publishConversationSelection(conversationId)" in select.group(1)
-    assert "publishConversationSelection(null)" in new_chat.group(1)
+    assert "publishConversationSelection(conversationId, true)" in select.group(1)
+    assert "publishConversationSelection(session?.id ?? null)" in new_chat.group(1)
     assert "parmar-voki-conversation-activated" in app_source
     assert "parmar-conversation-selection-changed" in voki_source
     assert "persisted_release: true" in voki_source
@@ -324,7 +324,7 @@ def test_workspace_toolbar_routes_real_research_through_chat_without_a_fake_work
     for control_id in ("sidebar", "sidebar-close", "sidebar-toggle", "discovery-panel", "discovery-toggle", "discovery-close", "panel-scrim"):
         assert f'id="{control_id}"' in html_source
     assert 'role="toolbar" aria-label="PARMAR capabilities"' in html_source
-    assert 'data-action="new-chat" title="Start a new chat"' in html_source
+    assert 'data-action="new-chat" aria-label="New Chat" title="New Chat"' in html_source
     assert '<svg viewBox="0 0 24 24" aria-hidden="true">' in html_source
     assert 'data-section="memory"' in html_source
     assert 'data-section="tools"' in html_source
@@ -352,7 +352,10 @@ def test_workspace_toolbar_routes_real_research_through_chat_without_a_fake_work
     styles_source = (static_dir / "styles.css").read_text(encoding="utf-8")
     assert 'body[data-theme="aurora"]' in styles_source
     assert 'body[data-theme="violet"]' in styles_source
-    assert "--ambient-blue" in styles_source
+    assert "--ambient-silver" in styles_source
+    assert "--ambient-warm" in styles_source
+    assert "--ambient-blue" not in styles_source
+    assert "--ambient-cyan" not in styles_source
     assert ".capability-menu {\n  position: fixed;" in styles_source
     assert "fetch('/api/search'" not in app_source
     assert "fetch('/api/research'" not in app_source
@@ -530,8 +533,27 @@ def test_history_filter_and_groups_use_only_loaded_owned_conversations():
     assert "apiRequest" not in render.group(1)
 
 
-def test_mobile_opens_chat_first_while_desktop_retains_parmar_overview():
+def test_all_viewports_enter_the_parmar_overview_before_chat():
     app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
     initialize = re.search(r"function initialize\(\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert initialize is not None
-    assert "selectSection(window.innerWidth <= 640 ? 'chat' : 'home')" in initialize.group(1)
+    assert "selectSection('home')" in initialize.group(1)
+
+
+def test_home_navigation_controls_do_not_submit_or_claim_a_ready_state():
+    static_dir = Path(__file__).parents[1] / "interface" / "static"
+    app_source = (static_dir / "app.js").read_text(encoding="utf-8")
+    html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+    events = re.search(r"function bindEvents\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    language = re.search(r"if \(dom\.languageSelect\) \{(.*?)\n\s*\}", events.group(1), re.DOTALL)
+    assert events and language
+    assert 'data-section="home" data-nav-key="home"' in html_source
+    assert ".sidebar-brand[data-section]" in events.group(1)
+    assert 'data-section="voki"' in html_source
+    assert ">Open VOKKI</button>" in html_source
+    assert "state.settings.language = dom.languageSelect.value" in language.group(1)
+    assert "persistSettings()" in language.group(1)
+    assert "analyzeRequest" not in language.group(1)
+    assert '<body data-state="UNKNOWN"' in html_source
+    assert 'data-voki-state="UNKNOWN"' in html_source
+    assert 'id="status-pill" aria-live="polite">NOT ASSESSED</div>' in html_source

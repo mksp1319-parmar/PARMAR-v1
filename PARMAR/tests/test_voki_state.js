@@ -188,7 +188,7 @@ test('authenticated reload restores only a server-listed conversation and clears
   assert.match(authRefresh, /if \(authenticatedSessionChanged\) clearActiveConversationId\(\)/);
   assert.match(refreshHistory, /const storedConversationId = readActiveConversationId\(\)/);
   assert.match(refreshHistory, /serverIds\.has\(storedConversationId\)/);
-  assert.match(refreshHistory, /void selectServerConversation\(restoreConversationId\)/);
+  assert.match(refreshHistory, /await selectServerConversation\(restoreConversationId\)/);
   assert.match(refreshHistory, /clearActiveConversationId\(\)/);
   assert.match(selectHistory, /storeActiveConversationId\(conversationId\)/);
   assert.match(storageRead, /sessionStorage\.getItem/);
@@ -213,6 +213,60 @@ test('New Chat cancels reveals and clears the active conversation without creati
   assert.match(bindEvents, /state\.pendingApprovalId = null/);
   assert.match(bindEvents, /if \(state\.authMode === 'authenticated'\) clearActiveConversationId\(\)/);
   assert.doesNotMatch(bindEvents.split("dom.newSessionBtn.addEventListener('click', () => {")[1]?.split('\n    });')[0] || '', /apiRequest\(['"]\/api\/chat/);
+});
+
+test('VOKKI Reject is never bound to the Chat/Home approval handler', () => {
+  const decisions = [];
+  const homeControls = ['APPROVE', 'REJECT', 'INFO', 'ALTERNATIVE'].map((decision) => ({
+    dataset: { decision },
+    addEventListener(eventName, callback) {
+      assert.equal(eventName, 'click');
+      this.click = callback;
+    },
+  }));
+  const vokiReject = {
+    className: 'reject-btn',
+    dataset: { vokiDecision: 'REJECT' },
+    addEventListener() {
+      throw new Error('VOKKI control must not be bound by the Chat/Home handler.');
+    },
+  };
+  const context = vm.createContext({
+    dom: {
+      approvalActions: {
+        querySelectorAll(selector) {
+          assert.equal(selector, 'button[data-decision]');
+          return homeControls;
+        },
+      },
+    },
+    submitDecision: (decision) => decisions.push(decision),
+  });
+  vm.runInContext(`${functionSource('bindHomeApprovalActions')}\nbindHomeApprovalActions();`, context);
+
+  homeControls[1].click();
+
+  assert.deepEqual(decisions, ['REJECT']);
+  assert.equal(vokiReject.dataset.decision, undefined);
+});
+
+test('local VOKKI reads and writes through Chat sessions without owning a transcript', () => {
+  const getConversation = functionSource('getLocalVokiConversation');
+  const appendMessage = functionSource('appendLocalVokiConversationMessage');
+  const newChat = functionSource('bindEvents');
+  const vokiSource = fs.readFileSync(
+    path.join(__dirname, '..', 'interface', 'static', 'voki-interface.js'),
+    'utf8',
+  );
+  assert.match(getConversation, /state\.sessions/);
+  assert.match(getConversation, /ensureCurrentSession\(\)/);
+  assert.match(appendMessage, /appendMessageToSession\(sessionId, 'user'/);
+  assert.match(appendMessage, /appendMessageToSession\(sessionId, 'assistant'/);
+  assert.match(newChat, /publishConversationSelection\(session\?\.id \?\? null\)/);
+  assert.match(functionSource('renderHistory'), /publishConversationSelection\(selected\.id, true\)/);
+  assert.match(functionSource('submitChatMessage'), /publishConversationSelection\(authenticated \? result\.conversation_id : sessionId, true\)/);
+  assert.match(vokiSource, /parmar-conversation-selection-changed[\s\S]*?activateConversation\(detail\.conversationId, \{ refresh: detail\.refresh === true \}\)/);
+  assert.doesNotMatch(vokiSource, /recentMessages/);
 });
 
 test('the existing composer still submits once on Enter and preserves Shift+Enter and IME input', () => {
