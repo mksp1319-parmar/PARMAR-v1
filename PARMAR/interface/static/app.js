@@ -293,6 +293,13 @@ const dom = {
   historyList: document.getElementById('history-list'),
   historyFilter: document.getElementById('history-filter'),
   historyStatus: document.getElementById('history-status'),
+  homeContinueList: document.getElementById('home-continue-list'),
+  homeAttention: document.getElementById('home-attention'),
+  homeReadinessState: document.getElementById('home-readiness-state'),
+  homeRecentConversations: document.getElementById('home-recent-conversations'),
+  homeRecentResearch: document.getElementById('home-recent-research'),
+  homeRecentSimulations: document.getElementById('home-recent-simulations'),
+  homeRecentDecisions: document.getElementById('home-recent-decisions'),
   newSessionBtn: document.getElementById('new-session-btn'),
   sidebar: document.getElementById('sidebar'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
@@ -344,6 +351,7 @@ const dom = {
 };
 
 const state = {
+  homeVokiAvatar: null,
   sessions: [],
   localDemoSessions: [],
   audit: [],
@@ -472,6 +480,7 @@ function setRequestPending(pending) {
     control.setAttribute('aria-busy', String(pending));
   });
   document.body.dataset.requestPending = String(pending);
+  renderHome();
 }
 
 function beginRequest() {
@@ -521,7 +530,7 @@ function notifyOtherTabs(reason) {
   }
 }
 
-function clearAuthenticatedState(message, { broadcast = false } = {}) {
+function clearAuthenticatedState(message, { broadcast = false, navigateToChat = true } = {}) {
   if (state.authMode === 'authenticated' || state.authMode === 'checking') {
     invalidatePendingRequest();
     state.authEpoch += 1;
@@ -553,7 +562,7 @@ function clearAuthenticatedState(message, { broadcast = false } = {}) {
     renderAuditEntries();
     renderMemories();
     resetReviewState(message);
-    selectSection(state.currentSessionId ? 'chat' : 'home');
+    if (navigateToChat) selectSection(state.currentSessionId ? 'chat' : 'home');
     if (broadcast) notifyOtherTabs('session-ended');
   }
 }
@@ -585,7 +594,7 @@ function renderAuthenticationControls() {
   if (dom.refreshSessionBtn) dom.refreshSessionBtn.hidden = !authenticated;
 }
 
-async function refreshAuthenticationState({ expired = false, broadcast = false } = {}) {
+async function refreshAuthenticationState({ expired = false, broadcast = false, navigateToChat = true } = {}) {
   try {
     const response = await fetch('/api/session', { cache: 'no-store' });
     if (!response.ok) throw new Error('Session status is unavailable');
@@ -625,7 +634,7 @@ async function refreshAuthenticationState({ expired = false, broadcast = false }
       renderMemories();
       if (enteringAuthenticated) await refreshAuthenticatedMemories();
       if (state.authMode !== 'authenticated') return false;
-      await refreshServerConversationHistory();
+      await refreshServerConversationHistory({ navigateToChat });
       if (state.authMode !== 'authenticated') return false;
       window.dispatchEvent(new CustomEvent('parmar-auth-session-ready', {
         detail: {
@@ -645,7 +654,7 @@ async function refreshAuthenticationState({ expired = false, broadcast = false }
     if (state.authMode !== 'anonymous') {
       clearAuthenticatedState(
         expired ? 'Your authenticated session expired. You are now using local demo mode.' : '',
-        { broadcast },
+        { broadcast, navigateToChat },
       );
     }
     renderAuthenticationControls();
@@ -666,7 +675,7 @@ async function refreshAuthenticationState({ expired = false, broadcast = false }
       renderMemories();
       state.currentSessionId = state.sessions[0]?.id || null;
       if (state.currentSessionId) renderSessionMessages();
-      selectSection(state.currentSessionId ? 'chat' : 'home');
+      if (navigateToChat) selectSection(state.currentSessionId ? 'chat' : 'home');
     } else if (expired) {
       clearAuthenticatedState(
         'Your authenticated session could not be verified. You are now using local demo mode.',
@@ -819,6 +828,7 @@ function setVokiState(rawState) {
   }
 
   document.body.dataset.vokiState = lifecyclePresentation[key] ? key : 'UNKNOWN';
+  state.homeVokiAvatar?.setLifecycle(lifecyclePresentation[key] ? key : 'UNKNOWN');
   if (dom.vokiState) {
     dom.vokiState.textContent = presentation.label;
   }
@@ -1075,7 +1085,7 @@ function onWorkspacePanelTransitionEnd(event, side) {
 
 function panelGestureExcluded(target) {
   return Boolean(target?.closest?.(
-    'input, textarea, select, button, a, [contenteditable="true"], #parmar-core, .chat-thread, .chat-composer, [data-panel-gesture-ignore]',
+    'input, textarea, select, button, a, [contenteditable="true"], .chat-thread, .chat-composer, [data-panel-gesture-ignore]',
   ));
 }
 
@@ -1227,7 +1237,8 @@ function selectSection(sectionName, navKey = sectionName) {
   });
 
   const sectionLabels = {
-    home: 'PARMAR Core',
+    home: 'Home',
+    core: 'PARMAR Core',
     chat: 'Chats / History',
     voki: 'VOKKI',
     aether: 'AETHER',
@@ -1248,6 +1259,28 @@ function selectSection(sectionName, navKey = sectionName) {
     }
   }
   syncSidebarToggle();
+}
+
+function navigateWorkspaceAction(button) {
+  if (button.dataset.action === 'new-chat') {
+    dom.newSessionBtn?.click();
+    selectSection('chat', 'new-chat');
+    return;
+  }
+  if (button.dataset.action === 'research-chat') {
+    if (dom.researchMode) dom.researchMode.checked = true;
+    selectSection('chat');
+    closeWorkspacePanel('right');
+    dom.chatInput?.focus();
+    return;
+  }
+  if (!button.dataset.section) return;
+  selectSection(button.dataset.section, button.dataset.navKey || button.dataset.section);
+  if (button.dataset.section === 'voki') dom.vokiInput?.focus({ preventScroll: true });
+  if (button.dataset.homeFocus === 'request') dom.requestInput?.focus();
+  if (button.dataset.homeFocus === 'approval') {
+    dom.approvalActions?.querySelector('button[data-decision]')?.focus();
+  }
 }
 
 function ensureCurrentSession() {
@@ -1562,6 +1595,7 @@ async function clearAllMemories() {
 
 function renderHistory() {
   if (!dom.historyList) return;
+  renderHome();
   const query = state.historyQuery.trim().toLocaleLowerCase();
   const conversations = state.sessions
     .filter((session) => (
@@ -1652,38 +1686,209 @@ function renderHistory() {
     }
     button.append(titleElement, dateElement);
     button.disabled = state.historySelectionId === session.id;
-    button.addEventListener('click', () => {
-      const selected = state.sessions.find((entry) => entry.id === button.dataset.sessionId);
-      if (!selected) return;
-      if (state.authMode === 'authenticated') {
-        void selectServerConversation(selected.id);
-        return;
-      }
-      invalidatePendingRequest();
-      state.currentSessionId = selected.id;
-      state.conversationId = state.authMode === 'authenticated' ? selected.id : null;
-      publishConversationSelection(selected.id, true);
-      state.pendingApprovalId = null;
-      if (dom.chatInput) dom.chatInput.value = '';
-      resizeChatInput();
-      const lastUserMessage = [...selected.messages].reverse().find((message) => message.role === 'user');
-      if (dom.requestInput) dom.requestInput.value = lastUserMessage?.text || '';
-      renderSessionMessages();
-      const latestAssistant = [...selected.messages].reverse().find((message) => message.role === 'assistant');
-      if (state.authMode === 'authenticated') {
-        resetReviewState('Conversation selected. PARMAR will review your next request.');
-      } else if (!latestAssistant?.analysis || !updateState(latestAssistant.analysis)) {
-        resetReviewState('Conversation selected. No saved safety review is available.');
-      }
-      renderHistory();
-      selectSection('chat', 'chat');
-    });
+    button.addEventListener('click', () => continueConversation(button.dataset.sessionId));
     item.appendChild(button);
     dom.historyList.appendChild(item);
   });
 }
 
-async function refreshServerConversationHistory() {
+function continueConversation(conversationId) {
+  const selected = state.sessions.find((entry) => entry.id === conversationId);
+  if (!selected) return;
+  if (state.authMode === 'authenticated') {
+    void selectServerConversation(selected.id);
+    return;
+  }
+  invalidatePendingRequest();
+  state.currentSessionId = selected.id;
+  state.conversationId = null;
+  publishConversationSelection(selected.id, true);
+  state.pendingApprovalId = null;
+  if (dom.chatInput) dom.chatInput.value = '';
+  resizeChatInput();
+  const lastUserMessage = [...selected.messages].reverse().find((message) => message.role === 'user');
+  if (dom.requestInput) dom.requestInput.value = lastUserMessage?.text || '';
+  renderSessionMessages();
+  const latestAssistant = [...selected.messages].reverse().find((message) => message.role === 'assistant');
+  if (!latestAssistant?.analysis || !updateState(latestAssistant.analysis, false, false)) {
+    resetReviewState('Conversation selected. No saved safety review is available.');
+  }
+  renderHistory();
+  selectSection('chat', 'chat');
+}
+
+function homeTimestamp(value) {
+  const timestamp = homeTimestampValue(value);
+  if (!Number.isFinite(timestamp)) return '';
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(timestamp));
+}
+
+function homeTimestampValue(value) {
+  if (typeof value === 'number') return value;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : NaN;
+}
+
+function appendHomeWorkItem(container, { title, detail, timestamp, actionLabel, onOpen }) {
+  if (!container) return;
+  const item = document.createElement('article');
+  item.className = 'home-work-item';
+  const copy = document.createElement('div');
+  copy.className = 'home-work-copy';
+  const titleElement = document.createElement('strong');
+  titleElement.textContent = title;
+  const detailElement = document.createElement('span');
+  detailElement.textContent = detail;
+  copy.append(titleElement, detailElement);
+  const metadata = homeTimestamp(timestamp);
+  if (metadata) {
+    const dateElement = document.createElement('time');
+    dateElement.textContent = metadata;
+    copy.appendChild(dateElement);
+  }
+  item.appendChild(copy);
+  if (actionLabel && onOpen) {
+    const action = document.createElement('button');
+    action.className = 'home-work-open';
+    action.type = 'button';
+    action.textContent = actionLabel;
+    action.addEventListener('click', onOpen);
+    item.appendChild(action);
+  }
+  container.appendChild(item);
+}
+
+function renderHomeWorkList(container, records, emptyMessage) {
+  if (!container) return;
+  container.replaceChildren();
+  if (!records.length) {
+    const empty = document.createElement('p');
+    empty.className = 'home-work-empty';
+    empty.textContent = emptyMessage;
+    container.appendChild(empty);
+    return;
+  }
+  records.forEach((record) => appendHomeWorkItem(container, record));
+}
+
+function renderHome() {
+  if (!dom.homeContinueList) return;
+  const readinessState = String(document.body.dataset.state || 'UNKNOWN').toUpperCase();
+  if (dom.homeReadinessState) {
+    dom.homeReadinessState.textContent = state.requestInFlight
+      ? 'REQUEST IN PROGRESS'
+      : readinessState === 'UNKNOWN'
+        ? 'NOT YET ASSESSED'
+        : lifecyclePresentation[readinessState]?.label || 'STATE UNAVAILABLE';
+  }
+  if (dom.homeAttention) {
+    dom.homeAttention.hidden = !(
+      state.pendingApprovalId
+      && readinessState === 'WAITING_FOR_HUMAN'
+      && dom.approvalActions
+      && !dom.approvalActions.hidden
+    );
+  }
+
+  const availableConversations = state.sessions.filter((session) => (
+    session.messages.length > 0
+    || (state.authMode === 'authenticated' && state.serverConversationIds.has(session.id))
+  ));
+  const latestConversations = availableConversations.slice(0, 3);
+  dom.homeContinueList.replaceChildren();
+  if (latestConversations.length) {
+    latestConversations.slice(0, 2).forEach((session) => {
+      const firstUserMessage = session.messages.find((message) => message.role === 'user');
+      const title = String(session.title || firstUserMessage?.text || '').trim();
+      if (!title) return;
+      appendHomeWorkItem(dom.homeContinueList, {
+        title: title.slice(0, 72),
+        detail: state.currentSessionId === session.id ? 'Current conversation' : 'Conversation',
+        timestamp: session.updatedAt || session.createdAt,
+        actionLabel: 'Continue',
+        onOpen: () => continueConversation(session.id),
+      });
+    });
+  }
+  if (!dom.homeContinueList.childElementCount) {
+    const empty = document.createElement('div');
+    empty.className = 'home-continue-empty';
+    const title = document.createElement('strong');
+    const detail = document.createElement('span');
+    if (state.authMode === 'checking' || (state.authMode === 'authenticated' && state.historyLoading)) {
+      title.textContent = 'Loading your conversations';
+      detail.textContent = 'Your server-backed history will appear here when available.';
+    } else if (state.authMode === 'authenticated' && state.historyError) {
+      title.textContent = 'History is unavailable';
+      detail.textContent = 'PARMAR could not load your conversations. Try again from Chats / History.';
+    } else if (historyStorageUnavailable && state.authMode !== 'authenticated') {
+      title.textContent = 'Local history is unavailable';
+      detail.textContent = 'Browser storage could not be read. Existing conversations were not changed.';
+    } else {
+      title.textContent = 'A clear place to begin';
+      detail.textContent = 'Your conversations will appear here after you start one.';
+    }
+    empty.append(title, detail);
+    dom.homeContinueList.appendChild(empty);
+  }
+
+  const conversationRecords = latestConversations.map((session) => {
+    const firstUserMessage = session.messages.find((message) => message.role === 'user');
+    return {
+      title: String(session.title || firstUserMessage?.text || 'Conversation').trim().slice(0, 72),
+      detail: 'Conversation',
+      timestamp: session.updatedAt || session.createdAt,
+      actionLabel: 'Open',
+      onOpen: () => continueConversation(session.id),
+    };
+  });
+  const researchRecords = state.sessions.flatMap((session) => session.messages
+    .filter((message) => (
+      message.role === 'assistant'
+      && message.analysis?.research
+      && typeof message.analysis.research === 'object'
+      && Object.keys(message.analysis.research).length > 0
+    ))
+    .map((message) => {
+      const research = message.analysis.research;
+      const sources = Array.isArray(research.sources) ? research.sources.length : 0;
+      const title = String(session.title || session.messages.find((entry) => entry.role === 'user')?.text || '').trim();
+      return {
+        title: title ? title.slice(0, 72) : 'Research conversation',
+        detail: sources ? `${sources} saved sources` : 'Research result saved with conversation',
+        timestamp: message.timestamp || session.updatedAt,
+        actionLabel: 'Open',
+        onOpen: () => continueConversation(session.id),
+      };
+    }))
+    .sort((first, second) => (homeTimestampValue(second.timestamp) || 0)
+      - (homeTimestampValue(first.timestamp) || 0))
+    .slice(0, 3);
+  const simulations = state.audit.filter((entry) => entry.kind === 'simulation').slice(0, 3).map((entry) => ({
+    title: entry.request || 'Scenario review',
+    detail: entry.status || 'Simulation recorded',
+    timestamp: entry.timestamp,
+    actionLabel: 'Open simulator',
+    onOpen: () => selectSection('simulator'),
+  }));
+  const decisions = state.audit.filter((entry) => entry.kind === 'decision').slice(0, 3).map((entry) => ({
+    title: entry.request || 'PARMAR review',
+    detail: entry.status || 'Review recorded',
+    timestamp: entry.timestamp,
+    actionLabel: 'Review in Core',
+    onOpen: () => {
+      if (dom.requestInput) dom.requestInput.value = entry.request || '';
+      selectSection('core');
+      dom.requestInput?.focus();
+    },
+  }));
+  renderHomeWorkList(dom.homeRecentConversations, conversationRecords, 'No conversations yet.');
+  renderHomeWorkList(dom.homeRecentResearch, researchRecords, 'No saved research in available conversations.');
+  renderHomeWorkList(dom.homeRecentSimulations, simulations, 'No simulations recorded here yet.');
+  renderHomeWorkList(dom.homeRecentDecisions, decisions, 'No decisions recorded here yet.');
+}
+
+async function refreshServerConversationHistory({ navigateToChat = true } = {}) {
   if (state.authMode !== 'authenticated') return;
   const generation = ++state.historyLoadGeneration;
   const authEpoch = state.authEpoch;
@@ -1739,13 +1944,13 @@ async function refreshServerConversationHistory() {
       state.historyLoading = false;
       renderHistory();
       if (restoreConversationId && !state.conversationId) {
-        await selectServerConversation(restoreConversationId);
+        await selectServerConversation(restoreConversationId, { navigateToChat });
       }
     }
   }
 }
 
-async function selectServerConversation(conversationId) {
+async function selectServerConversation(conversationId, { navigateToChat = true } = {}) {
   if (state.authMode !== 'authenticated' || !state.serverConversationIds.has(conversationId)) return;
   invalidatePendingRequest();
   cancelChatResponseReveal();
@@ -1787,7 +1992,7 @@ async function selectServerConversation(conversationId) {
     resizeChatInput();
     renderSessionMessages();
     renderHistory();
-    selectSection('chat', 'chat');
+    if (navigateToChat) selectSection('chat', 'chat');
   } catch (_error) {
     if (generation === state.historySelectionGeneration && authEpoch === state.authEpoch && state.authMode === 'authenticated') {
       state.historyError = true;
@@ -1832,6 +2037,7 @@ function resetReviewState(message = 'PARMAR is ready for a request.') {
   if (dom.approvalConflicts) dom.approvalConflicts.textContent = 'No explicit conflict detected.';
   if (dom.approvalSafety) dom.approvalSafety.textContent = 'Awaiting review.';
   if (dom.approvalAlternative) dom.approvalAlternative.textContent = 'A recommendation will appear when available.';
+  renderHome();
 }
 
 function resizeChatInput() {
@@ -2110,15 +2316,17 @@ function renderAuditEntries() {
 
   if (dom.auditList) dom.auditList.innerHTML = markup || '<div class="audit-item"><strong>NO RECORDS</strong><span>No governance activity captured yet.</span></div>';
   if (dom.auditListSecondary) dom.auditListSecondary.innerHTML = markup || '<div class="audit-item"><strong>NO RECORDS</strong><span>No governance activity captured yet.</span></div>';
+  renderHome();
 }
 
-function addAuditEntry(request, status, riskLevel, message) {
+function addAuditEntry(request, status, riskLevel, message, kind = 'decision') {
   const entry = {
     request: sanitizeSensitiveText(request || 'No request'),
     status: normalizeStatus(status),
     riskLevel: normalizeStatus(riskLevel),
     message: sanitizeSensitiveText(message || 'Governance review recorded.'),
     timestamp: new Date().toISOString(),
+    kind,
   };
   state.audit = [entry, ...state.audit].slice(0, 12);
   if (state.authMode !== 'authenticated') {
@@ -2304,7 +2512,7 @@ function resolveResultShape(result) {
   };
 }
 
-function updateState(result, scenarioSimulation = false) {
+function updateState(result, scenarioSimulation = false, recordAudit = true) {
   const analysis = result?.analysis || result;
   const contract = result?.voki_contract || analysis?.voki_contract;
   const lifecycleState = String(
@@ -2345,8 +2553,10 @@ function updateState(result, scenarioSimulation = false) {
   document.body.dataset.state = resolved.lifecycleState;
   state.pendingApprovalId = analysis.approval_id || result?.approval_id || null;
 
-  const auditText = `${resolved.status} — ${resolved.message}`;
-  addAuditEntry(resolved.request, status, resolved.riskLevel, auditText);
+  if (recordAudit) {
+    const auditText = `${resolved.status} — ${resolved.message}`;
+    addAuditEntry(resolved.request, status, resolved.riskLevel, auditText, scenarioSimulation ? 'simulation' : 'decision');
+  }
   return true;
 }
 
@@ -2369,6 +2579,7 @@ function showRequestUnavailable(message) {
   if (dom.approvalConflicts) dom.approvalConflicts.textContent = 'No explicit conflict detected.';
   if (dom.approvalSafety) dom.approvalSafety.textContent = 'Awaiting review.';
   if (dom.approvalAlternative) dom.approvalAlternative.textContent = 'A recommendation will appear when available.';
+  renderHome();
 }
 
 async function analyzeRequest() {
@@ -2764,23 +2975,8 @@ function bindEvents() {
     }
   });
 
-  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section]').forEach((button) => {
-    button.addEventListener('click', () => {
-      if (button.dataset.action === 'new-chat') {
-        dom.newSessionBtn?.click();
-        selectSection('chat', 'new-chat');
-        return;
-      }
-      if (button.dataset.action === 'research-chat') {
-        if (dom.researchMode) dom.researchMode.checked = true;
-        selectSection('chat');
-        closeWorkspacePanel('right');
-        dom.chatInput?.focus();
-        return;
-      }
-      selectSection(button.dataset.section, button.dataset.navKey || button.dataset.section);
-      if (button.dataset.section === 'voki') dom.vokiInput?.focus({ preventScroll: true });
-    });
+  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section], .home-action[data-section], .home-action[data-action]').forEach((button) => {
+    button.addEventListener('click', () => navigateWorkspaceAction(button));
   });
   dom.parmarCore?.addEventListener('click', () => {
     selectSection('voki');
@@ -2945,13 +3141,14 @@ function bindEvents() {
 
   if (dom.runScenarioSecondary) {
     dom.runScenarioSecondary.addEventListener('click', () => {
-      selectSection('home');
+      selectSection('core');
       evaluateScenario(dom.simulatorSelectSecondary);
     });
   }
 
   if (dom.loadDemo) {
     dom.loadDemo.addEventListener('click', () => {
+      selectSection('core');
       dom.requestInput.value = 'AI proposes to share private employee records with an external reviewer.';
       analyzeRequest();
     });
@@ -3067,6 +3264,12 @@ function initialize() {
   renderAuditEntries();
   renderPhoneStatus();
   loadScenarios();
+  const homeAvatarRoot = document.querySelector('[data-voki-home-avatar]');
+  if (homeAvatarRoot && window.PARMARVOKKIAvatar?.VOKKIAvatarPresentation) {
+    state.homeVokiAvatar = new window.PARMARVOKKIAvatar.VOKKIAvatarPresentation({
+      root: homeAvatarRoot,
+    });
+  }
   const vokiRoot = document.querySelector('[data-voki-interface]');
   if (vokiRoot && window.PARMARVOKKIInterface?.VOKKIInterface) {
     new window.PARMARVOKKIInterface.VOKKIInterface({
@@ -3088,7 +3291,7 @@ function initialize() {
   syncWorkspacePanels();
   selectSection('home');
   configureCrossTabAuthentication();
-  refreshAuthenticationState();
+  refreshAuthenticationState({ navigateToChat: false });
 }
 
 initialize();

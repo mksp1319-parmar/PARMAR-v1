@@ -25,11 +25,13 @@ def test_ui_adapter_preserves_safety_pipeline_details():
     assert any(step["name"] == "ENFORCEMENT" for step in result["pipeline"])
 
 
-def test_frontend_maps_all_lifecycle_states_to_voki_classes():
+def test_frontend_maps_all_lifecycle_states_to_voki_identity():
     app_path = Path(__file__).parents[1] / "interface" / "static" / "app.js"
     styles_path = Path(__file__).parents[1] / "interface" / "static" / "styles.css"
+    avatar_path = Path(__file__).parents[1] / "interface" / "static" / "voki-avatar.js"
     app_source = app_path.read_text(encoding="utf-8")
     styles_source = styles_path.read_text(encoding="utf-8")
+    avatar_source = avatar_path.read_text(encoding="utf-8")
     mapping = re.search(r"const lifecyclePresentation = \{(.*?)\n\};", app_source, re.DOTALL)
     assert mapping is not None
 
@@ -50,7 +52,9 @@ def test_frontend_maps_all_lifecycle_states_to_voki_classes():
     }
     for state, class_name in expected_classes.items():
         assert re.search(rf"\b{state}: \{{ className: '{re.escape(class_name)}',", mapping.group(1))
-        assert f".parmar-core.{class_name}" in styles_source
+        assert re.search(rf"\b{state}: '[a-z-]+',", avatar_source)
+    assert "state.homeVokiAvatar?.setLifecycle" in app_source
+    assert '.home-voki-presence[data-lifecycle-state="WAITING_FOR_HUMAN"]' in styles_source
 
 
 def test_voki_has_a_description_for_each_lifecycle_state():
@@ -170,7 +174,7 @@ def test_authenticated_chat_uses_only_server_conversation_ids_and_omits_browser_
 def test_authenticated_state_never_persists_chat_or_audit_history_to_local_storage():
     app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
     persistence = re.search(r"function persistedSessionList\(\) \{(.*?)\n\}", app_source, re.DOTALL)
-    audit = re.search(r"function addAuditEntry\(request, status, riskLevel, message\) \{(.*?)\n\}", app_source, re.DOTALL)
+    audit = re.search(r"function addAuditEntry\([^)]*\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert persistence is not None
     assert audit is not None
     assert "if (state.authMode === 'authenticated')" in persistence.group(1)
@@ -183,8 +187,8 @@ def test_authenticated_state_never_persists_chat_or_audit_history_to_local_stora
 
 def test_session_expiry_logout_and_cross_tab_notifications_clear_authenticated_state():
     app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
-    clear = re.search(r"function clearAuthenticatedState\(message, \{ broadcast = false \} = \{\}\) \{(.*?)\n\}", app_source, re.DOTALL)
-    refresh = re.search(r"async function refreshAuthenticationState\(\{ expired = false, broadcast = false \} = \{\}\) \{(.*?)\n\}", app_source, re.DOTALL)
+    clear = re.search(r"function clearAuthenticatedState\([^)]*\) \{(.*?)\n\}", app_source, re.DOTALL)
+    refresh = re.search(r"async function refreshAuthenticationState\([^)]*\) \{(.*?)\n\}", app_source, re.DOTALL)
     logout = re.search(r"async function logoutAuthenticatedSession\(\) \{(.*?)\n\}", app_source, re.DOTALL)
     cross_tab = re.search(r"function configureCrossTabAuthentication\(\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert clear and refresh and logout and cross_tab
@@ -208,8 +212,8 @@ def test_authenticated_posts_use_csrf_and_server_history_is_not_faked_in_sidebar
     assert "authenticated" in api_request.group(1)
     assert "[401, 403, 404].includes(response.status)" in api_request.group(1)
     assert "No conversations yet." in app_source
-    assert "async function refreshServerConversationHistory()" in app_source
-    assert "async function selectServerConversation(conversationId)" in app_source
+    assert re.search(r"async function refreshServerConversationHistory\([^)]*\)", app_source)
+    assert re.search(r"async function selectServerConversation\([^)]*\)", app_source)
     assert "apiRequest('/api/conversations'" in app_source
     assert "apiRequest(`/api/conversations/${encodeURIComponent(conversationId)}`" in app_source
 
@@ -227,23 +231,24 @@ def test_voki_and_chat_share_server_selected_conversation_without_history_replay
         re.DOTALL,
     )
     restore = re.search(
-        r"async function refreshServerConversationHistory\(\) \{(.*?)\n\}",
+        r"async function refreshServerConversationHistory\([^)]*\) \{(.*?)\n\}",
         app_source,
         re.DOTALL,
     )
     select = re.search(
-        r"async function selectServerConversation\(conversationId\) \{(.*?)\n\}",
+        r"async function selectServerConversation\([^)]*\) \{(.*?)\n\}",
         app_source,
         re.DOTALL,
     )
     assert new_chat and restore and select
-    assert 'id="parmar-core"' in html_source
+    assert 'data-voki-home-avatar' in html_source
+    assert 'data-voki-default-image src="/static/assets/voki/default-avatar.png"' in html_source
     assert 'data-section="voki"' in html_source
-    assert 'aria-label="Open VOKKI interaction"' in html_source
-    assert "selectSection('voki')" in app_source
+    assert 'aria-label="VOKKI interface"' in html_source
+    assert "button.dataset.section === 'voki'" in app_source
     assert "dom.vokiInput?.focus({ preventScroll: true })" in app_source
     assert "ACTIVE_CONVERSATION_KEY = 'parmar-active-conversation-v1'" in app_source
-    assert "await selectServerConversation(restoreConversationId)" in restore.group(1)
+    assert "await selectServerConversation(restoreConversationId, { navigateToChat })" in restore.group(1)
     assert "publishConversationSelection(conversationId, true)" in select.group(1)
     assert "publishConversationSelection(session?.id ?? null)" in new_chat.group(1)
     assert "parmar-voki-conversation-activated" in app_source
@@ -354,8 +359,10 @@ def test_workspace_toolbar_routes_real_research_through_chat_without_a_fake_work
     assert 'body[data-theme="violet"]' in styles_source
     assert "--ambient-silver" in styles_source
     assert "--ambient-warm" in styles_source
-    assert "--ambient-blue" not in styles_source
-    assert "--ambient-cyan" not in styles_source
+    home_styles = re.search(r"\.home-hero \{(.*?)\n\.home-section \{", styles_source, re.DOTALL)
+    assert home_styles is not None
+    assert "--ambient-blue" not in home_styles.group(1)
+    assert "--ambient-cyan" not in home_styles.group(1)
     assert ".capability-menu {\n  position: fixed;" in styles_source
     assert "fetch('/api/search'" not in app_source
     assert "fetch('/api/research'" not in app_source
@@ -416,7 +423,7 @@ def test_edge_gestures_protect_scroll_selection_composer_and_voki():
     start = re.search(r"function startPanelGesture\(event\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert excluded and move and start
 
-    for target in (".chat-composer", ".chat-thread", "#parmar-core", "[contenteditable=\"true\"]"):
+    for target in (".chat-composer", ".chat-thread", "button", "[contenteditable=\"true\"]"):
         assert target in excluded.group(1)
     assert "window.getSelection" in start.group(1)
     assert "window.getSelection" in move.group(1)
@@ -456,8 +463,9 @@ def test_chat_release_guard_copy_and_reveal_cancellation_are_integrated():
     submit = re.search(r"async function submitChatMessage\(\) \{(.*?)\n\}", app_source, re.DOTALL)
     append = re.search(r"function appendMessageToSession\(sessionId, role, text, analysis\) \{(.*?)\n\}", app_source, re.DOTALL)
     new_chat = re.search(r"if \(dom\.newSessionBtn\) \{(.*?)\n\s*\}", app_source, re.DOTALL)
-    history = re.search(r"function renderHistory\(\) \{(.*?)\n\}", app_source, re.DOTALL)
-    assert render and cancel and submit and append and new_chat and history
+    continue_conversation = re.search(r"function continueConversation\([^)]*\) \{(.*?)\n\}", app_source, re.DOTALL)
+    server_conversation = re.search(r"async function selectServerConversation\([^)]*\) \{(.*?)\n\}", app_source, re.DOTALL)
+    assert render and cancel and submit and append and new_chat and continue_conversation and server_conversation
 
     for contract_field in (
         "contract?.lifecycle?.state === 'RELEASED'",
@@ -477,7 +485,8 @@ def test_chat_release_guard_copy_and_reveal_cancellation_are_integrated():
     assert "cancelChatResponseReveal();" in render.group(1)
     assert "renderSessionMessages();" in new_chat.group(1)
     assert "invalidatePendingRequest();" in new_chat.group(1)
-    assert "renderSessionMessages();" in history.group(1)
+    assert "renderSessionMessages();" in continue_conversation.group(1)
+    assert "renderSessionMessages();" in server_conversation.group(1)
     assert "role === 'assistant' && isUnconfirmedCandidateResponse(analysis)" in append.group(1)
 
 
@@ -499,24 +508,27 @@ def test_vokki_identity_uses_real_lifecycle_and_not_a_speaking_orb_for_local_dem
     html_source = (static_dir / "index.html").read_text(encoding="utf-8")
     app_source = (static_dir / "app.js").read_text(encoding="utf-8")
     styles_source = (static_dir / "styles.css").read_text(encoding="utf-8")
+    avatar_source = (static_dir / "voki-avatar.js").read_text(encoding="utf-8")
     lifecycle_mapping = re.search(r"function setVokiState\(rawState\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert lifecycle_mapping
 
-    assert "PARMAR VOKKI" in html_source
+    assert "PARMAR / COMMAND CENTER" in html_source
+    assert "data-voki-home-avatar" in html_source
+    assert "data-voki-default-image src=\"/static/assets/voki/default-avatar.png\"" in html_source
+    assert "state.homeVokiAvatar?.setLifecycle" in app_source
+    assert "DEFAULT_VOKKI_IDENTITY" in avatar_source
     assert 'id="section-chat"' in html_source
     assert 'id="section-voki"' in html_source
-    assert "class=\"voki-nameplate\"" in html_source
-    assert "class=\"presence-form\"" in html_source
-    assert "class=\"voki-face\"" in html_source
+    assert 'id="section-core"' in html_source
+    assert 'data-voki-interface' in html_source
     assert "setChatVokiState" not in app_source
     assert 'data-voki-speech-toggle' in html_source
     assert '.voki-presence[data-speech-state="SPEAKING"]' in styles_source
+    assert '.voki-avatar[data-expression="approval-required"] .voki-avatar-default-image' in styles_source
     assert "key === 'RELEASED'" in lifecycle_mapping.group(1)
     assert "SAFE_RESPONSE" not in lifecycle_mapping.group(1)
     assert "motionIsReduced()" in lifecycle_mapping.group(1)
-    assert "classList.add('response-arrived')" in lifecycle_mapping.group(1)
-    assert "response-arrived" in styles_source
-    assert ".presence-form,\n.voki-face {\n  display: block;" in styles_source
+    assert "setLifecycle(lifecycleState)" in avatar_source
 
 
 def test_history_filter_and_groups_use_only_loaded_owned_conversations():
@@ -550,7 +562,11 @@ def test_home_navigation_controls_do_not_submit_or_claim_a_ready_state():
     assert 'data-section="home" data-nav-key="home"' in html_source
     assert ".sidebar-brand[data-section]" in events.group(1)
     assert 'data-section="voki"' in html_source
-    assert ">Open VOKKI</button>" in html_source
+    assert 'aria-label="VOKKI interface"' in html_source
+    home_section = re.search(r'<section class="section-view active home-command-center"[\s\S]*?(?=<section class="section-view core-workspace")', html_source)
+    assert home_section is not None
+    assert "NOT YET ASSESSED" in home_section.group(0)
+    assert 'data-action="new-chat"' in home_section.group(0)
     assert "state.settings.language = dom.languageSelect.value" in language.group(1)
     assert "persistSettings()" in language.group(1)
     assert "analyzeRequest" not in language.group(1)

@@ -6,8 +6,9 @@
   const DEFAULT_VOKKI_IDENTITY = Object.freeze({
     id: 'vokki-local-default',
     kind: 'local-default',
-    source: 'bundled-vector',
-    asset: null,
+    source: 'reference-crop',
+    reference: 'file_00000000bd50820b9c027852032b8da5.png',
+    asset: '/static/assets/voki/default-avatar.png',
   });
   const APPROVED_REFERENCE_IDENTITY = Object.freeze({
     id: 'vokki-approved-reference',
@@ -33,6 +34,19 @@
     BLOCKED: 'cautious',
   });
 
+  function isCatalogIdentity(identity) {
+    return identity?.kind === 'catalog'
+      && typeof identity.id === 'string'
+      && typeof identity.asset === 'string'
+      && identity.asset.startsWith('/static/assets/voki/')
+      && !identity.asset.split('/').includes('..');
+  }
+
+  function resolveIdentity(identity) {
+    if (identity?.id === DEFAULT_VOKKI_IDENTITY.id) return DEFAULT_VOKKI_IDENTITY;
+    return isCatalogIdentity(identity) ? identity : DEFAULT_VOKKI_IDENTITY;
+  }
+
   class VOKKIAvatarPresentation {
     constructor({
       root: element,
@@ -41,7 +55,7 @@
     } = {}) {
       if (!element) throw new TypeError('VOKKI avatar presentation requires a root element.');
       this.root = element;
-      this.identity = identity;
+      this.identity = resolveIdentity(identity);
       this.appearanceAdapter = appearanceAdapter;
       this.lifecycle = 'UNKNOWN';
       this.initialize();
@@ -50,7 +64,15 @@
     initialize() {
       this.root.dataset.avatarIdentity = this.identity.id;
       this.root.dataset.avatarKind = this.identity.kind;
+      this.defaultImage = this.root.querySelector('[data-voki-default-image]');
       this.referenceImage = this.root.querySelector('[data-voki-approved-image]');
+      if (this.defaultImage) {
+        this.defaultImage.src = this.identity.asset;
+        this.defaultImage.hidden = false;
+        this.root.dataset.avatarAppearance = this.identity.kind === 'catalog'
+          ? 'catalog'
+          : 'reference-default';
+      }
       if (this.appearanceAdapter) {
         if (typeof this.appearanceAdapter.mount !== 'function') {
           throw new TypeError('VOKKI appearance adapter must provide mount().');
@@ -67,7 +89,11 @@
       const hasApprovedReference = identity?.kind === 'approved-reference'
         && typeof assetUrl === 'string'
         && assetUrl.startsWith('blob:');
-      this.identity = hasApprovedReference ? identity : DEFAULT_VOKKI_IDENTITY;
+      this.identity = hasApprovedReference
+        ? identity
+        : isCatalogIdentity(identity)
+          ? identity
+          : DEFAULT_VOKKI_IDENTITY;
       this.root.dataset.avatarIdentity = this.identity.id;
       this.root.dataset.avatarKind = this.identity.kind;
 
@@ -79,10 +105,20 @@
         } else {
           this.referenceImage.removeAttribute('src');
           this.referenceImage.hidden = true;
-          this.root.dataset.avatarAppearance = 'bundled-vector';
+          this.root.dataset.avatarAppearance = this.identity.kind === 'catalog'
+            ? 'catalog'
+            : 'reference-default';
         }
       }
-      this.root.querySelector('.voki-avatar-portrait')?.toggleAttribute('hidden', hasApprovedReference);
+      if (this.defaultImage) {
+        this.defaultImage.src = this.identity.asset;
+        this.defaultImage.hidden = hasApprovedReference;
+        if (!hasApprovedReference) {
+          this.root.dataset.avatarAppearance = this.identity.kind === 'catalog'
+            ? 'catalog'
+            : 'reference-default';
+        }
+      }
       this.appearanceAdapter?.setIdentity?.({
         host: this.root,
         identity: this.identity,

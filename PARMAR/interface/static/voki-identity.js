@@ -361,7 +361,7 @@
         if (!record?.blob || typeof this.createObjectURL !== 'function') {
           this.onStateChange({
             state: this.state,
-            message: 'No approved local reference is saved for this authenticated session. The bundled avatar is active.',
+            message: 'No approved local reference is saved for this authenticated session. VOKKI’s PARMAR reference avatar is active.',
           });
           return false;
         }
@@ -375,7 +375,7 @@
           },
           this.approvedUrl,
         );
-        const message = 'An approved local reference is active. The bundled avatar is available by removing it.';
+        const message = 'An approved local reference is active. VOKKI’s PARMAR reference avatar is available by removing it.';
         if (this.state === 'IDLE') this.transition('SAVED', message);
         else this.onStateChange({ state: this.state, message });
         return true;
@@ -383,7 +383,7 @@
         if (scopeGeneration !== this.scopeGeneration) return false;
         this.onStateChange({
           state: this.state,
-          message: 'Local identity storage could not be read. The bundled avatar remains active.',
+          message: 'Local identity storage could not be read. VOKKI’s PARMAR reference avatar remains active.',
         });
         return false;
       }
@@ -413,7 +413,7 @@
       this.discardTemporaryCapture();
       const identityMessage = this.renderer.identity?.kind === 'approved-reference'
         ? 'Your previously approved local identity remains active.'
-        : 'The bundled avatar remains active.';
+        : 'VOKKI’s PARMAR reference avatar remains active.';
       this.transition('CANCELLED', `Setup cancelled. ${identityMessage}`);
       return true;
     }
@@ -433,8 +433,8 @@
         this.revokeObjectURL(this.approvedUrl);
       }
       this.approvedUrl = null;
-      if (this.state === 'SAVED') this.transition('IDLE', 'Local reference removed. The bundled avatar is active.');
-      else this.onStateChange({ state: this.state, message: 'Local reference removed. The bundled avatar is active.' });
+      if (this.state === 'SAVED') this.transition('IDLE', 'Local reference removed. VOKKI’s PARMAR reference avatar is active.');
+      else this.onStateChange({ state: this.state, message: 'Local reference removed. VOKKI’s PARMAR reference avatar is active.' });
       return true;
     }
   }

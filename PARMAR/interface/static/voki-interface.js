@@ -159,7 +159,7 @@
       this.handleSpeechState({ state: this.speech?.state || 'IDLE', boundary: null });
       this.renderIdentityOnboarding({
         state: 'IDLE',
-        message: 'The bundled avatar is active. Optional identity setup is local to this device.',
+        message: 'VOKKI’s PARMAR reference avatar is active. Optional identity setup is local to this device.',
       });
       this.identityOnboarding?.setStorageScope(null);
       this.renderIdentityOnboarding({

@@ -297,9 +297,10 @@ test('authoritative lifecycle maps to distinct VOKKI visual modes without adding
   assert.equal(Object.hasOwn(lifecyclePresence, 'SPEAKING'), false);
 });
 
-test('avatar initializes with the bundled local identity and neutral unavailable expression', () => {
+test('avatar initializes with the canonical reference identity and neutral unavailable expression', () => {
+  const defaultImage = { hidden: true, src: null };
   const root = new Element();
-  root.elements = {};
+  root.elements = { '[data-voki-default-image]': defaultImage };
   const avatar = new VOKKIAvatarPresentation({ root });
 
   assert.equal(root.dataset.avatarIdentity, 'vokki-local-default');
@@ -307,8 +308,11 @@ test('avatar initializes with the bundled local identity and neutral unavailable
   assert.equal(root.dataset.lifecycleState, 'UNKNOWN');
   assert.equal(root.dataset.expression, 'unavailable');
   assert.equal(avatar.lifecycle, 'UNKNOWN');
-  assert.equal(DEFAULT_VOKKI_IDENTITY.source, 'bundled-vector');
-  assert.equal(DEFAULT_VOKKI_IDENTITY.asset, null);
+  assert.equal(DEFAULT_VOKKI_IDENTITY.source, 'reference-crop');
+  assert.equal(DEFAULT_VOKKI_IDENTITY.reference, 'file_00000000bd50820b9c027852032b8da5.png');
+  assert.equal(DEFAULT_VOKKI_IDENTITY.asset, '/static/assets/voki/default-avatar.png');
+  assert.equal(defaultImage.src, DEFAULT_VOKKI_IDENTITY.asset);
+  assert.equal(defaultImage.hidden, false);
 });
 
 test('appearance renderer has a separate plug-in seam from lifecycle interpretation', () => {
@@ -518,12 +522,14 @@ test('authenticated VOKKI synchronization delegates history loading to shared Ch
   }
 });
 
-test('home VOKKI presence opens the real interface and no longer runs an acknowledgment-only click path', () => {
+test('Home uses canonical VOKKI presence and retains manual navigation without an acknowledgment-only path', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
-  const homeButton = html.match(/<button class="parmar-core[^>]+id="parmar-core"[^>]*>/)?.[0] || '';
-  assert.match(homeButton, /aria-label="Open VOKKI interaction"/);
-  assert.match(app, /dom\.parmarCore\?\.addEventListener\('click', \(\) => \{\s*selectSection\('voki'\);\s*dom\.vokiInput\?\.focus/);
+  const homeSection = html.match(/data-section="home" id="section-home"[\s\S]*?(?=<section class="section-view core-workspace" data-section="core")/)?.[0] || '';
+  assert.match(homeSection, /data-voki-home-avatar/);
+  assert.match(homeSection, /data-voki-default-image src="\/static\/assets\/voki\/default-avatar\.png"/);
+  assert.match(html, /<button class="nav-item" data-section="voki" aria-label="VOKKI interface"/);
+  assert.match(app, /state\.homeVokiAvatar = new window\.PARMARVOKKIAvatar\.VOKKIAvatarPresentation/);
   assert.doesNotMatch(app, /classList\.add\('acknowledged'\)/);
 });
 
@@ -541,13 +547,18 @@ test('VOKKI approval decisions stay scoped to VOKKI and use the approval backend
 test('Home workspace launches use section navigation and AETHER reports its unavailable runtime', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
-  assert.match(app, /\.workspace-launch\[data-section\]/);
-  assert.match(html, /class="workspace-launch workspace-launch-voki"[^>]+data-section="voki"/);
-  assert.match(html, /class="workspace-launch"[^>]+data-section="chat"/);
-  assert.match(html, /class="workspace-launch"[^>]+data-section="aether"/);
+  assert.match(app, /\.home-action\[data-section\], \.home-action\[data-action\]/);
+  assert.match(html, /data-action="new-chat"/);
+  assert.match(html, /data-action="research-chat"/);
+  assert.match(html, /data-section="core" data-home-focus="request"/);
+  assert.match(html, /data-section="simulator"/);
+  assert.match(html, /data-section="safety"/);
+  assert.match(html, /<button class="nav-item" data-section="voki"/);
+  assert.match(html, /<button class="nav-item" data-section="chat"/);
+  assert.match(html, /<button class="nav-item" data-section="core"/);
   assert.match(html, /data-section="aether" id="section-aether"/);
   assert.match(html, /No browser session is connected\.[\s\S]*?No websites have been opened or inspected\./);
-  assert.match(app, /selectSection\('home'\);\s*configureCrossTabAuthentication/);
+  assert.match(app, /selectSection\('home'\);[\s\S]*?configureCrossTabAuthentication/);
 });
 
 test('local VOKKI requests use and update the selected Chat session instead of a second transcript', async () => {
@@ -790,33 +801,49 @@ test('capture and storage errors retain the bundled fallback and permit recovery
   assert.equal(saveFailure.onboarding.state, 'PERMISSION_REQUIRED');
 });
 
-test('approved identity renderer changes appearance without changing lifecycle and restores bundled fallback', () => {
+test('approved identity renderer changes appearance without changing lifecycle and restores the canonical avatar', () => {
   const referenceImage = {
     hidden: true,
     removeAttribute(name) { if (name === 'src') delete this.src; },
   };
-  const portrait = {
-    hidden: false,
-    toggleAttribute(name, enabled) { if (name === 'hidden') this.hidden = enabled; },
-  };
+  const defaultImage = { hidden: true, src: null };
   const root = new Element();
   root.elements = {
     '[data-voki-approved-image]': referenceImage,
-    '.voki-avatar-portrait': portrait,
+    '[data-voki-default-image]': defaultImage,
   };
   const avatar = new VOKKIAvatarPresentation({ root });
+  assert.equal(defaultImage.src, DEFAULT_VOKKI_IDENTITY.asset);
+  assert.equal(defaultImage.hidden, false);
   avatar.setIdentity(APPROVED_REFERENCE_IDENTITY, 'blob:approved');
   assert.equal(root.dataset.avatarKind, 'approved-reference');
   assert.equal(referenceImage.src, 'blob:approved');
   assert.equal(referenceImage.hidden, false);
-  assert.equal(portrait.hidden, true);
+  assert.equal(defaultImage.hidden, true);
   assert.equal(avatar.lifecycle, 'UNKNOWN');
   avatar.setLifecycle('RELEASED');
   avatar.setIdentity();
   assert.equal(root.dataset.avatarKind, 'local-default');
   assert.equal(referenceImage.hidden, true);
-  assert.equal(portrait.hidden, false);
+  assert.equal(defaultImage.hidden, false);
   assert.equal(avatar.lifecycle, 'RELEASED');
+});
+
+test('catalog identities share the same avatar renderer without adding a selection control', () => {
+  const defaultImage = { hidden: true, src: null };
+  const root = new Element();
+  root.elements = { '[data-voki-default-image]': defaultImage };
+  const avatar = new VOKKIAvatarPresentation({ root });
+  const catalogIdentity = {
+    id: 'vokki-catalog-example',
+    kind: 'catalog',
+    asset: '/static/assets/voki/example.png',
+  };
+
+  assert.equal(avatar.setIdentity(catalogIdentity), catalogIdentity);
+  assert.equal(defaultImage.src, catalogIdentity.asset);
+  assert.equal(defaultImage.hidden, false);
+  assert.equal(root.dataset.avatarAppearance, 'catalog');
 });
 
 test('approved local identity can be restored and explicitly removed', async () => {
