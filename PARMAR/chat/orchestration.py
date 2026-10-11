@@ -750,6 +750,9 @@ class AIOrchestrator:
         return ChatContext(
             language=context.language,
             persona=context.persona,
+            response_length=context.response_length,
+            response_style=context.response_style,
+            custom_instructions=context.custom_instructions,
             memory=list(context.memory),
             policy_rules=list(context.policy_rules),
             safety_status=context.safety_status,

@@ -15,6 +15,18 @@ MAX_CONTEXT_TOTAL_LENGTH = MAX_CONTEXT_ENTRIES * MAX_MEMORY_ENTRY_LENGTH
 MAX_RECENT_MESSAGES = 12
 MAX_RECENT_MESSAGE_LENGTH = 4000
 MAX_RECENT_CONTEXT_LENGTH = 12000
+MAX_CUSTOM_INSTRUCTIONS_LENGTH = 1200
+
+RESPONSE_LENGTHS = {"concise", "balanced", "detailed"}
+RESPONSE_STYLES = {
+    "normal",
+    "explanatory",
+    "structured",
+    "step_by_step",
+    "educational",
+    "professional",
+    "conversational",
+}
 
 _SENSITIVE_MEMORY_PATTERNS = (
     re.compile(r"\b(?:password|passwd|pwd|passcode|secret|credential)\b\s*(?:is|[:=])\s*\S+", re.IGNORECASE),
@@ -101,6 +113,9 @@ class ChatContext:
     memory_trust: ClassVar[str] = "untrusted_user_owned_data"
     language: str = "en"
     persona: str = "neutral"
+    response_length: str = "balanced"
+    response_style: str = "normal"
+    custom_instructions: str = ""
     memory: list[str] = field(default_factory=list)
     policy_rules: list[str] = field(default_factory=list)
     safety_status: str | None = None
@@ -113,6 +128,26 @@ class ChatContext:
     def __post_init__(self) -> None:
         self.language = sanitize_provider_text(self.language)[:32] if isinstance(self.language, str) else "en"
         self.persona = sanitize_provider_text(self.persona)[:80] if isinstance(self.persona, str) else "neutral"
+        self.response_length = (
+            self.response_length
+            if isinstance(self.response_length, str) and self.response_length in RESPONSE_LENGTHS
+            else "balanced"
+        )
+        self.response_style = (
+            self.response_style
+            if isinstance(self.response_style, str) and self.response_style in RESPONSE_STYLES
+            else "normal"
+        )
+        custom_instructions = (
+            self.custom_instructions[:MAX_CUSTOM_INSTRUCTIONS_LENGTH]
+            if isinstance(self.custom_instructions, str)
+            else ""
+        )
+        self.custom_instructions = (
+            ""
+            if any(pattern.search(custom_instructions) for pattern in _SENSITIVE_MEMORY_PATTERNS)
+            else sanitize_provider_text(custom_instructions).strip()
+        )
         self.memory = _safe_context_entries(
             self.memory,
             limit=MAX_MEMORY_ENTRIES,

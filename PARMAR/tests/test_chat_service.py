@@ -9,6 +9,7 @@ from PARMAR.chat.context import (
     MAX_CONTEXT_ENTRIES,
     MAX_MEMORY_CONTEXT_LENGTH,
     MAX_MEMORY_ENTRIES,
+    RESPONSE_STYLES,
     sanitize_recent_messages,
 )
 from PARMAR.chat.models import ChatResponse
@@ -181,6 +182,11 @@ def test_chat_context_bounds_memory_and_rejects_common_secrets():
     assert "x" * 401 not in context.memory
 
 
+@pytest.mark.parametrize("response_style", sorted(RESPONSE_STYLES))
+def test_chat_context_accepts_supported_response_styles(response_style):
+    assert ChatContext(response_style=response_style).response_style == response_style
+
+
 def test_memory_bounds_do_not_truncate_policy_or_permission_context():
     policy_rules = [f"Safety policy {index}" for index in range(8)]
     permissions = [f"Required permission {index}" for index in range(8)]
@@ -272,6 +278,9 @@ def test_chat_endpoint_forwards_recent_turns_separately_from_safety_context(monk
     monkeypatch.setattr("PARMAR.interface.futuristic_app.ChatService", CapturingChatService)
     payload = {
         "message": "Explain it simply.",
+        "response_length": "concise",
+        "response_style": "explanatory",
+        "custom_instructions": "Use plain language.",
         "context": {"recent_messages": [
             {"role": "user", "content": "What is photosynthesis?"},
         ]},
@@ -291,7 +300,49 @@ def test_chat_endpoint_forwards_recent_turns_separately_from_safety_context(monk
     assert calls[0][0] == "Explain it simply."
     assert isinstance(calls[0][1], ChatContext)
     assert calls[0][1].memory == []
+    assert calls[0][1].response_length == "concise"
+    assert calls[0][1].response_style == "explanatory"
+    assert calls[0][1].custom_instructions == "Use plain language."
     assert calls[0][2] == {"recent_messages": payload["context"]["recent_messages"]}
+
+
+def test_chat_endpoint_selects_voki_presentation_only_for_the_voki_surface(monkeypatch):
+    calls = []
+
+    class CapturingChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, prompt, context=None, **options):
+            calls.append((prompt, context))
+            return {"message": "received"}
+
+    monkeypatch.setattr("PARMAR.interface.futuristic_app.ChatService", CapturingChatService)
+
+    def post_chat(payload):
+        body = json.dumps(payload).encode("utf-8")
+        response = {}
+        request = SimpleNamespace(
+            path="/api/chat",
+            headers={"Content-Length": str(len(body))},
+            rfile=io.BytesIO(body),
+            _send_json=lambda status, result: response.update(status=status, result=result),
+            send_error=lambda status, message: response.update(
+                status=status,
+                result={"message": message},
+            ),
+        )
+        PARMARRequestHandler.do_POST(request)
+        return response
+
+    assert post_chat({"message": "A VOKKI request", "assistant_surface": "voki"})["status"] == 200
+    assert calls[-1][1].persona == "voki"
+
+    assert post_chat({"message": "A regular request"})["status"] == 200
+    assert calls[-1][1].persona == "neutral"
+
+    invalid = post_chat({"message": "Invalid surface", "assistant_surface": {"surface": "voki"}})
+    assert invalid["status"] == 400
 
 
 def test_chat_service_passes_context_to_provider():
@@ -316,6 +367,8 @@ def test_chat_service_passes_context_to_provider():
     assert received["context"] is not context
     assert received["context"].memory == ["Prefers concise summaries"]
     assert received["context"].policy_rules == list(PARMARUIAdapter.POLICY_RULES)
+    assert received["context"].response_length == "balanced"
+    assert received["context"].response_style == "normal"
     assert received["context"].safety_status == "SAFE"
     assert received["context"].risk_level == "low"
     assert received["context"].approval_required is False
@@ -333,6 +386,9 @@ def test_chat_context_contains_only_currently_available_fields():
     assert {item.name for item in fields(ChatContext)} == {
         "language",
         "persona",
+        "response_length",
+        "response_style",
+        "custom_instructions",
         "memory",
         "policy_rules",
         "safety_status",

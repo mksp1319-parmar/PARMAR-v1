@@ -46,6 +46,12 @@ function publishConversationSelection(conversationId, refresh = false) {
   }));
 }
 
+function publishVerifiedVokiEvent(result) {
+  const event = window.PARMARVOKKISpeech?.createProactiveEvent(result);
+  if (!event) return;
+  window.dispatchEvent(new CustomEvent('parmar-verified-voki-event', { detail: event }));
+}
+
 function sanitizeStoredValue(value) {
   if (typeof value === 'string') return sanitizeSensitiveText(value);
   if (Array.isArray(value)) return value.map(sanitizeStoredValue);
@@ -220,9 +226,13 @@ function loadAudit() {
 
 const defaultSettings = {
   language: 'en',
+  responseLength: 'balanced',
+  responseStyle: 'normal',
+  customInstructions: '',
   theme: 'midnight',
   animationIntensity: 'normal',
   reducedMotion: false,
+  enterToSend: true,
   phonePermission: true,
   provider: 'local-demo',
   memoryEnabled: false,
@@ -286,12 +296,37 @@ const dom = {
   simulatorSelectSecondary: document.getElementById('simulator-select-secondary'),
   languageSelect: document.getElementById('language-select'),
   settingsLanguage: document.getElementById('settings-language'),
+  settingsResponseLength: document.getElementById('settings-response-length'),
+  settingsResponseStyle: document.getElementById('settings-response-style'),
+  settingsCustomInstructions: document.getElementById('settings-custom-instructions'),
+  settingsPersonalizationPreview: document.getElementById('settings-personalization-preview'),
   settingsTheme: document.getElementById('settings-theme'),
   settingsAnimation: document.getElementById('settings-animation'),
   settingsReducedMotion: document.getElementById('settings-reduced-motion'),
+  settingsEnterToSend: document.getElementById('settings-enter-to-send'),
   settingsPhoneToggle: document.getElementById('settings-phone-toggle'),
+  settingsResetLocalPreferences: document.getElementById('settings-reset-local-preferences'),
+  settingsMemoryState: document.getElementById('settings-memory-state'),
+  settingsMemoryCount: document.getElementById('settings-memory-count'),
+  settingsAccountState: document.getElementById('settings-account-state'),
+  settingsCategoryNav: document.querySelector('.settings-category-nav'),
+  settingsCategoryButtons: Array.from(document.querySelectorAll('[data-settings-category]')),
+  settingsPanels: Array.from(document.querySelectorAll('[data-settings-panel]')),
+  settingsSection: document.getElementById('section-settings'),
+  settingsHomeView: document.getElementById('settings-home-view'),
+  settingsDetailView: document.getElementById('settings-detail-view'),
+  settingsPageTitle: document.getElementById('settings-page-title'),
+  settingsPageDescription: document.getElementById('settings-page-description'),
+  settingsBackButton: document.getElementById('settings-back-button'),
+  settingsSaveStatus: document.getElementById('settings-save-status'),
+  settingsSearch: document.getElementById('settings-search'),
+  settingsSearchResults: document.getElementById('settings-search-results'),
+  settingsSearchStatus: document.getElementById('settings-search-status'),
+  settingsLogoutBtn: document.getElementById('settings-logout-btn'),
   historyList: document.getElementById('history-list'),
   historyFilter: document.getElementById('history-filter'),
+  chatHistoryList: document.getElementById('chat-history-list'),
+  chatHistoryFilter: document.getElementById('chat-history-filter'),
   historyStatus: document.getElementById('history-status'),
   homeContinueList: document.getElementById('home-continue-list'),
   homeAttention: document.getElementById('home-attention'),
@@ -300,9 +335,13 @@ const dom = {
   homeRecentResearch: document.getElementById('home-recent-research'),
   homeRecentSimulations: document.getElementById('home-recent-simulations'),
   homeRecentDecisions: document.getElementById('home-recent-decisions'),
+  researchHistoryFilter: document.getElementById('research-history-filter'),
+  researchHistoryList: document.getElementById('research-history-list'),
+  researchHistoryStatus: document.getElementById('research-history-status'),
   newSessionBtn: document.getElementById('new-session-btn'),
   sidebar: document.getElementById('sidebar'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
+  mobileBottomMore: document.querySelector('.mobile-bottom-more'),
   sidebarClose: document.getElementById('sidebar-close'),
   mainPanel: document.querySelector('.main-panel'),
   discoveryPanel: document.getElementById('discovery-panel'),
@@ -325,6 +364,9 @@ const dom = {
   memorySaveBtn: document.querySelector('#memory-form button[type="submit"]'),
   memoryFeedback: document.getElementById('memory-feedback'),
   memoryList: document.getElementById('memory-list'),
+  memorySearch: document.getElementById('memory-search-input'),
+  memorySearchStatus: document.getElementById('memory-search-status'),
+  memorySearchEmpty: document.getElementById('memory-search-empty'),
   memoryCount: document.getElementById('memory-count'),
   memoryClearAll: document.getElementById('memory-clear-all'),
   memoryEmpty: document.getElementById('memory-empty'),
@@ -336,6 +378,11 @@ const dom = {
   vokiState: document.getElementById('voki-state'),
   providerStatus: document.getElementById('provider-status'),
   settingsProvider: document.getElementById('settings-provider'),
+  settingsProviderRoute: document.getElementById('settings-provider-route'),
+  settingsProviderReadiness: document.getElementById('settings-provider-readiness'),
+  settingsProviderCapabilities: document.getElementById('settings-provider-capabilities'),
+  settingsProviderList: document.getElementById('settings-provider-list'),
+  settingsProviderRefresh: document.getElementById('settings-provider-refresh'),
   logoutBtn: document.getElementById('logout-btn'),
   authStatus: document.getElementById('auth-status'),
   authStateLabel: document.getElementById('auth-state-label'),
@@ -358,6 +405,7 @@ const state = {
   memories: [],
   memoryConsent: false,
   memoryStorage: null,
+  memoryQuery: '',
   settings: loadSettings(),
   currentSessionId: null,
   historyQuery: '',
@@ -383,6 +431,10 @@ const state = {
 const workspacePanels = { left: 'closed', right: 'closed' };
 const panelFocusOrigins = { left: null, right: null };
 const panelTransitionTimers = { left: null, right: null };
+const SETTINGS_CATEGORY_IDS = new Set(dom.settingsCategoryButtons.map((button) => button.dataset.settingsCategory));
+const WORKSPACE_SECTION_IDS = new Set(dom.views.map((view) => view.dataset.section));
+let settingsHomeScrollPosition = 0;
+let currentSettingsCategory = null;
 let panelGesture = null;
 let gestureResetTimer = null;
 let lastCompactPanelViewport = window.innerWidth <= PANEL_DRAWER_BREAKPOINT;
@@ -434,9 +486,25 @@ function loadSettings() {
   return {
     ...defaultSettings,
     language: ['en', 'hi', 'mix'].includes(stored?.language) ? stored.language : defaultSettings.language,
+    responseLength: ['concise', 'balanced', 'detailed'].includes(stored?.responseLength)
+      ? stored.responseLength : defaultSettings.responseLength,
+    responseStyle: [
+      'normal',
+      'explanatory',
+      'structured',
+      'step_by_step',
+      'educational',
+      'professional',
+      'conversational',
+    ].includes(stored?.responseStyle)
+      ? stored.responseStyle : defaultSettings.responseStyle,
+    customInstructions: typeof stored?.customInstructions === 'string'
+      ? sanitizeSensitiveText(stored.customInstructions).slice(0, 1200)
+      : defaultSettings.customInstructions,
     theme: ['midnight', 'aurora', 'violet'].includes(stored?.theme) ? stored.theme : defaultSettings.theme,
     animationIntensity: ['normal', 'reduced'].includes(stored?.animationIntensity) ? stored.animationIntensity : defaultSettings.animationIntensity,
     reducedMotion: stored?.reducedMotion === true,
+    enterToSend: typeof stored?.enterToSend === 'boolean' ? stored.enterToSend : defaultSettings.enterToSend,
     phonePermission: stored?.phonePermission !== false,
     provider: PROVIDER_IDS.has(stored?.provider) ? stored.provider : defaultSettings.provider,
     memoryEnabled: stored?.memoryEnabled === true,
@@ -461,9 +529,46 @@ function persistMemories(memories) {
   }
 }
 
-function persistSettings() {
-  localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(state.settings));
+function resetLocalPreferences() {
+  if (!window.confirm(
+    'Restore this browser’s PARMAR preferences to their defaults? This does not delete conversations, memories, or server-side permissions.',
+  )) return false;
+
+  const previousSettings = { ...state.settings };
+  state.settings = {
+    ...state.settings,
+    language: defaultSettings.language,
+    responseLength: defaultSettings.responseLength,
+    responseStyle: defaultSettings.responseStyle,
+    customInstructions: defaultSettings.customInstructions,
+    theme: defaultSettings.theme,
+    animationIntensity: defaultSettings.animationIntensity,
+    reducedMotion: defaultSettings.reducedMotion,
+    enterToSend: defaultSettings.enterToSend,
+  };
+  return persistSettings(previousSettings);
+}
+
+function persistSettings(previousSettings = loadSettings()) {
+  try {
+    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(state.settings));
+  } catch (_error) {
+    state.settings = previousSettings;
+    applySettings();
+    if (dom.settingsSaveStatus) {
+      dom.settingsSaveStatus.hidden = false;
+      dom.settingsSaveStatus.textContent = 'Could not save this browser preference. The previous value was restored; change it again to retry.';
+      dom.settingsSaveStatus.dataset.status = 'error';
+    }
+    return false;
+  }
   applySettings();
+  if (dom.settingsSaveStatus) {
+    dom.settingsSaveStatus.hidden = false;
+    dom.settingsSaveStatus.textContent = 'Saved in this browser.';
+    dom.settingsSaveStatus.dataset.status = 'saved';
+  }
+  return true;
 }
 
 function setRequestPending(pending) {
@@ -569,6 +674,15 @@ function clearAuthenticatedState(message, { broadcast = false, navigateToChat = 
 
 function renderAuthenticationControls() {
   const authenticated = state.authMode === 'authenticated';
+  if (dom.settingsAccountState) {
+    dom.settingsAccountState.textContent = state.authMode === 'checking'
+      ? 'Checking the current server session.'
+      : authenticated && state.authenticationState === 'DEVELOPMENT_UNVERIFIED'
+        ? 'Development session active. The identity is explicitly unverified and does not represent a production account.'
+        : authenticated
+          ? 'An authenticated server session is active. Account profile and synchronization controls are not available here.'
+          : 'Anonymous Local Demo is active. No production account is signed in.';
+  }
   if (dom.authStateLabel) {
     dom.authStateLabel.textContent = state.authenticationState === 'DEVELOPMENT_UNVERIFIED'
       ? 'Development Session — Unverified Identity'
@@ -591,6 +705,10 @@ function renderAuthenticationControls() {
     dom.developmentAuthNote.hidden = authenticated || !state.developmentAuthAvailable;
   }
   if (dom.logoutBtn) dom.logoutBtn.hidden = !authenticated;
+  if (dom.settingsLogoutBtn) {
+    dom.settingsLogoutBtn.hidden = !authenticated;
+    dom.settingsLogoutBtn.disabled = Boolean(state.logoutInProgress);
+  }
   if (dom.refreshSessionBtn) dom.refreshSessionBtn.hidden = !authenticated;
 }
 
@@ -778,14 +896,47 @@ function applySettings() {
   }
   if (dom.languageSelect) dom.languageSelect.value = settings.language;
   if (dom.settingsLanguage) dom.settingsLanguage.value = settings.language;
+  if (dom.settingsResponseLength) dom.settingsResponseLength.value = settings.responseLength;
+  if (dom.settingsResponseStyle) dom.settingsResponseStyle.value = settings.responseStyle;
+  if (dom.settingsCustomInstructions && dom.settingsCustomInstructions.value !== settings.customInstructions) {
+    dom.settingsCustomInstructions.value = settings.customInstructions;
+  }
   if (dom.settingsTheme) dom.settingsTheme.value = settings.theme;
   if (dom.settingsAnimation) dom.settingsAnimation.value = settings.animationIntensity;
   if (dom.settingsReducedMotion) dom.settingsReducedMotion.checked = Boolean(settings.reducedMotion);
+  if (dom.settingsEnterToSend) dom.settingsEnterToSend.checked = settings.enterToSend !== false;
   if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = Boolean(settings.phonePermission);
   if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = Boolean(settings.phonePermission);
   if (dom.memoryEnabledToggle) dom.memoryEnabledToggle.checked = Boolean(settings.memoryEnabled);
   if (dom.providerStatus) dom.providerStatus.textContent = String(settings.provider || 'local-demo').toUpperCase();
-  if (dom.settingsProvider) dom.settingsProvider.value = settings.provider;
+  if (dom.settingsProvider) dom.settingsProvider.textContent = settings.provider;
+  renderPersonalizationPreview(settings);
+}
+
+function renderPersonalizationPreview(settings = state.settings) {
+  if (!dom.settingsPersonalizationPreview) return;
+  const lengths = {
+    concise: 'Concise',
+    balanced: 'Balanced',
+    detailed: 'Detailed',
+  };
+  const styles = {
+    normal: 'Normal',
+    explanatory: 'Explanatory',
+    structured: 'Structured',
+    step_by_step: 'Step-by-step',
+    educational: 'Educational',
+    professional: 'Professional',
+    conversational: 'Conversational',
+  };
+  const length = lengths[settings.responseLength] || lengths.balanced;
+  const style = styles[settings.responseStyle] || styles.normal;
+  const customInstructions = typeof settings.customInstructions === 'string'
+    ? settings.customInstructions.trim()
+    : '';
+  dom.settingsPersonalizationPreview.textContent = customInstructions
+    ? `${length} · ${style}. Custom guidance: ${customInstructions}`
+    : `${length} · ${style}. No custom instructions.`;
 }
 
 function motionIsReduced() {
@@ -902,7 +1053,7 @@ function panelElement(side) {
 
 function panelTriggers(side) {
   return side === 'left'
-    ? [dom.sidebarToggle]
+    ? [dom.sidebarToggle, dom.mobileBottomMore]
     : [dom.discoveryToggle, ...dom.discoveryTriggers];
 }
 
@@ -935,6 +1086,8 @@ function syncWorkspaceAccessibility(activeSide = null) {
         trigger.setAttribute('aria-label', compact
           ? expanded ? 'Close navigation' : 'Open navigation'
           : expanded ? 'Collapse navigation' : 'Expand navigation');
+      } else if (trigger === dom.mobileBottomMore) {
+        trigger.setAttribute('aria-label', expanded ? 'Close navigation' : 'Open more navigation');
       } else if (trigger === dom.discoveryToggle) {
         trigger.setAttribute('aria-label', expanded ? 'Close Discovery' : 'Open Discovery');
       }
@@ -1211,6 +1364,18 @@ function finishPanelGesture(event, cancelled = false) {
 }
 
 function selectSection(sectionName, navKey = sectionName) {
+  if (document.body.dataset.activeSection === 'settings' && sectionName !== 'settings') {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('settings')) {
+      url.searchParams.delete('settings');
+      url.searchParams.set('section', sectionName);
+      window.history.pushState({
+        ...(window.history.state || {}),
+        parmarSection: sectionName,
+        parmarSettingsRoute: false,
+      }, '', url);
+    }
+  }
   const sectionChanged = document.body.dataset.activeSection !== sectionName;
   if (workspacePanels.right !== 'closed') closeWorkspacePanel('right');
 
@@ -1240,6 +1405,7 @@ function selectSection(sectionName, navKey = sectionName) {
     home: 'Home',
     core: 'PARMAR Core',
     chat: 'Chats / History',
+    research: 'Research',
     voki: 'VOKKI',
     aether: 'AETHER',
     safety: 'Risk & Safety',
@@ -1269,17 +1435,340 @@ function navigateWorkspaceAction(button) {
   }
   if (button.dataset.action === 'research-chat') {
     if (dom.researchMode) dom.researchMode.checked = true;
-    selectSection('chat');
+    if (button.dataset.navKey) selectSection('chat', button.dataset.navKey);
+    else selectSection('chat');
     closeWorkspacePanel('right');
     dom.chatInput?.focus();
     return;
   }
   if (!button.dataset.section) return;
-  selectSection(button.dataset.section, button.dataset.navKey || button.dataset.section);
+  if (button.dataset.section === 'settings') openSettingsHome();
+  else selectSection(button.dataset.section, button.dataset.navKey || button.dataset.section);
   if (button.dataset.section === 'voki') dom.vokiInput?.focus({ preventScroll: true });
   if (button.dataset.homeFocus === 'request') dom.requestInput?.focus();
   if (button.dataset.homeFocus === 'approval') {
     dom.approvalActions?.querySelector('button[data-decision]')?.focus();
+  }
+}
+
+function activateSettingsCategory(button) {
+  const category = button?.dataset.settingsCategory;
+  const panels = dom.settingsPanels.filter((item) => (
+    item.dataset.settingsGroup === category || item.dataset.settingsPanel === category
+  ));
+  if (!panels.length) return false;
+
+  dom.settingsCategoryButtons.forEach((categoryButton) => {
+    const active = categoryButton === button;
+    categoryButton.setAttribute('aria-current', active ? 'page' : 'false');
+    categoryButton.classList.toggle('active', active);
+  });
+  dom.settingsPanels.forEach((settingsPanel) => {
+    settingsPanel.hidden = !panels.includes(settingsPanel);
+  });
+  currentSettingsCategory = category;
+  return true;
+}
+
+function writeSettingsHistory(category, { replace = false, returnSection = null } = {}) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('section');
+  url.searchParams.set('settings', category || 'home');
+  const nextState = {
+    ...(window.history.state || {}),
+    parmarSection: 'settings',
+    parmarSettingsRoute: true,
+    parmarSettingsFromHome: Boolean(category),
+    settingsCategory: category || null,
+  };
+  if (returnSection) nextState.settingsReturnSection = returnSection;
+  const currentCategory = new URL(window.location.href).searchParams.get('settings');
+  if (url.href === window.location.href && currentCategory === (category || 'home')) {
+    if (replace) window.history.replaceState(nextState, '', url);
+    return;
+  }
+  const method = replace ? 'replaceState' : 'pushState';
+  window.history[method](nextState, '', url);
+}
+
+function showSettingsHome({ focus = true, restoreScroll = true } = {}) {
+  if (!dom.settingsHomeView || !dom.settingsDetailView) return;
+  const previousCategory = currentSettingsCategory;
+  dom.settingsHomeView.hidden = false;
+  dom.settingsDetailView.hidden = true;
+  dom.settingsCategoryButtons.forEach((button) => {
+    button.setAttribute('aria-current', 'false');
+    button.classList.toggle('active', false);
+  });
+  dom.settingsPanels.forEach((panel) => { panel.hidden = true; });
+  dom.settingsSection?.setAttribute('aria-labelledby', 'settings-title');
+  currentSettingsCategory = null;
+  if (restoreScroll) window.scrollTo({ top: settingsHomeScrollPosition, behavior: 'auto' });
+  if (focus) {
+    const categoryButton = dom.settingsCategoryButtons.find(
+      (button) => button.dataset.settingsCategory === previousCategory,
+    );
+    (categoryButton || dom.settingsSearch)?.focus({ preventScroll: true });
+  }
+}
+
+function navigateSettingsCategory(button, { historyMode = 'push', focus = true } = {}) {
+  const category = button?.dataset.settingsCategory;
+  if (!category || !SETTINGS_CATEGORY_IDS.has(category) || !activateSettingsCategory(button)) return false;
+  if (dom.settingsHomeView && !dom.settingsHomeView.hidden) settingsHomeScrollPosition = window.scrollY;
+  if (dom.settingsHomeView) dom.settingsHomeView.hidden = true;
+  if (dom.settingsDetailView) dom.settingsDetailView.hidden = false;
+  dom.settingsSection?.setAttribute('aria-labelledby', 'settings-page-title');
+  if (dom.settingsPageTitle) {
+    dom.settingsPageTitle.textContent = button.querySelector('.settings-category-label')?.textContent
+      || button.lastElementChild?.textContent.trim()
+      || button.textContent.trim();
+  }
+  if (dom.settingsPageDescription) {
+    dom.settingsPageDescription.textContent = button.dataset.settingsDescription || '';
+  }
+  if (historyMode === 'push') writeSettingsHistory(category);
+  else if (historyMode === 'replace') writeSettingsHistory(category, { replace: true });
+  window.scrollTo({ top: 0, behavior: motionIsReduced() ? 'auto' : 'smooth' });
+  if (focus) dom.settingsPageTitle?.focus({ preventScroll: true });
+  return true;
+}
+
+function openSettingsHome() {
+  const section = document.body.dataset.activeSection;
+  if (section !== 'settings') {
+    const priorState = { ...(window.history.state || {}), parmarSection: section || 'home' };
+    window.history.replaceState(priorState, '', window.location.href);
+    writeSettingsHistory(null, { returnSection: section || 'home' });
+    selectSection('settings');
+  } else if (currentSettingsCategory) {
+    writeSettingsHistory(null);
+  } else {
+    writeSettingsHistory(null, { replace: true });
+  }
+  showSettingsHome({ focus: true, restoreScroll: true });
+}
+
+function restoreSettingsRoute(event) {
+  const url = new URL(window.location.href);
+  const settingsRoute = url.searchParams.get('settings');
+  if (settingsRoute !== null) {
+    selectSection('settings');
+    if (settingsRoute === 'home') {
+      if (!event?.state?.parmarSettingsRoute) {
+        window.history.replaceState({
+          ...(event?.state || window.history.state || {}),
+          parmarSection: 'settings',
+          parmarSettingsRoute: true,
+          parmarSettingsFromHome: false,
+          settingsCategory: null,
+        }, '', url);
+      }
+      showSettingsHome({ focus: Boolean(event), restoreScroll: true });
+    } else {
+      const button = dom.settingsCategoryButtons.find(
+        (categoryButton) => categoryButton.dataset.settingsCategory === settingsRoute,
+      );
+      if (button) {
+        navigateSettingsCategory(button, { historyMode: 'none', focus: Boolean(event) });
+        if (!event?.state?.parmarSettingsFromHome) {
+          window.history.replaceState({
+            ...(event?.state || window.history.state || {}),
+            parmarSection: 'settings',
+            parmarSettingsRoute: true,
+            parmarSettingsFromHome: false,
+            settingsCategory: settingsRoute,
+          }, '', url);
+        }
+      } else {
+        writeSettingsHistory(null, { replace: true });
+        showSettingsHome({ focus: Boolean(event), restoreScroll: false });
+      }
+    }
+    return;
+  }
+
+  const routeSection = url.searchParams.get('section') || event?.state?.parmarSection;
+  if (routeSection && WORKSPACE_SECTION_IDS.has(routeSection)) selectSection(routeSection);
+}
+
+function handleSettingsCategoryKeydown(event, button) {
+  const currentIndex = dom.settingsCategoryButtons.indexOf(button);
+  if (currentIndex < 0) return;
+
+  let nextIndex;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+    nextIndex = (currentIndex + 1) % dom.settingsCategoryButtons.length;
+  } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+    nextIndex = (currentIndex - 1 + dom.settingsCategoryButtons.length) % dom.settingsCategoryButtons.length;
+  } else if (event.key === 'Home') {
+    nextIndex = 0;
+  } else if (event.key === 'End') {
+    nextIndex = dom.settingsCategoryButtons.length - 1;
+  } else {
+    return;
+  }
+
+  event.preventDefault();
+  dom.settingsCategoryButtons[nextIndex].focus();
+}
+
+function settingsSearchMatches(query, searchableText) {
+  const normalize = (value) => String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .trim();
+  const terms = normalize(query).split(/\s+/).filter(Boolean);
+  const haystack = normalize(searchableText);
+  return terms.length > 0 && terms.every((term) => haystack.includes(term));
+}
+
+function settingsSearchEntries(query) {
+  const normalizedQuery = query.toLocaleLowerCase();
+  return dom.settingsPanels.map((panel) => {
+    const group = panel.dataset.settingsGroup || panel.dataset.settingsPanel;
+    const categoryButton = dom.settingsCategoryButtons.find((button) => button.dataset.settingsCategory === group);
+    const heading = panel.querySelector('h2');
+    const description = panel.querySelector('.settings-panel-heading p');
+    const searchTerms = panel.dataset.settingsSearchTerms || '';
+    let targetId = panel.querySelector('input:not([type="hidden"]), select, textarea')?.id || '';
+    if (panel.dataset.settingsPanel === 'appearance') targetId = 'settings-theme';
+    if (panel.dataset.settingsPanel === 'language') targetId = 'settings-language';
+    if (group === 'account' && (normalizedQuery.includes('logout') || normalizedQuery.includes('sign out'))) {
+      targetId = 'settings-logout-btn';
+    }
+    if (group === 'memory' && normalizedQuery.includes('memory')) targetId = 'settings-open-memory';
+    if (group === 'voice' && ['microphone', 'voice', 'speech'].some((term) => normalizedQuery.includes(term))) {
+      targetId = 'settings-open-voki-voice';
+    }
+    if (panel.dataset.settingsPanel === 'workspace' && normalizedQuery.includes('search')) {
+      targetId = 'settings-open-research';
+    }
+    if (
+      panel.dataset.settingsPanel === 'storage'
+      && ['reset', 'restore', 'defaults'].some((term) => normalizedQuery.includes(term))
+    ) {
+      targetId = 'settings-reset-local-preferences';
+    }
+    return {
+      group,
+      panelId: panel.id,
+      categoryLabel: categoryButton?.textContent.trim() || group,
+      heading: heading?.textContent.trim() || '',
+      description: description?.textContent.trim() || '',
+      searchableText: [
+        heading?.textContent,
+        searchTerms,
+      ].join(' '),
+      targetId,
+    };
+  });
+}
+
+function renderSettingsSearch(query) {
+  const resultsElement = dom.settingsSearchResults;
+  if (!resultsElement || !dom.settingsSearch) return;
+  const normalizedQuery = query.trim();
+  resultsElement.replaceChildren();
+  if (!normalizedQuery) {
+    resultsElement.hidden = true;
+    dom.settingsSearch.setAttribute('aria-expanded', 'false');
+    if (dom.settingsSearchStatus) dom.settingsSearchStatus.textContent = '';
+    return;
+  }
+
+  const matches = settingsSearchEntries(normalizedQuery)
+    .filter((entry) => settingsSearchMatches(normalizedQuery, entry.searchableText))
+    .sort((first, second) => Number(Boolean(second.targetId)) - Number(Boolean(first.targetId)));
+  resultsElement.hidden = false;
+  dom.settingsSearch.setAttribute('aria-expanded', 'true');
+
+  if (!matches.length) {
+    const emptyState = document.createElement('p');
+    emptyState.className = 'settings-search-empty';
+    emptyState.textContent = 'No matching Settings were found.';
+    resultsElement.append(emptyState);
+    if (dom.settingsSearchStatus) dom.settingsSearchStatus.textContent = 'No matching Settings were found.';
+    return;
+  }
+
+  matches.forEach((entry) => {
+    const result = document.createElement('button');
+    result.type = 'button';
+    result.className = 'settings-search-result';
+    result.dataset.settingsSearchResult = '';
+    result.dataset.settingsGroup = entry.group;
+    result.dataset.settingsPanel = entry.panelId;
+    result.dataset.targetId = entry.targetId;
+
+    const title = document.createElement('strong');
+    title.textContent = entry.heading && entry.heading !== entry.categoryLabel
+      ? `${entry.categoryLabel} / ${entry.heading}`
+      : entry.categoryLabel;
+    const detail = document.createElement('span');
+    detail.textContent = entry.description;
+    result.append(title, detail);
+    resultsElement.append(result);
+  });
+  if (dom.settingsSearchStatus) {
+    dom.settingsSearchStatus.textContent = `${matches.length} Settings result${matches.length === 1 ? '' : 's'}.`;
+  }
+}
+
+function focusSettingsSearchTarget(result) {
+  const categoryButton = dom.settingsCategoryButtons.find(
+    (button) => button.dataset.settingsCategory === result.dataset.settingsGroup,
+  );
+  const panel = dom.settingsPanels.find((item) => item.id === result.dataset.settingsPanel);
+  if (!categoryButton || !panel || !navigateSettingsCategory(categoryButton, { focus: false })) return;
+
+  let target = result.dataset.targetId ? document.getElementById(result.dataset.targetId) : null;
+  if (!target || target.hidden || target.disabled) target = panel.querySelector('h2');
+  if (target) {
+    if (target.tagName === 'H2') target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+  }
+}
+
+function handleSettingsSearchKeydown(event) {
+  if (event.key === 'ArrowDown' && !dom.settingsSearchResults?.hidden) {
+    const firstResult = dom.settingsSearchResults.querySelector('[data-settings-search-result]');
+    if (firstResult) {
+      event.preventDefault();
+      firstResult.focus();
+    }
+  } else if (event.key === 'Escape' && !dom.settingsSearchResults?.hidden) {
+    dom.settingsSearchResults.hidden = true;
+    dom.settingsSearch.setAttribute('aria-expanded', 'false');
+    if (dom.settingsSearchStatus) dom.settingsSearchStatus.textContent = 'Settings search results closed.';
+  }
+}
+
+function handleSettingsSearchResultsKeydown(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    dom.settingsSearchResults.hidden = true;
+    dom.settingsSearch.setAttribute('aria-expanded', 'false');
+    if (dom.settingsSearchStatus) dom.settingsSearchStatus.textContent = 'Settings search results closed.';
+    dom.settingsSearch.focus();
+    return;
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  const results = Array.from(dom.settingsSearchResults.querySelectorAll('[data-settings-search-result]'));
+  const currentIndex = results.indexOf(event.target.closest('[data-settings-search-result]'));
+  if (currentIndex < 0 || !results.length) return;
+  const nextIndex = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? results.length - 1
+      : currentIndex + (event.key === 'ArrowDown' ? 1 : -1);
+  if (nextIndex < 0) {
+    event.preventDefault();
+    dom.settingsSearch.focus();
+  } else if (nextIndex < results.length) {
+    event.preventDefault();
+    results[nextIndex].focus();
   }
 }
 
@@ -1332,10 +1821,32 @@ function setMemoryFeedback(message, isError = false) {
   dom.memoryFeedback.classList.toggle('is-error', isError);
 }
 
+function filterSavedMemories(memories, query) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  if (!normalizedQuery) return memories;
+  return memories.filter((memory) => memory.text.toLocaleLowerCase().includes(normalizedQuery));
+}
+
 function renderMemories() {
   const memories = state.memories;
+  const memoryQuery = String(state.memoryQuery || '').trim();
+  const filteredMemories = filterSavedMemories(memories, memoryQuery);
   const authenticated = state.authMode === 'authenticated';
   const enabled = authenticated ? state.memoryConsent : Boolean(state.settings.memoryEnabled);
+  if (dom.settingsMemoryState && dom.settingsMemoryCount) {
+    if (state.authMode === 'checking') {
+      dom.settingsMemoryState.textContent = 'Checking the current session before reporting memory state.';
+      dom.settingsMemoryCount.textContent = 'Saved-memory count is not available yet.';
+    } else if (authenticated && state.memoryStorage !== 'DURABLE_LOCAL') {
+      dom.settingsMemoryState.textContent = 'Authenticated memory storage could not be confirmed. No local substitute is used.';
+      dom.settingsMemoryCount.textContent = 'Saved-memory count is unavailable until the server responds.';
+    } else {
+      const storageLabel = authenticated ? 'Authenticated server memory' : 'Local Demo browser memory';
+      const consentLabel = enabled ? 'consent enabled' : 'consent disabled';
+      dom.settingsMemoryState.textContent = `${storageLabel}; ${consentLabel}.`;
+      dom.settingsMemoryCount.textContent = `${memories.length} saved ${memories.length === 1 ? 'memory' : 'memories'}.`;
+    }
+  }
   if (dom.memoryPrivacyNote) {
     const base = 'Relevant consented server notes may be used as untrusted context in authenticated chat and cannot control PARMAR safety or approvals.';
     const externalProvider = state.settings.provider !== 'local-demo';
@@ -1371,9 +1882,17 @@ function renderMemories() {
   if (dom.memoryCount) dom.memoryCount.textContent = `${memories.length} saved ${memories.length === 1 ? 'memory' : 'memories'}`;
   if (dom.memoryClearAll) dom.memoryClearAll.disabled = memories.length === 0;
   if (dom.memoryEmpty) dom.memoryEmpty.hidden = memories.length > 0;
+  if (dom.memorySearchStatus) {
+    dom.memorySearchStatus.textContent = memoryQuery
+      ? `Showing ${filteredMemories.length} of ${memories.length} currently loaded saved ${memories.length === 1 ? 'memory' : 'memories'}.`
+      : `Showing all ${memories.length} currently loaded saved ${memories.length === 1 ? 'memory' : 'memories'}.`;
+  }
+  if (dom.memorySearchEmpty) {
+    dom.memorySearchEmpty.hidden = !memoryQuery || filteredMemories.length > 0;
+  }
   if (!dom.memoryList) return;
 
-  const items = memories.map((memory) => {
+  const items = filteredMemories.map((memory) => {
     const item = document.createElement('li');
     item.className = 'memory-item';
     const text = document.createElement('p');
@@ -1533,6 +2052,9 @@ async function editMemory(memoryId) {
 
 async function deleteMemory(memoryId) {
   if (state.authMode === 'checking') return;
+  if (!state.memories.some((memory) => memory.id === memoryId)) return;
+  const storageLocation = state.authMode === 'authenticated' ? 'the server' : 'this browser';
+  if (!window.confirm(`Delete this saved memory from ${storageLocation}? This cannot be undone.`)) return;
   if (state.authMode === 'authenticated') {
     try {
       const response = await apiRequest('/api/memory', {
@@ -1645,6 +2167,7 @@ function renderHistory() {
         ? 'Saved conversations cannot be displayed.'
         : 'No conversations yet.';
     dom.historyList.appendChild(empty);
+    syncChatHistoryList();
     return;
   }
 
@@ -1690,6 +2213,14 @@ function renderHistory() {
     item.appendChild(button);
     dom.historyList.appendChild(item);
   });
+  syncChatHistoryList();
+}
+
+function syncChatHistoryList() {
+  if (!dom.chatHistoryList || !dom.historyList) return;
+  dom.chatHistoryList.replaceChildren(
+    ...Array.from(dom.historyList.children, (item) => item.cloneNode(true)),
+  );
 }
 
 function continueConversation(conversationId) {
@@ -1771,6 +2302,104 @@ function renderHomeWorkList(container, records, emptyMessage) {
   records.forEach((record) => appendHomeWorkItem(container, record));
 }
 
+function researchHistoryRecords() {
+  return state.sessions.flatMap((session) => session.messages
+    .filter((message) => (
+      message.role === 'assistant'
+      && message.analysis?.research
+      && typeof message.analysis.research === 'object'
+      && Object.keys(message.analysis.research).length > 0
+    ))
+    .map((message) => {
+      const firstUserMessage = session.messages.find((entry) => entry.role === 'user');
+      const title = String(session.title || firstUserMessage?.text || '').trim();
+      return {
+        sessionId: session.id,
+        title: title ? title.slice(0, 72) : 'Research conversation',
+        question: String(firstUserMessage?.text || '').trim().slice(0, 240),
+        message,
+        presentation: window.PARMARChatPresentation?.researchPresentation(message.analysis) || null,
+        timestamp: message.timestamp || session.updatedAt,
+      };
+    }))
+    .sort((first, second) => (homeTimestampValue(second.timestamp) || 0)
+      - (homeTimestampValue(first.timestamp) || 0));
+}
+
+function renderResearchWorkspace() {
+  if (!dom.researchHistoryList) return;
+  const records = researchHistoryRecords();
+  const query = String(dom.researchHistoryFilter?.value || '').trim().toLocaleLowerCase();
+  const visibleRecords = records.filter((record) => {
+    if (!query) return true;
+    const sources = record.presentation?.sources || [];
+    const searchable = [
+      record.title,
+      record.question,
+      record.presentation?.status,
+      ...sources.flatMap((source) => [source.title, source.domain, source.snippet]),
+    ].filter((value) => typeof value === 'string').join(' ').toLocaleLowerCase();
+    return searchable.includes(query);
+  });
+  dom.researchHistoryList.replaceChildren();
+  if (dom.researchHistoryStatus) {
+    const shownCount = Math.min(12, visibleRecords.length);
+    const matchingCount = query ? visibleRecords.length : records.length;
+    dom.researchHistoryStatus.textContent = visibleRecords.length
+      ? `Showing ${shownCount} of ${matchingCount}${query ? ' matching' : ''} saved research records.`
+      : query
+        ? 'No saved research matches this search.'
+        : 'No saved research in available conversations.';
+  }
+  if (!visibleRecords.length) {
+    const empty = document.createElement('p');
+    empty.className = 'research-history-empty';
+    empty.textContent = query
+      ? 'Try a different search, or request new research through Chat.'
+      : 'Research results appear here after a real PARMAR research response is saved with an available conversation.';
+    dom.researchHistoryList.appendChild(empty);
+    return;
+  }
+
+  visibleRecords.slice(0, 12).forEach((record) => {
+    const card = document.createElement('article');
+    card.className = 'research-record';
+    const heading = document.createElement('div');
+    heading.className = 'research-record-heading';
+    const copy = document.createElement('div');
+    const title = document.createElement('h2');
+    title.textContent = record.title;
+    const context = document.createElement('span');
+    context.className = 'research-record-context';
+    context.textContent = 'Saved research response';
+    copy.append(title, context);
+    heading.appendChild(copy);
+    const status = document.createElement('span');
+    status.className = 'research-record-state';
+    status.dataset.status = record.presentation?.status || 'UNAVAILABLE';
+    status.textContent = record.presentation?.status === 'RESULTS'
+      ? 'Validated sources'
+      : String(record.presentation?.status || 'Research result unavailable').replaceAll('_', ' ');
+    heading.appendChild(status);
+    const timestamp = homeTimestamp(record.timestamp);
+    if (timestamp) {
+      const time = document.createElement('time');
+      time.textContent = timestamp;
+      heading.appendChild(time);
+    }
+    const sources = document.createElement('div');
+    sources.className = 'research-record-result';
+    window.PARMARChatPresentation?.renderResearchResult(sources, record.message.analysis);
+    const openConversation = document.createElement('button');
+    openConversation.className = 'research-record-open';
+    openConversation.type = 'button';
+    openConversation.textContent = 'Open conversation';
+    openConversation.addEventListener('click', () => continueConversation(record.sessionId));
+    card.append(heading, sources, openConversation);
+    dom.researchHistoryList.appendChild(card);
+  });
+}
+
 function renderHome() {
   if (!dom.homeContinueList) return;
   const readinessState = String(document.body.dataset.state || 'UNKNOWN').toUpperCase();
@@ -1842,28 +2471,18 @@ function renderHome() {
       onOpen: () => continueConversation(session.id),
     };
   });
-  const researchRecords = state.sessions.flatMap((session) => session.messages
-    .filter((message) => (
-      message.role === 'assistant'
-      && message.analysis?.research
-      && typeof message.analysis.research === 'object'
-      && Object.keys(message.analysis.research).length > 0
-    ))
-    .map((message) => {
-      const research = message.analysis.research;
-      const sources = Array.isArray(research.sources) ? research.sources.length : 0;
-      const title = String(session.title || session.messages.find((entry) => entry.role === 'user')?.text || '').trim();
-      return {
-        title: title ? title.slice(0, 72) : 'Research conversation',
-        detail: sources ? `${sources} saved sources` : 'Research result saved with conversation',
-        timestamp: message.timestamp || session.updatedAt,
-        actionLabel: 'Open',
-        onOpen: () => continueConversation(session.id),
-      };
-    }))
-    .sort((first, second) => (homeTimestampValue(second.timestamp) || 0)
-      - (homeTimestampValue(first.timestamp) || 0))
-    .slice(0, 3);
+  const researchRecords = researchHistoryRecords().slice(0, 3).map((record) => {
+    const sources = record.presentation?.sources || [];
+    return {
+      title: record.title,
+      detail: Array.isArray(sources) && sources.length
+        ? `${sources.length} saved sources`
+        : 'Research result saved with conversation',
+      timestamp: record.timestamp,
+      actionLabel: 'Open',
+      onOpen: () => continueConversation(record.sessionId),
+    };
+  });
   const simulations = state.audit.filter((entry) => entry.kind === 'simulation').slice(0, 3).map((entry) => ({
     title: entry.request || 'Scenario review',
     detail: entry.status || 'Simulation recorded',
@@ -1886,6 +2505,7 @@ function renderHome() {
   renderHomeWorkList(dom.homeRecentResearch, researchRecords, 'No saved research in available conversations.');
   renderHomeWorkList(dom.homeRecentSimulations, simulations, 'No simulations recorded here yet.');
   renderHomeWorkList(dom.homeRecentDecisions, decisions, 'No decisions recorded here yet.');
+  renderResearchWorkspace();
 }
 
 async function refreshServerConversationHistory({ navigateToChat = true } = {}) {
@@ -2661,6 +3281,7 @@ async function logoutAuthenticatedSession() {
   state.logoutInProgress = true;
   invalidatePendingRequest();
   if (dom.logoutBtn) dom.logoutBtn.disabled = true;
+  if (dom.settingsLogoutBtn) dom.settingsLogoutBtn.disabled = true;
   let logoutConfirmed = false;
   try {
     const response = await apiRequest('/api/logout', {
@@ -2680,6 +3301,7 @@ async function logoutAuthenticatedSession() {
       { broadcast: true },
     );
     if (dom.logoutBtn) dom.logoutBtn.disabled = false;
+    if (dom.settingsLogoutBtn) dom.settingsLogoutBtn.disabled = state.authMode !== 'authenticated';
   }
 }
 
@@ -2759,6 +3381,9 @@ async function submitChatMessage() {
       body: JSON.stringify({
         message: text,
         language: state.settings.language,
+        response_length: state.settings.responseLength,
+        response_style: state.settings.responseStyle,
+        custom_instructions: state.settings.customInstructions,
         ...window.PARMARChatPresentation.researchRequestOption(researchRequested),
         ...(requestedConversationId ? { conversation_id: requestedConversationId } : {}),
         ...(Object.keys(context).length ? { context } : {}),
@@ -2811,6 +3436,7 @@ async function submitChatMessage() {
     if (!updateState(result)) throw new TypeError('Invalid chat response');
     if (authenticated) state.serverConversationIds.add(result.conversation_id);
     appendMessageToSession(sessionId, 'assistant', reply, result);
+    publishVerifiedVokiEvent(result);
     publishConversationSelection(authenticated ? result.conversation_id : sessionId, true);
     dom.requestInput.value = text;
   } catch {
@@ -2975,9 +3601,35 @@ function bindEvents() {
     }
   });
 
-  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section], .home-action[data-section], .home-action[data-action]').forEach((button) => {
+  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .text-button[data-action], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section], .home-action[data-section], .home-action[data-action], .settings-workspace-link[data-section], .settings-workspace-link[data-action]').forEach((button) => {
     button.addEventListener('click', () => navigateWorkspaceAction(button));
   });
+  dom.settingsLogoutBtn?.addEventListener('click', () => dom.logoutBtn?.click());
+  dom.settingsCategoryButtons.forEach((button) => {
+    button.addEventListener('click', () => navigateSettingsCategory(button));
+    button.addEventListener('keydown', (event) => handleSettingsCategoryKeydown(event, button));
+  });
+  dom.settingsBackButton?.addEventListener('click', () => {
+    if (window.history.state?.parmarSettingsFromHome) {
+      window.history.back();
+      return;
+    }
+    writeSettingsHistory(null, { replace: true });
+    showSettingsHome({ focus: true, restoreScroll: true });
+  });
+  window.addEventListener('popstate', restoreSettingsRoute);
+  dom.settingsSearch?.addEventListener('input', () => renderSettingsSearch(dom.settingsSearch.value));
+  dom.settingsSearch?.addEventListener('keydown', handleSettingsSearchKeydown);
+  dom.settingsProviderRefresh?.addEventListener('click', () => { void loadProviderReadiness(); });
+  dom.memorySearch?.addEventListener('input', () => {
+    state.memoryQuery = dom.memorySearch.value;
+    renderMemories();
+  });
+  dom.settingsSearchResults?.addEventListener('click', (event) => {
+    const result = event.target.closest('[data-settings-search-result]');
+    if (result) focusSettingsSearchTarget(result);
+  });
+  dom.settingsSearchResults?.addEventListener('keydown', handleSettingsSearchResultsKeydown);
   dom.parmarCore?.addEventListener('click', () => {
     selectSection('voki');
     dom.vokiInput?.focus({ preventScroll: true });
@@ -3009,7 +3661,18 @@ function bindEvents() {
 
   dom.historyFilter?.addEventListener('input', () => {
     state.historyQuery = dom.historyFilter.value;
+    if (dom.chatHistoryFilter) dom.chatHistoryFilter.value = state.historyQuery;
     renderHistory();
+  });
+  dom.chatHistoryFilter?.addEventListener('input', () => {
+    state.historyQuery = dom.chatHistoryFilter.value;
+    if (dom.historyFilter) dom.historyFilter.value = state.historyQuery;
+    renderHistory();
+  });
+  dom.researchHistoryFilter?.addEventListener('input', renderResearchWorkspace);
+  dom.chatHistoryList?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-session-id]');
+    if (button) continueConversation(button.dataset.sessionId);
   });
 
   dom.capabilityToolbar?.addEventListener('keydown', (event) => {
@@ -3031,6 +3694,7 @@ function bindEvents() {
   if (dom.sidebarToggle) {
     dom.sidebarToggle.addEventListener('click', () => toggleWorkspacePanel('left', dom.sidebarToggle));
   }
+  dom.mobileBottomMore?.addEventListener('click', () => dom.sidebarToggle?.click());
 
   dom.discoveryToggle?.addEventListener('click', () => {
     toggleWorkspacePanel('right', dom.discoveryToggle);
@@ -3090,6 +3754,22 @@ function bindEvents() {
     });
   }
 
+  dom.settingsResponseLength?.addEventListener('change', () => {
+    state.settings.responseLength = dom.settingsResponseLength.value;
+    persistSettings();
+  });
+
+  dom.settingsResponseStyle?.addEventListener('change', () => {
+    state.settings.responseStyle = dom.settingsResponseStyle.value;
+    persistSettings();
+  });
+
+  dom.settingsCustomInstructions?.addEventListener('change', () => {
+    state.settings.customInstructions = sanitizeSensitiveText(dom.settingsCustomInstructions.value)
+      .slice(0, 1200);
+    persistSettings();
+  });
+
   if (dom.settingsTheme) {
     dom.settingsTheme.addEventListener('change', () => {
       state.settings.theme = dom.settingsTheme.value;
@@ -3110,6 +3790,15 @@ function bindEvents() {
       persistSettings();
     });
   }
+
+  if (dom.settingsEnterToSend) {
+    dom.settingsEnterToSend.addEventListener('change', () => {
+      state.settings.enterToSend = Boolean(dom.settingsEnterToSend.checked);
+      persistSettings();
+    });
+  }
+
+  dom.settingsResetLocalPreferences?.addEventListener('click', resetLocalPreferences);
 
   if (dom.settingsPhoneToggle) {
     dom.settingsPhoneToggle.addEventListener('change', () => {
@@ -3157,7 +3846,10 @@ function bindEvents() {
   if (dom.chatSubmit) {
     dom.chatSubmit.addEventListener('click', submitChatMessage);
     dom.chatInput.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      if (
+        event.key === 'Enter' && !event.shiftKey && !event.isComposing
+        && chatEnterSends(event)
+      ) {
         event.preventDefault();
         submitChatMessage();
       }
@@ -3256,6 +3948,122 @@ function bindEvents() {
   }
 }
 
+function chatEnterSends(event) {
+  return state.settings.enterToSend !== false || Boolean(event.metaKey || event.ctrlKey);
+}
+
+async function loadProviderReadiness() {
+  if (!dom.settingsProviderRoute || !dom.settingsProviderReadiness || !dom.settingsProviderCapabilities) return;
+  if (dom.settingsProviderRefresh) dom.settingsProviderRefresh.disabled = true;
+  if (dom.settingsProviderList) {
+    dom.settingsProviderList.setAttribute('aria-busy', 'true');
+    dom.settingsProviderList.replaceChildren();
+  }
+  dom.settingsProviderReadiness.textContent = 'Loading the server’s read-only provider configuration. Reachability is not tested.';
+  try {
+    const response = await fetch('/api/providers', { cache: 'no-store' });
+    if (!response.ok) throw new Error('Provider readiness request failed');
+    const payload = await response.json();
+    if (
+      !payload
+      || typeof payload.default_provider !== 'string'
+      || !Array.isArray(payload.providers)
+    ) throw new TypeError('Invalid provider readiness response');
+
+    const provider = payload.providers.find((entry) => entry?.id === payload.default_provider);
+    dom.settingsProviderRoute.textContent = payload.default_provider.toUpperCase();
+    renderProviderInventory(payload.providers, payload.default_provider, payload.reachability);
+    if (!provider) {
+      dom.settingsProviderReadiness.textContent = 'The server route is unavailable or not recognized. No provider availability was assumed.';
+      dom.settingsProviderCapabilities.textContent = 'No capabilities reported.';
+      return;
+    }
+    const readiness = typeof provider.readiness === 'string' ? provider.readiness : 'UNKNOWN';
+    const configuration = typeof provider.configuration_status === 'string'
+      ? provider.configuration_status : 'UNKNOWN';
+    const authorization = typeof provider.authorization_status === 'string'
+      ? provider.authorization_status : 'UNKNOWN';
+    const reachability = payload.reachability === 'NOT_CHECKED' ? 'NOT_CHECKED' : 'UNKNOWN';
+    dom.settingsProviderReadiness.textContent = provider.id === 'local-demo'
+      ? `Local deterministic demo; no network inference. Readiness: ${readiness}.`
+      : `Configuration: ${configuration}. Authorization: ${authorization}. Reachability: ${reachability}.`;
+    const capabilities = Array.isArray(provider.capabilities)
+      ? provider.capabilities.filter((capability) => typeof capability === 'string')
+      : [];
+    dom.settingsProviderCapabilities.textContent = capabilities.length
+      ? `Declared capabilities (not reachability-tested): ${capabilities.join(', ')}.`
+      : 'No capabilities reported.';
+  } catch {
+    dom.settingsProviderRoute.textContent = 'Unavailable';
+    dom.settingsProviderReadiness.textContent = 'Provider configuration could not be loaded. No readiness or connectivity was assumed.';
+    dom.settingsProviderCapabilities.textContent = 'No capabilities reported.';
+    dom.settingsProviderList?.replaceChildren();
+  } finally {
+    if (dom.settingsProviderRefresh) dom.settingsProviderRefresh.disabled = false;
+    dom.settingsProviderList?.setAttribute('aria-busy', 'false');
+  }
+}
+
+function renderProviderInventory(providers, selectedProvider, reachability) {
+  if (!dom.settingsProviderList) return;
+  const entries = providers.filter((provider) => provider && typeof provider.id === 'string');
+  const items = entries.map((provider) => {
+    const item = document.createElement('li');
+    item.className = 'settings-provider-entry';
+    const heading = document.createElement('div');
+    heading.className = 'settings-provider-entry-heading';
+    const name = document.createElement('strong');
+    name.textContent = provider.id === selectedProvider
+      ? `${provider.id} · server-selected route`
+      : provider.id;
+    heading.append(name);
+    if (provider.id === selectedProvider) {
+      const selected = document.createElement('span');
+      selected.className = 'settings-provider-selected';
+      selected.textContent = 'SELECTED';
+      heading.append(selected);
+    }
+
+    const model = document.createElement('p');
+    const modelId = provider.model_id === 'configured'
+      ? 'Configured; model ID withheld by server'
+      : typeof provider.model_id === 'string' && provider.model_id
+        ? provider.model_id
+        : 'No model ID reported';
+    model.textContent = `Model: ${modelId}`;
+    const readiness = document.createElement('p');
+    const configuration = typeof provider.configuration_status === 'string'
+      ? provider.configuration_status
+      : 'UNKNOWN';
+    const authorization = typeof provider.authorization_status === 'string'
+      ? provider.authorization_status
+      : 'UNKNOWN';
+    const providerReadiness = typeof provider.readiness === 'string'
+      ? provider.readiness
+      : 'UNKNOWN';
+    readiness.textContent = `Configuration: ${configuration} · Authorization: ${authorization} · Readiness: ${providerReadiness}`;
+    const capabilities = document.createElement('p');
+    const declaredCapabilities = Array.isArray(provider.capabilities)
+      ? provider.capabilities.filter((capability) => typeof capability === 'string')
+      : [];
+    const inputModalities = Array.isArray(provider.input_modalities)
+      ? provider.input_modalities.filter((modality) => typeof modality === 'string')
+      : [];
+    const outputModalities = Array.isArray(provider.output_modalities)
+      ? provider.output_modalities.filter((modality) => typeof modality === 'string')
+      : [];
+    capabilities.textContent = [
+      `Declared capabilities: ${declaredCapabilities.length ? declaredCapabilities.join(', ') : 'none reported'}`,
+      `Input: ${inputModalities.length ? inputModalities.join(', ') : 'not reported'}`,
+      `Output: ${outputModalities.length ? outputModalities.join(', ') : 'not reported'}`,
+      `Reachability: ${typeof reachability === 'string' ? reachability : 'UNKNOWN'}`,
+    ].join(' · ');
+    item.append(heading, model, readiness, capabilities);
+    return item;
+  });
+  dom.settingsProviderList.replaceChildren(...items);
+}
+
 function initialize() {
   state.currentSessionId = null;
   renderHistory();
@@ -3263,6 +4071,7 @@ function initialize() {
   renderMemories();
   renderAuditEntries();
   renderPhoneStatus();
+  void loadProviderReadiness();
   loadScenarios();
   const homeAvatarRoot = document.querySelector('[data-voki-home-avatar]');
   if (homeAvatarRoot && window.PARMARVOKKIAvatar?.VOKKIAvatarPresentation) {
@@ -3289,7 +4098,13 @@ function initialize() {
   document.body.dataset.state = 'UNKNOWN';
   renderAuthenticationControls();
   syncWorkspacePanels();
-  selectSection('home');
+  const settingsRoute = new URL(window.location.href).searchParams.get('settings');
+  if (settingsRoute !== null) restoreSettingsRoute(null);
+  else {
+    const sectionRoute = new URL(window.location.href).searchParams.get('section');
+    if (sectionRoute && WORKSPACE_SECTION_IDS.has(sectionRoute)) selectSection(sectionRoute);
+    else selectSection('home');
+  }
   configureCrossTabAuthentication();
   refreshAuthenticationState({ navigateToChat: false });
 }

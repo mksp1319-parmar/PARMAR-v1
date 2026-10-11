@@ -71,7 +71,6 @@ class TerminalDashboard:
             "human_decision": "REJECTED - PHONE AWARENESS DISABLED",
         }
         self.logger.log_event("phone_event_rejected", {
-            "event": event_name,
             "risk_level": "LOW",
             "human_decision": "REJECTED - PHONE AWARENESS DISABLED",
             "reason": "Phone Awareness Permission was disabled.",
@@ -276,7 +275,7 @@ class TerminalDashboard:
             "request_text": result["intent"]["requested_action"],
             "risk_level": result["risk"]["risk_level"],
             "decision": human_status,
-            "reason": reason or "No reason provided.",
+            "reason_provided": isinstance(reason, str) and bool(reason.strip()),
         })
         outcome = {
             "human_decision": human_status,

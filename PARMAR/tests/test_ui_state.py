@@ -287,6 +287,7 @@ def test_authenticated_memory_uses_server_crud_and_never_browser_memory_storage(
     assert "state.memoryConsent" in save.group(1)
     assert "action: 'update'" in update.group(1)
     assert "action: 'delete'" in delete.group(1)
+    assert "window.confirm(`Delete this saved memory from ${storageLocation}? This cannot be undone.`)" in delete.group(1)
     assert "action: 'clear_all'" in clear_all.group(1)
     assert "for (const memory of [...state.memories])" not in clear_all.group(1)
     assert "state.authMode !== 'anonymous'" in persist.group(1)
@@ -524,7 +525,7 @@ def test_vokki_identity_uses_real_lifecycle_and_not_a_speaking_orb_for_local_dem
     assert "setChatVokiState" not in app_source
     assert 'data-voki-speech-toggle' in html_source
     assert '.voki-presence[data-speech-state="SPEAKING"]' in styles_source
-    assert '.voki-avatar[data-expression="approval-required"] .voki-avatar-default-image' in styles_source
+    assert '.voki-presence[data-presence-state="approval-required"] .field-outer' in styles_source
     assert "key === 'RELEASED'" in lifecycle_mapping.group(1)
     assert "SAFE_RESPONSE" not in lifecycle_mapping.group(1)
     assert "motionIsReduced()" in lifecycle_mapping.group(1)

@@ -123,6 +123,9 @@
       this.researchToggle = element.querySelector('[data-voki-research]');
       this.speechToggle = element.querySelector('[data-voki-speech-toggle]');
       this.speechStatus = element.querySelector('[data-voki-speech-status]');
+      this.proactiveToggle = element.querySelector('[data-voki-proactive-toggle]');
+      this.muteToggle = element.querySelector('[data-voki-mute-toggle]');
+      this.proactiveStatus = element.querySelector('[data-voki-proactive-status]');
       this.stopSpeechButton = element.querySelector('[data-voki-stop-speech]');
       this.talkButton = element.querySelector('[data-voki-talk]');
       this.cancelVoiceButton = element.querySelector('[data-voki-cancel-voice]');
@@ -155,6 +158,7 @@
       this.localSessionId = null;
       this.authenticated = false;
       this.historyLoading = false;
+      this.requestPending = false;
       this.historyGeneration = 0;
       this.loadedConversationId = null;
       this.conversationGeneration = 0;
@@ -183,16 +187,31 @@
             onStateChange: (state) => this.handleVoiceInputState(state),
           })
           : null;
+      const ProactiveSpeech = globalThis.PARMARVOKKISpeech?.VOKKIProactiveSpeech;
+      this.proactiveSpeech = ProactiveSpeech
+        ? new ProactiveSpeech({
+          speech: this.speech,
+          isDocumentVisible: () => globalThis.document?.hidden !== true,
+          isInterfaceActive: () => {
+            const section = this.root.closest?.('.section-view');
+            return !section || section.classList.contains('active');
+          },
+          isBusy: () => this.requestPending
+            || this.historyLoading
+            || this.submitButton?.disabled === true
+            || ['REQUESTING_PERMISSION', 'LISTENING', 'CANCELLING', 'TRANSCRIBING', 'SUBMITTING']
+              .includes(this.voiceInputState)
+            || ['QUEUED', 'SPEAKING'].includes(this.speech?.state),
+          onStateChange: (state) => this.handleProactiveState(state),
+        })
+        : null;
       this.bind();
       this.handleSpeechState({ state: this.speech?.state || 'IDLE', boundary: null });
+      this.syncProactiveControls();
       this.handleVoiceInputState({
         state: this.voiceInput?.state || 'ERROR',
         message: this.voiceInput?.message || 'On-device speech recognition is unsupported in this browser.',
         available: this.voiceInput?.available === true,
-      });
-      this.renderIdentityOnboarding({
-        state: 'IDLE',
-        message: 'VOKKI’s PARMAR reference avatar is active. Optional identity setup is local to this device.',
       });
       this.identityOnboarding?.setStorageScope(null);
       this.renderIdentityOnboarding({
@@ -211,6 +230,7 @@
         this.historyLoading = false;
         if (historyWasLoading) this.submitButton.disabled = false;
         this.speech?.cancel();
+        this.proactiveSpeech?.suspend();
         this.cancelVoiceInput();
         this.identityOnboarding?.setStorageScope(null);
         this.approvalId = null;
@@ -312,22 +332,33 @@
         globalThis.addEventListener?.('pagehide', () => this.identityOnboarding.cancel());
       }
       const stopVoiceWhenHidden = () => {
-        if (globalThis.document?.hidden) this.cancelVoiceInput();
+        if (globalThis.document?.hidden) {
+          this.cancelVoiceInput();
+          this.proactiveSpeech?.suspend();
+        } else {
+          this.proactiveSpeech?.flush();
+        }
       };
       globalThis.document?.addEventListener?.('visibilitychange', stopVoiceWhenHidden);
-      globalThis.addEventListener?.('pagehide', () => this.cancelVoiceInput());
+      globalThis.addEventListener?.('pagehide', () => {
+        this.cancelVoiceInput();
+        this.proactiveSpeech?.suspend();
+      });
       const section = this.root.closest?.('.section-view');
       if (section && typeof globalThis.MutationObserver === 'function') {
-        this.identitySectionObserver = new globalThis.MutationObserver(() => {
+        this.sectionObserver = new globalThis.MutationObserver(() => {
           if (!section.classList.contains('active')) {
             this.cancelVoiceInput();
+            this.proactiveSpeech?.suspend();
             if (this.identityOnboarding
               && (this.identityOnboarding.stream || this.identityOnboarding.cameraRequestPending)) {
               this.identityOnboarding.cancel();
             }
+          } else {
+            this.proactiveSpeech?.flush();
           }
         });
-        this.identitySectionObserver.observe(section, { attributes: true, attributeFilter: ['class'] });
+        this.sectionObserver.observe(section, { attributes: true, attributeFilter: ['class'] });
       }
       this.root.querySelectorAll('[data-voki-decision]').forEach((button) => {
         button.addEventListener('click', () => this.submitDecision(button.dataset.vokiDecision));
@@ -337,7 +368,23 @@
         this.speechToggle.checked = enabled;
         this.handleSpeechState({ state: this.speech?.state || 'IDLE', boundary: null });
       });
-      this.stopSpeechButton?.addEventListener('click', () => this.speech?.cancel());
+      this.proactiveToggle?.addEventListener('change', () => {
+        const enabled = this.proactiveSpeech?.setEnabled(this.proactiveToggle.checked) === true;
+        this.proactiveToggle.checked = enabled;
+        this.syncProactiveControls();
+      });
+      this.muteToggle?.addEventListener('change', () => {
+        this.proactiveSpeech?.setMuted(this.muteToggle.checked);
+        this.syncProactiveControls();
+        this.handleSpeechState({ state: this.speech?.state || 'IDLE', boundary: null });
+      });
+      this.stopSpeechButton?.addEventListener('click', () => {
+        if (this.proactiveSpeech) this.proactiveSpeech.stopSpeaking();
+        else this.speech?.cancel();
+      });
+      globalThis.addEventListener?.('parmar-verified-voki-event', (event) => {
+        this.proactiveSpeech?.enqueueEvent(event?.detail);
+      });
     }
 
     focusIdentityControl(preferred) {
@@ -521,14 +568,22 @@
       this.identityStatus.textContent = message;
       const permissionRequired = state === 'PERMISSION_REQUIRED';
       const captureReady = state === 'CAPTURE_READY';
-      const previewAvailable = Boolean(this.identityOnboarding?.temporaryUrl);
+      const previewUrl = this.identityOnboarding?.temporaryUrl || this.identityOnboarding?.approvedUrl;
+      const previewAvailable = Boolean(previewUrl);
       const approvalRequired = state === 'USER_APPROVAL_REQUIRED'
         || (state === 'ERROR' && Boolean(this.identityOnboarding?.temporaryBlob));
 
       if (this.identityVideo) this.identityVideo.hidden = !captureReady;
       if (this.identityPreview) {
-        if (previewAvailable) this.identityPreview.src = this.identityOnboarding.temporaryUrl;
-        else this.identityPreview.removeAttribute('src');
+        if (previewAvailable) {
+          this.identityPreview.src = previewUrl;
+          this.identityPreview.alt = this.identityOnboarding?.temporaryUrl
+            ? 'Temporary local reference preview. Not saved.'
+            : 'Approved local reference saved on this device. VOKKI’s canonical portrait remains unchanged.';
+        } else {
+          this.identityPreview.removeAttribute('src');
+          this.identityPreview.alt = '';
+        }
         this.identityPreview.hidden = !previewAvailable;
       }
       if (this.identityStart) {
@@ -560,7 +615,7 @@
         this.identityCancel.disabled = Boolean(this.identityOnboarding?.approvalPending);
       }
       if (this.identityRemove) {
-        this.identityRemove.hidden = this.avatar?.identity?.kind !== 'approved-reference';
+        this.identityRemove.hidden = !this.identityOnboarding?.approvedUrl;
       }
       if (identityControls.includes(focusedControl) && (focusedControl.hidden || focusedControl.disabled)) {
         this.focusIdentityControl(this.identityStatus);
@@ -607,7 +662,11 @@
         );
         this.researchResults.hidden = !presentation;
       }
-      this.speech?.speakReleasedResponse(result);
+      const proactiveEvent = globalThis.PARMARVOKKISpeech?.createProactiveEvent(result);
+      const regularSpeechStarted = this.proactiveSpeech?.muted !== true
+        && this.speech?.enabled === true
+        && this.speech.speakReleasedResponse(result);
+      if (!regularSpeechStarted) this.proactiveSpeech?.enqueueEvent(proactiveEvent);
       this.approvalId = typeof result?.approval_id === 'string'
         && interpreted.approvalStatus === 'PENDING'
         && interpreted.approvalRecord === 'AVAILABLE'
@@ -652,7 +711,9 @@
       if (this.speechStatus) {
         this.speechStatus.textContent = {
           IDLE: this.speech?.available
-            ? this.speech?.enabled
+            ? this.proactiveSpeech?.muted
+              ? 'VOKKI is muted. No speech will play.'
+              : this.speech?.enabled
               ? 'Speech is enabled for released responses.'
               : 'Speech is off. Enable it to hear released responses.'
             : 'Browser speech synthesis is unavailable.',
@@ -671,10 +732,38 @@
       this.syncVoiceInputControls();
     }
 
+    handleProactiveState({ enabled, muted }) {
+      this.root.dataset.proactiveSpeech = enabled ? 'enabled' : 'disabled';
+      this.root.dataset.speechMuted = muted ? 'true' : 'false';
+      this.syncProactiveControls();
+    }
+
+    syncProactiveControls() {
+      const available = this.speech?.available === true && Boolean(this.proactiveSpeech);
+      if (this.proactiveToggle) {
+        this.proactiveToggle.disabled = !available;
+        this.proactiveToggle.checked = this.proactiveSpeech?.enabled === true;
+      }
+      if (this.muteToggle) {
+        this.muteToggle.disabled = !available;
+        this.muteToggle.checked = this.proactiveSpeech?.muted === true;
+      }
+      if (this.proactiveStatus) {
+        this.proactiveStatus.textContent = !available
+          ? 'Browser speech synthesis is unavailable. VOKKI cannot make spoken announcements.'
+          : this.proactiveSpeech.muted
+            ? 'VOKKI is muted. Active and queued speech has been stopped.'
+            : this.proactiveSpeech.enabled
+              ? 'Proactive announcements are enabled for this page only. VOKKI does not listen in the background.'
+              : 'Proactive announcements are off. Enable them to hear verified PARMAR events while VOKKI is open and visible.';
+      }
+    }
+
     syncSpeechControls() {
       if (!this.speechToggle) return;
       this.speechToggle.disabled = !this.speech?.available;
       this.speechToggle.checked = Boolean(this.speech?.enabled);
+      this.syncProactiveControls();
     }
 
     handleVoiceInputState({ state, message, available }) {
@@ -768,6 +857,7 @@
       }
       const requestId = this.beginRequest();
       if (requestId === null || requestId === false) return;
+      this.requestPending = true;
 
       const authenticationGeneration = this.authenticationGeneration;
       const conversationGeneration = this.conversationGeneration;
@@ -790,6 +880,7 @@
           body: JSON.stringify({
             message,
             language: this.getLanguage(),
+            assistant_surface: 'voki',
             ...(this.conversationId ? { conversation_id: this.conversationId } : {}),
             ...(this.researchToggle?.checked === true ? { research: true } : {}),
             ...(!this.authenticated && localConversation?.messages?.length
@@ -815,8 +906,10 @@
         this.approval.hidden = true;
         this.approvalId = null;
       } finally {
+        this.requestPending = false;
         this.submitButton.disabled = false;
         this.syncVoiceInputControls();
+        this.proactiveSpeech?.flush();
         this.finishRequest(requestId);
       }
     }
@@ -825,6 +918,7 @@
       if (!this.approvalId || !['APPROVE', 'REJECT'].includes(decision)) return;
       const requestId = this.beginRequest();
       if (requestId === null || requestId === false) return;
+      this.requestPending = true;
 
       const authenticationGeneration = this.authenticationGeneration;
       const conversationGeneration = this.conversationGeneration;
@@ -855,9 +949,11 @@
         this.approval.hidden = true;
         this.approvalId = null;
       } finally {
+        this.requestPending = false;
         this.root.querySelectorAll('[data-voki-decision]').forEach((button) => {
           button.disabled = false;
         });
+        this.proactiveSpeech?.flush();
         this.finishRequest(requestId);
       }
     }

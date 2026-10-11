@@ -11,13 +11,14 @@ const {
 const {
   SPEECH_STATES,
   VOICE_INPUT_STATES,
+  VOKKIProactiveSpeech,
   VOKKISpeechAdapter,
   VOKKIRecognitionAdapter,
+  createProactiveEvent,
   isReleasedResponse,
 } = require('../interface/static/voki-speech.js');
 const {
   DEFAULT_VOKKI_IDENTITY,
-  APPROVED_REFERENCE_IDENTITY,
   VOKKIAvatarPresentation,
   lifecycleExpressions,
 } = require('../interface/static/voki-avatar.js');
@@ -101,6 +102,9 @@ function makeInterface(request, speechAdapterFactory, voiceInputAdapterFactory) 
     '[data-voki-research]': new Element(),
     '[data-voki-speech-toggle]': new Element(),
     '[data-voki-speech-status]': new Element(),
+    '[data-voki-proactive-toggle]': new Element(),
+    '[data-voki-mute-toggle]': new Element(),
+    '[data-voki-proactive-status]': new Element(),
     '[data-voki-stop-speech]': new Element(),
     '[data-voki-talk]': new Element(),
     '[data-voki-cancel-voice]': new Element(),
@@ -180,6 +184,7 @@ function apiResponse(value, ok = true) {
 
 function contract(overrides = {}) {
   return {
+    request_id: 'request-1',
     lifecycle: { state: 'RELEASED' },
     request_review: { status: 'SAFE' },
     enforcement: { status: 'READY_FOR_ACTION' },
@@ -196,6 +201,24 @@ function releasedResponse(overrides = {}) {
   return {
     message: 'Validated response.',
     voki_contract: contract(),
+    ...overrides,
+  };
+}
+
+function pendingApprovalResponse(overrides = {}) {
+  return {
+    message: 'Private request details must not be spoken.',
+    approval_id: 'server-issued-review-token',
+    voki_contract: contract({
+      lifecycle: { state: 'WAITING_FOR_HUMAN' },
+      request_review: { status: 'APPROVAL_REQUIRED' },
+      enforcement: { status: 'HUMAN_APPROVAL_REQUIRED' },
+      approval: { status: 'PENDING', record_available: 'AVAILABLE' },
+      provider: { status: 'NOT_STARTED' },
+      response_safety: { status: 'NOT_CHECKED' },
+      response_disposition: 'NOT_APPLICABLE',
+      message: 'Private request details must not be spoken.',
+    }),
     ...overrides,
   };
 }
@@ -366,19 +389,19 @@ test('avatar initializes with the canonical reference identity and neutral unava
   assert.equal(defaultImage.hidden, false);
 });
 
-test('appearance renderer has a separate plug-in seam from lifecycle interpretation', () => {
+test('alternate appearance adapters cannot replace the canonical portrait', () => {
   const root = new Element();
-  root.elements = {};
-  let mountCall;
+  const defaultImage = { hidden: true, src: null };
+  root.elements = { '[data-voki-default-image]': defaultImage };
+  let adapterMounted = false;
   const avatar = new VOKKIAvatarPresentation({
     root,
-    appearanceAdapter: {
-      mount: (options) => { mountCall = options; },
-    },
+    appearanceAdapter: { mount: () => { adapterMounted = true; } },
   });
 
-  assert.equal(mountCall.host, root);
-  assert.equal(mountCall.identity, DEFAULT_VOKKI_IDENTITY);
+  assert.equal(adapterMounted, false);
+  assert.equal(defaultImage.src, DEFAULT_VOKKI_IDENTITY.asset);
+  assert.equal(defaultImage.hidden, false);
   avatar.setLifecycle('WAITING_FOR_HUMAN');
   assert.equal(root.dataset.expression, 'approval-required');
   assert.equal(root.dataset.avatarIdentity, DEFAULT_VOKKI_IDENTITY.id);
@@ -573,12 +596,28 @@ test('authenticated VOKKI synchronization delegates history loading to shared Ch
   }
 });
 
-test('Home uses canonical VOKKI presence and retains manual navigation without an acknowledgment-only path', () => {
+test('Home keeps the canonical VOKKI portrait and preserves optional local-reference controls', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
   const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'styles.css'), 'utf8');
   const homeSection = html.match(/data-section="home" id="section-home"[\s\S]*?(?=<section class="section-view core-workspace" data-section="core")/)?.[0] || '';
+  const vokiSection = html.match(/id="section-voki"[\s\S]*?(?=<section class="section-view" data-section="aether")/)?.[0] || '';
   assert.match(homeSection, /data-voki-home-avatar/);
   assert.match(homeSection, /data-voki-default-image src="\/static\/assets\/voki\/default-avatar\.png"/);
+  assert.match(vokiSection, /data-voki-default-image src="\/static\/assets\/voki\/default-avatar\.png"/);
+  assert.doesNotMatch(vokiSection, /data-voki-approved-image/);
+  assert.match(vokiSection, /data-voki-identity-start/);
+  assert.match(vokiSection, /never replaces VOKKI’s canonical portrait/);
+  assert.match(html, /<script src="\/static\/voki-identity\.js"><\/script>/);
+  assert.match(styles, /\.voki-avatar-default-image\s*\{[^}]*object-fit:\s*contain/);
+  assert.doesNotMatch(styles, /\.voki-avatar-default-image\s*\{[^}]*object-fit:\s*cover/);
+  const portraitRules = [...styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selector]) => /\.voki-avatar-default-image|\.home-voki-avatar-image/.test(selector));
+  assert.ok(portraitRules.length > 0);
+  assert.doesNotMatch(
+    portraitRules.map(([, , declarations]) => declarations).join('\n'),
+    /\b(?:filter|transform|animation|opacity)\s*:/,
+  );
   assert.match(html, /<button class="nav-item" data-section="voki" aria-label="VOKKI interface"/);
   assert.match(app, /state\.homeVokiAvatar = new window\.PARMARVOKKIAvatar\.VOKKIAvatarPresentation/);
   assert.doesNotMatch(app, /classList\.add\('acknowledged'\)/);
@@ -852,35 +891,26 @@ test('capture and storage errors retain the bundled fallback and permit recovery
   assert.equal(saveFailure.onboarding.state, 'PERMISSION_REQUIRED');
 });
 
-test('approved identity renderer changes appearance without changing lifecycle and restores the canonical avatar', () => {
-  const referenceImage = {
-    hidden: true,
-    removeAttribute(name) { if (name === 'src') delete this.src; },
-  };
+test('approved identity requests cannot replace the canonical portrait or lifecycle', () => {
   const defaultImage = { hidden: true, src: null };
   const root = new Element();
-  root.elements = {
-    '[data-voki-approved-image]': referenceImage,
-    '[data-voki-default-image]': defaultImage,
-  };
+  root.elements = { '[data-voki-default-image]': defaultImage };
   const avatar = new VOKKIAvatarPresentation({ root });
   assert.equal(defaultImage.src, DEFAULT_VOKKI_IDENTITY.asset);
   assert.equal(defaultImage.hidden, false);
-  avatar.setIdentity(APPROVED_REFERENCE_IDENTITY, 'blob:approved');
-  assert.equal(root.dataset.avatarKind, 'approved-reference');
-  assert.equal(referenceImage.src, 'blob:approved');
-  assert.equal(referenceImage.hidden, false);
-  assert.equal(defaultImage.hidden, true);
+  avatar.setIdentity({ id: 'other', kind: 'approved-reference', asset: 'blob:approved' }, 'blob:approved');
+  assert.equal(root.dataset.avatarKind, DEFAULT_VOKKI_IDENTITY.kind);
+  assert.equal(defaultImage.src, DEFAULT_VOKKI_IDENTITY.asset);
+  assert.equal(defaultImage.hidden, false);
   assert.equal(avatar.lifecycle, 'UNKNOWN');
   avatar.setLifecycle('RELEASED');
   avatar.setIdentity();
-  assert.equal(root.dataset.avatarKind, 'local-default');
-  assert.equal(referenceImage.hidden, true);
+  assert.equal(root.dataset.avatarKind, DEFAULT_VOKKI_IDENTITY.kind);
   assert.equal(defaultImage.hidden, false);
   assert.equal(avatar.lifecycle, 'RELEASED');
 });
 
-test('catalog identities share the same avatar renderer without adding a selection control', () => {
+test('catalog identities cannot substitute another VOKKI portrait', () => {
   const defaultImage = { hidden: true, src: null };
   const root = new Element();
   root.elements = { '[data-voki-default-image]': defaultImage };
@@ -891,10 +921,10 @@ test('catalog identities share the same avatar renderer without adding a selecti
     asset: '/static/assets/voki/example.png',
   };
 
-  assert.equal(avatar.setIdentity(catalogIdentity), catalogIdentity);
-  assert.equal(defaultImage.src, catalogIdentity.asset);
+  assert.equal(avatar.setIdentity(catalogIdentity), DEFAULT_VOKKI_IDENTITY);
+  assert.equal(defaultImage.src, DEFAULT_VOKKI_IDENTITY.asset);
   assert.equal(defaultImage.hidden, false);
-  assert.equal(root.dataset.avatarAppearance, 'catalog');
+  assert.equal(root.dataset.avatarAppearance, 'reference-default');
 });
 
 test('approved local identity can be restored and explicitly removed', async () => {
@@ -916,11 +946,25 @@ test('approved local identity can be restored and explicitly removed', async () 
   assert.deepEqual(restored.calls.revoked, ['blob:vokki-1']);
 });
 
-test('saved identity onboarding has no inert setup action and transitions retain a keyboard focus target', () => {
+test('runtime keeps local-reference controls separate from the canonical portrait', () => {
+  const interfaceSource = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'voki-interface.js'), 'utf8');
+  const avatarSource = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'voki-avatar.js'), 'utf8');
+  assert.match(interfaceSource, /identityOnboarding/);
+  assert.match(interfaceSource, /data-voki-identity-start/);
+  assert.match(interfaceSource, /this\.identityOnboarding\?\.approvedUrl/);
+  assert.match(avatarSource, /function resolveIdentity\(\) \{\s*return DEFAULT_VOKKI_IDENTITY;/);
+  assert.match(avatarSource, /setIdentity\(\) \{\s*this\.identity = resolveIdentity\(\);/);
+});
+
+test('saved local reference previews separately and can be removed without hiding the portrait', () => {
   const controller = Object.create(VOKKIInterface.prototype);
   controller.root = { dataset: {} };
-  controller.identityOnboarding = { temporaryUrl: null, temporaryBlob: null };
-  controller.avatar = { identity: APPROVED_REFERENCE_IDENTITY };
+  controller.identityOnboarding = {
+    temporaryUrl: null,
+    temporaryBlob: null,
+    approvedUrl: 'blob:approved',
+    store: { scope: 'a'.repeat(64) },
+  };
   controller.identityStatus = new Element();
   controller.identityStart = new Element();
   controller.identityEnable = new Element();
@@ -935,8 +979,14 @@ test('saved identity onboarding has no inert setup action and transitions retain
   controller.renderIdentityOnboarding({ state: 'SAVED', message: 'Saved.' });
   assert.equal(controller.identityStart.hidden, true);
   assert.equal(controller.identityRemove.hidden, false);
-  controller.focusIdentityControl(controller.identityEnable);
-  assert.equal(controller.identityStatus.focusCount, 1);
+  assert.equal(controller.identityPreview.hidden, false);
+  assert.equal(controller.identityPreview.src, 'blob:approved');
+  assert.match(controller.identityPreview.alt, /canonical portrait remains unchanged/);
+  controller.identityOnboarding.approvedUrl = null;
+  controller.renderIdentityOnboarding({ state: 'IDLE', message: 'Removed.' });
+  assert.equal(controller.identityRemove.hidden, true);
+  assert.equal(controller.identityPreview.hidden, true);
+  assert.equal(Object.hasOwn(controller.identityPreview, 'src'), false);
 });
 
 test('identity onboarding is VOKKI-only and has no upload, microphone, or recording path', () => {
@@ -945,13 +995,16 @@ test('identity onboarding is VOKKI-only and has no upload, microphone, or record
   const interfaceSource = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'voki-interface.js'), 'utf8');
   const voki = html.indexOf('id="section-voki"');
   const chat = html.indexOf('id="section-chat"');
-  const identityControl = html.indexOf('data-voki-identity-start');
-  assert.ok(voki < identityControl && identityControl < chat);
+  assert.ok(voki < chat);
+  const vokiSection = html.match(/id="section-voki"[\s\S]*?(?=<section class="section-view" data-section="aether")/)?.[0] || '';
+  const chatSection = html.match(/id="section-chat"[\s\S]*?(?=<section class="section-view" data-section="research")/)?.[0] || '';
+  assert.match(vokiSection, /data-voki-identity-start/);
+  assert.match(vokiSection, /A camera is not needed/);
+  assert.match(vokiSection, /never uploaded/);
+  assert.doesNotMatch(chatSection, /data-voki-identity-start/);
+  assert.match(html, /<script src="\/static\/voki-identity\.js"><\/script>/);
   assert.doesNotMatch(source, /fetch\s*\(|XMLHttpRequest|MediaRecorder|SpeechRecognition/);
   assert.match(source, /getUserMedia\(\{ video: true, audio: false \}\)/);
-  assert.match(html, /A camera is not needed to use VOKKI/);
-  assert.match(html, /No image is uploaded/);
-  assert.match(html, /<script src="\/static\/voki-identity\.js"><\/script>/);
   assert.match(interfaceSource, /visibilitychange/);
   assert.match(interfaceSource, /pagehide/);
 });
@@ -1047,6 +1100,7 @@ test('a Talk press alone starts one-shot local recognition and routes its transc
     body: {
       message: 'Transcript from local recognition',
       language: 'en',
+      assistant_surface: 'voki',
     },
   }]);
   assert.equal(root.elements['[data-voki-lifecycle]'].dataset.lifecycle, 'RELEASED');
@@ -1170,6 +1224,159 @@ test('VOKKI does not cancel or overlap speech already owned by another browser i
   assert.equal(harness.synthesis.spoken.length, 0);
 });
 
+test('proactive speech is disabled by default and only speaks after explicit opt-in', () => {
+  const harness = makeSpeechHarness();
+  const proactive = new VOKKIProactiveSpeech({ speech: harness.adapter });
+  const event = createProactiveEvent(releasedResponse());
+
+  assert.equal(proactive.enabled, false);
+  assert.equal(proactive.enqueueEvent(event), false);
+  assert.equal(harness.synthesis.spoken.length, 0);
+
+  assert.equal(proactive.setEnabled(true), true);
+  assert.equal(proactive.enqueueEvent(event), true);
+  assert.equal(harness.synthesis.spoken.length, 1);
+  assert.equal(harness.utterance.text, 'Validated response.');
+});
+
+test('muting immediately clears queued proactive speech and cancels owned speech', () => {
+  const harness = makeSpeechHarness();
+  let busy = true;
+  const proactive = new VOKKIProactiveSpeech({
+    speech: harness.adapter,
+    isBusy: () => busy,
+  });
+  proactive.setEnabled(true);
+
+  assert.equal(proactive.enqueueEvent(createProactiveEvent(releasedResponse())), false);
+  assert.equal(proactive.pending.length, 1);
+  proactive.setMuted(true);
+  assert.equal(proactive.pending.length, 0);
+  busy = false;
+  assert.equal(proactive.flush(), false);
+  assert.equal(harness.synthesis.spoken.length, 0);
+
+  proactive.setMuted(false);
+  const nextResponse = releasedResponse({
+    voki_contract: contract({ request_id: 'request-2' }),
+  });
+  assert.equal(proactive.enqueueEvent(createProactiveEvent(nextResponse)), true);
+  harness.utterance.onstart();
+  assert.equal(proactive.setMuted(true), true);
+  assert.equal(harness.adapter.state, 'CANCELLED');
+  assert.equal(harness.synthesis.cancelCount, 1);
+});
+
+test('proactive speech is suppressed while the document is hidden or VOKKI is inactive', () => {
+  const harness = makeSpeechHarness();
+  let visible = false;
+  let active = true;
+  const proactive = new VOKKIProactiveSpeech({
+    speech: harness.adapter,
+    isDocumentVisible: () => visible,
+    isInterfaceActive: () => active,
+  });
+  proactive.setEnabled(true);
+  const event = createProactiveEvent(releasedResponse());
+
+  assert.equal(proactive.enqueueEvent(event), false);
+  assert.equal(proactive.pending.length, 0);
+  assert.equal(harness.synthesis.spoken.length, 0);
+
+  visible = true;
+  active = false;
+  assert.equal(proactive.enqueueEvent(event), false);
+  assert.equal(harness.synthesis.spoken.length, 0);
+});
+
+test('proactive announcements deduplicate the same PARMAR request event', () => {
+  const harness = makeSpeechHarness();
+  const proactive = new VOKKIProactiveSpeech({ speech: harness.adapter });
+  proactive.setEnabled(true);
+  const event = createProactiveEvent(releasedResponse());
+
+  assert.equal(proactive.enqueueEvent(event), true);
+  assert.equal(proactive.enqueueEvent(event), false);
+  assert.equal(harness.synthesis.spoken.length, 1);
+});
+
+test('expired proactive events are ignored instead of being announced late', () => {
+  const harness = makeSpeechHarness();
+  let busy = true;
+  let now = 1_000;
+  const proactive = new VOKKIProactiveSpeech({
+    speech: harness.adapter,
+    isBusy: () => busy,
+    now: () => now,
+    eventTtlMs: 10,
+  });
+  proactive.setEnabled(true);
+  assert.equal(proactive.enqueueEvent(createProactiveEvent(releasedResponse())), false);
+  now += 11;
+  busy = false;
+
+  assert.equal(proactive.flush(), false);
+  assert.equal(proactive.pending.length, 0);
+  assert.equal(harness.synthesis.spoken.length, 0);
+});
+
+test('proactive events reject failed, withheld, unsafe, unreleased, and unverified responses', () => {
+  const invalidResponses = [
+    releasedResponse({ voki_contract: contract({ lifecycle: { state: 'WITHHELD' } }) }),
+    releasedResponse({ voki_contract: contract({ provider: { status: 'FAILED' } }) }),
+    releasedResponse({ voki_contract: contract({ response_safety: { status: 'BLOCK' } }) }),
+    releasedResponse({ voki_contract: contract({ response_disposition: 'WITHHELD' }) }),
+    releasedResponse({ voki_contract: contract({ lifecycle: { state: 'ENFORCEMENT_ALLOWED' } }) }),
+    pendingApprovalResponse({
+      voki_contract: contract({
+        lifecycle: { state: 'WAITING_FOR_HUMAN' },
+        request_review: { status: 'APPROVAL_REQUIRED' },
+        enforcement: { status: 'HUMAN_APPROVAL_REQUIRED' },
+        approval: { status: 'PENDING', record_available: 'UNAVAILABLE' },
+      }),
+    }),
+  ];
+  const harness = makeSpeechHarness();
+  const proactive = new VOKKIProactiveSpeech({ speech: harness.adapter });
+  proactive.setEnabled(true);
+
+  for (const response of invalidResponses) {
+    assert.equal(createProactiveEvent(response), null);
+    assert.equal(proactive.enqueueEvent(response), false);
+    assert.equal(harness.adapter.speakProactiveEvent({
+      type: 'RELEASED_RESULT',
+      requestId: 'unsafe-request',
+      response,
+    }), false);
+  }
+  assert.equal(harness.synthesis.spoken.length, 0);
+});
+
+test('verified approval announcements use only a generic notice, never pending request content', () => {
+  const harness = makeSpeechHarness();
+  const proactive = new VOKKIProactiveSpeech({ speech: harness.adapter });
+  proactive.setEnabled(true);
+
+  assert.equal(proactive.enqueueEvent(createProactiveEvent(pendingApprovalResponse())), true);
+  assert.equal(harness.utterance.text, 'A PARMAR request is waiting for your review.');
+  assert.doesNotMatch(harness.utterance.text, /Private request details/);
+});
+
+test('Stop Speaking cancels active proactive speech and does not create a speech loop', () => {
+  const harness = makeSpeechHarness();
+  const proactive = new VOKKIProactiveSpeech({ speech: harness.adapter });
+  proactive.setEnabled(true);
+  assert.equal(proactive.enqueueEvent(createProactiveEvent(releasedResponse())), true);
+  harness.utterance.onstart();
+
+  assert.equal(proactive.stopSpeaking(), true);
+  assert.equal(harness.adapter.state, 'CANCELLED');
+  harness.utterance.onend();
+  assert.equal(proactive.flush(), false);
+  assert.equal(harness.synthesis.spoken.length, 1);
+  assert.equal(harness.synthesis.cancelCount, 1);
+});
+
 test('speech adapter uses browser events without timer-based SPEAKING simulation or media input', () => {
   const speechSource = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'voki-speech.js'), 'utf8');
   assert.doesNotMatch(speechSource, /setTimeout|setInterval|requestAnimationFrame/);
@@ -1242,6 +1449,7 @@ test('VOKKI sends through the chat API and releases only a passing response', as
   assert.equal(calls[0].url, '/api/chat');
   const request = JSON.parse(calls[0].options.body);
   assert.equal(request.message, 'Consider this request');
+  assert.equal(request.assistant_surface, 'voki');
   assert.equal(Object.hasOwn(request.context || {}, 'memory'), false);
   assert.equal(root.elements['[data-voki-lifecycle]'].dataset.lifecycle, 'RELEASED');
   assert.equal(root.elements['[data-voki-presence]'].dataset.presenceState, 'completed');
@@ -1249,6 +1457,39 @@ test('VOKKI sends through the chat API and releases only a passing response', as
   assert.equal(root.dataset.responseSafety, 'PASS');
   assert.equal(root.dataset.responseDisposition, 'RELEASED');
   assert.equal(root.elements['[data-voki-output]'].textContent, 'Validated response.');
+});
+
+test('proactive controls start off, enable real release announcements, and mute immediately', () => {
+  const harness = makeSpeechHarness();
+  const { instance, root } = makeInterface(
+    async () => apiResponse(releasedResponse()),
+    ({ getLanguage, onStateChange }) => new VOKKISpeechAdapter({
+      synthesis: harness.synthesis,
+      Utterance: class FakeUtterance { constructor(text) { this.text = text; } },
+      getLanguage,
+      onStateChange,
+    }),
+  );
+  const proactiveToggle = root.elements['[data-voki-proactive-toggle]'];
+  const muteToggle = root.elements['[data-voki-mute-toggle]'];
+
+  assert.equal(proactiveToggle.checked, false);
+  assert.match(root.elements['[data-voki-proactive-status]'].textContent, /off/);
+  proactiveToggle.checked = true;
+  proactiveToggle.listeners.change();
+  assert.equal(instance.proactiveSpeech.enabled, true);
+
+  instance.renderResult(releasedResponse());
+  assert.equal(harness.synthesis.spoken.length, 1);
+  harness.utterance.onstart();
+  muteToggle.checked = true;
+  muteToggle.listeners.change();
+
+  assert.equal(instance.proactiveSpeech.muted, true);
+  assert.equal(instance.speech.state, 'CANCELLED');
+  assert.equal(root.dataset.speechMuted, 'true');
+  assert.match(root.elements['[data-voki-proactive-status]'].textContent, /muted/);
+  assert.equal(harness.synthesis.cancelCount, 1);
 });
 
 test('VOKKI requests research explicitly and displays sources only for a released response', async () => {

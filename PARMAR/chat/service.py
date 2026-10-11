@@ -360,6 +360,9 @@ class ChatService:
         provider_context = ChatContext(
             language=context.language if context else "en",
             persona=context.persona if context else "neutral",
+            response_length=context.response_length if context else "balanced",
+            response_style=context.response_style if context else "normal",
+            custom_instructions=context.custom_instructions if context else "",
             memory=context.memory if context and memory_retriever is None else [],
             policy_rules=list(PARMARUIAdapter.POLICY_RULES),
             safety_status=analysis.get("status"),

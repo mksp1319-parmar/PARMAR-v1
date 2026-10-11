@@ -53,6 +53,20 @@ def test_principal_contract_distinguishes_anonymous_and_authenticated_identity()
     }
 
 
+def test_json_responses_are_not_cacheable():
+    response = {"headers": {}}
+    request = SimpleNamespace(
+        send_response=lambda _status: None,
+        send_header=lambda name, value: response["headers"].update({name: value}),
+        end_headers=lambda: None,
+        wfile=io.BytesIO(),
+    )
+
+    futuristic_app.PARMARRequestHandler._send_json(request, 200, {"message": "private response"})
+
+    assert response["headers"]["Cache-Control"] == "no-store"
+
+
 def test_chat_context_is_not_an_identity_or_authorization_authority():
     context = ChatContext()
 
@@ -259,6 +273,25 @@ def test_static_request_rejects_symlink_escape(tmp_path, monkeypatch):
     assert served == []
 
 
+def test_static_png_is_served_with_image_content_type(tmp_path):
+    image_content = b"\x89PNG\r\n\x1a\n"
+    image_path = tmp_path / "avatar.png"
+    image_path.write_bytes(image_content)
+    response = {"headers": {}, "statuses": []}
+    request = SimpleNamespace(
+        send_response=lambda status: response["statuses"].append(status),
+        send_header=lambda name, value: response["headers"].update({name: value}),
+        end_headers=lambda: None,
+        wfile=io.BytesIO(),
+    )
+
+    futuristic_app.PARMARRequestHandler._serve_file(request, image_path)
+
+    assert response["statuses"] == [200]
+    assert response["headers"]["Content-Type"] == "image/png"
+    assert request.wfile.getvalue() == image_content
+
+
 def test_root_index_rejects_symlink_escape(tmp_path, monkeypatch):
     static_root = tmp_path / "static"
     static_root.mkdir()
@@ -295,6 +328,52 @@ def test_post_rejects_invalid_or_oversized_json(body, content_length, expected_s
 
     assert errors
     assert errors[0][0] == expected_status
+
+
+def test_post_rejects_unsupported_transfer_encoding_before_routing():
+    request, errors, _ = make_request(
+        "/api/logout",
+        body=b"0\r\n\r\n",
+        content_length=0,
+        headers={"Transfer-Encoding": "chunked"},
+    )
+    response = {}
+    request._send_json = lambda status, payload: response.update(status=status, payload=payload)
+    request._send_json_with_headers = lambda status, payload, headers: response.update(
+        status=status,
+        payload=payload,
+        headers=headers,
+    )
+
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+
+    assert errors == [(400, "Transfer-Encoding is not supported")]
+    assert response == {}
+
+
+def test_post_rejects_duplicate_content_length_before_routing():
+    request, errors, _ = make_request("/api/logout", body=b"", content_length=0)
+
+    class DuplicateContentLengthHeaders(dict):
+        def get_all(self, name, default=None):
+            if name.casefold() == "content-length":
+                return ["0", "1"]
+            value = self.get(name)
+            return [value] if value is not None else default
+
+    request.headers = DuplicateContentLengthHeaders(request.headers)
+    response = {}
+    request._send_json = lambda status, payload: response.update(status=status, payload=payload)
+    request._send_json_with_headers = lambda status, payload, headers: response.update(
+        status=status,
+        payload=payload,
+        headers=headers,
+    )
+
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+
+    assert errors == [(400, "Invalid Content-Length")]
+    assert response == {}
 
 
 @pytest.mark.parametrize(
@@ -338,5 +417,5 @@ def test_server_host_defaults_to_loopback_and_allows_explicit_override(monkeypat
 
     futuristic_app.main()
 
-    assert captured["address"] == (expected_host, 8000)
+    assert captured["address"] == (expected_host, futuristic_app.UI_PORT)
     assert captured["closed"] is True

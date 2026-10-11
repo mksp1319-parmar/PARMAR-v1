@@ -29,7 +29,7 @@
   }
 
   function isReleasedResponse(result) {
-    const contract = result?.voki_contract;
+    const contract = result?.voki_contract || result?.analysis?.voki_contract;
     return Boolean(
       contract?.lifecycle?.state === 'RELEASED'
       && contract?.provider?.status === 'COMPLETED'
@@ -38,6 +38,96 @@
       && typeof result.message === 'string'
       && result.message.trim(),
     );
+  }
+
+  function requestId(value) {
+    return typeof value === 'string'
+      && value !== 'UNKNOWN'
+      && /^[A-Za-z0-9._:-]{1,128}$/.test(value)
+      ? value
+      : null;
+  }
+
+  function createProactiveEvent(result) {
+    const contract = result?.voki_contract || result?.analysis?.voki_contract;
+    const id = requestId(contract?.request_id);
+    if (!id) return null;
+    if (isReleasedResponse(result)) {
+      return {
+        type: 'RELEASED_RESULT',
+        requestId: id,
+        response: {
+          message: result.message.trim(),
+          voki_contract: {
+            lifecycle: { state: 'RELEASED' },
+            provider: { status: 'COMPLETED' },
+            response_safety: { status: 'PASS' },
+            response_disposition: 'RELEASED',
+          },
+        },
+      };
+    }
+
+    if (
+      contract?.lifecycle?.state === 'WAITING_FOR_HUMAN'
+      && contract?.request_review?.status === 'APPROVAL_REQUIRED'
+      && contract?.enforcement?.status === 'HUMAN_APPROVAL_REQUIRED'
+      && contract?.approval?.status === 'PENDING'
+      && contract?.approval?.record_available === 'AVAILABLE'
+    ) {
+      return {
+        type: 'APPROVAL_REQUIRED',
+        requestId: id,
+        lifecycleState: 'WAITING_FOR_HUMAN',
+        enforcementStatus: 'HUMAN_APPROVAL_REQUIRED',
+        approvalStatus: 'PENDING',
+        approvalRecordAvailable: 'AVAILABLE',
+      };
+    }
+    return null;
+  }
+
+  function normalizeProactiveEvent(event) {
+    const id = requestId(event?.requestId);
+    if (!id) return null;
+    if (event.type === 'RELEASED_RESULT' && isReleasedResponse(event.response)) {
+      return {
+        type: event.type,
+        requestId: id,
+        response: {
+          message: event.response.message.trim(),
+          voki_contract: {
+            lifecycle: { state: 'RELEASED' },
+            provider: { status: 'COMPLETED' },
+            response_safety: { status: 'PASS' },
+            response_disposition: 'RELEASED',
+          },
+        },
+      };
+    }
+    if (
+      event.type === 'APPROVAL_REQUIRED'
+      && event.lifecycleState === 'WAITING_FOR_HUMAN'
+      && event.enforcementStatus === 'HUMAN_APPROVAL_REQUIRED'
+      && event.approvalStatus === 'PENDING'
+      && event.approvalRecordAvailable === 'AVAILABLE'
+    ) {
+      return {
+        type: event.type,
+        requestId: id,
+        lifecycleState: event.lifecycleState,
+        enforcementStatus: event.enforcementStatus,
+        approvalStatus: event.approvalStatus,
+        approvalRecordAvailable: event.approvalRecordAvailable,
+      };
+    }
+    return null;
+  }
+
+  function approvalNotice(language) {
+    if (language === 'hi') return 'PARMAR में एक अनुरोध आपकी समीक्षा की प्रतीक्षा कर रहा है।';
+    if (language === 'mix') return 'PARMAR mein ek request aapke review ka intezar kar rahi hai.';
+    return 'A PARMAR request is waiting for your review.';
   }
 
   class VOKKISpeechAdapter {
@@ -72,11 +162,26 @@
 
     speakReleasedResponse(result) {
       if (!this.enabled || !this.available || !isReleasedResponse(result)) return false;
+      return this.speakText(result.message, true);
+    }
+
+    speakProactiveEvent(event) {
+      if (!this.available) return false;
+      const accepted = normalizeProactiveEvent(event);
+      if (!accepted) return false;
+      if (accepted.type === 'APPROVAL_REQUIRED') {
+        return this.speakText(approvalNotice(this.getLanguage()), false);
+      }
+      return this.speakText(accepted.response.message, false);
+    }
+
+    speakText(value, requiresEnabled) {
+      if (!this.available || (requiresEnabled && !this.enabled)) return false;
       if (this.state === 'QUEUED' || this.state === 'SPEAKING') {
         if (!this.cancel()) return false;
       }
 
-      const text = result.message.trim();
+      const text = value.trim();
       const token = ++this.token;
       const utterance = new this.Utterance(text);
       const language = this.getLanguage();
@@ -85,7 +190,7 @@
       this.setState('QUEUED');
 
       utterance.onstart = () => {
-        if (token !== this.token || !this.enabled) return;
+        if (token !== this.token || (requiresEnabled && !this.enabled)) return;
         this.setState('SPEAKING');
       };
       utterance.onboundary = (event) => {
@@ -141,6 +246,146 @@
     setState(state) {
       this.state = SPEECH_STATES.includes(state) ? state : 'ERROR';
       this.onStateChange({ state: this.state, boundary: this.boundary });
+    }
+  }
+
+  class VOKKIProactiveSpeech {
+    constructor({
+      speech,
+      isDocumentVisible = () => globalThis.document?.hidden !== true,
+      isInterfaceActive = () => true,
+      isBusy = () => false,
+      now = () => Date.now(),
+      eventTtlMs = 15_000,
+      minimumIntervalMs = 60_000,
+      onStateChange = () => {},
+    } = {}) {
+      this.speech = speech;
+      this.isDocumentVisible = isDocumentVisible;
+      this.isInterfaceActive = isInterfaceActive;
+      this.isBusy = isBusy;
+      this.now = now;
+      this.eventTtlMs = eventTtlMs;
+      this.minimumIntervalMs = minimumIntervalMs;
+      this.onStateChange = onStateChange;
+      this.enabled = false;
+      this.muted = false;
+      this.pending = [];
+      this.seen = new Map();
+      this.lastAnnouncementAt = null;
+      this.ownedSpeechToken = null;
+      this.onStateChange({ enabled: this.enabled, muted: this.muted });
+    }
+
+    setEnabled(enabled) {
+      this.enabled = this.speech?.available === true && enabled === true;
+      if (!this.enabled) {
+        this.pending = [];
+        this.cancelOwnedSpeech();
+      }
+      this.notifyState();
+      return this.enabled;
+    }
+
+    setMuted(muted) {
+      this.muted = muted === true;
+      if (this.muted) {
+        this.pending = [];
+        this.ownedSpeechToken = null;
+        this.speech?.cancel();
+      }
+      this.notifyState();
+      return this.muted;
+    }
+
+    enqueueEvent(event) {
+      const accepted = normalizeProactiveEvent(event);
+      if (
+        !accepted
+        || !this.enabled
+        || this.muted
+        || this.speech?.available !== true
+        || !this.isDocumentVisible()
+        || !this.isInterfaceActive()
+      ) return false;
+
+      const now = this.now();
+      this.pruneSeen(now);
+      const key = `${accepted.type}:${accepted.requestId}`;
+      if (this.seen.has(key)) return false;
+      this.seen.set(key, now + 10 * 60_000);
+      this.pending.push({ key, event: accepted, enqueuedAt: now });
+      if (this.pending.length > 4) this.pending.shift();
+      return this.flush();
+    }
+
+    flush() {
+      if (!this.enabled || this.muted || this.speech?.available !== true) {
+        this.pending = [];
+        return false;
+      }
+      if (!this.isDocumentVisible() || !this.isInterfaceActive()) {
+        this.suspend();
+        return false;
+      }
+
+      const now = this.now();
+      while (this.pending.length > 0) {
+        const next = this.pending[0];
+        if (now - next.enqueuedAt > this.eventTtlMs) {
+          this.pending.shift();
+          continue;
+        }
+        if (this.isBusy()) return false;
+        if (
+          this.lastAnnouncementAt !== null
+          && now - this.lastAnnouncementAt < this.minimumIntervalMs
+        ) {
+          this.pending.shift();
+          continue;
+        }
+        this.pending.shift();
+        if (this.speech.speakProactiveEvent(next.event)) {
+          this.lastAnnouncementAt = now;
+          this.ownedSpeechToken = this.speech.token;
+          return true;
+        }
+        return false;
+      }
+      return false;
+    }
+
+    suspend() {
+      this.pending = [];
+      this.cancelOwnedSpeech();
+    }
+
+    stopSpeaking() {
+      this.pending = [];
+      this.ownedSpeechToken = null;
+      return this.speech?.cancel() === true;
+    }
+
+    cancelOwnedSpeech() {
+      if (
+        this.ownedSpeechToken !== null
+        && this.speech?.token === this.ownedSpeechToken
+        && ['QUEUED', 'SPEAKING'].includes(this.speech?.state)
+      ) {
+        this.speech.cancel();
+      }
+      this.ownedSpeechToken = null;
+    }
+
+    pruneSeen(now) {
+      for (const [key, expiresAt] of this.seen) {
+        if (expiresAt <= now) this.seen.delete(key);
+      }
+      while (this.seen.size > 128) this.seen.delete(this.seen.keys().next().value);
+    }
+
+    notifyState() {
+      this.onStateChange({ enabled: this.enabled, muted: this.muted });
     }
   }
 
@@ -375,8 +620,11 @@
     SPEECH_STATES,
     VOICE_INPUT_STATES,
     VOKKISpeechAdapter,
+    VOKKIProactiveSpeech,
     VOKKIRecognitionAdapter,
+    createProactiveEvent,
     isReleasedResponse,
+    normalizeProactiveEvent,
     recognitionLanguage,
   };
 });

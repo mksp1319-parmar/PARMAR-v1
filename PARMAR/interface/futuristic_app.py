@@ -768,7 +768,23 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if _reject_client_identity(self, parsed):
             return
-        raw_content_length = self.headers.get("Content-Length", "0")
+        get_all_headers = getattr(self.headers, "get_all", None)
+
+        def header_values(name: str) -> list[str]:
+            if callable(get_all_headers):
+                values = get_all_headers(name, [])
+                return values if isinstance(values, list) else []
+            value = self.headers.get(name)
+            return [value] if isinstance(value, str) else []
+
+        if header_values("Transfer-Encoding"):
+            self.send_error(400, "Transfer-Encoding is not supported")
+            return
+        content_lengths = header_values("Content-Length")
+        if len(content_lengths) > 1:
+            self.send_error(400, "Invalid Content-Length")
+            return
+        raw_content_length = content_lengths[0] if content_lengths else "0"
         try:
             content_length = int(raw_content_length)
         except (TypeError, ValueError):
@@ -1208,6 +1224,10 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             if "provider" in payload and not isinstance(payload["provider"], str):
                 self.send_error(400, "Provider must be a string")
                 return
+            assistant_surface = payload.get("assistant_surface", "parmar")
+            if not isinstance(assistant_surface, str) or assistant_surface not in {"parmar", "voki"}:
+                self.send_error(400, "Assistant surface is not supported")
+                return
             message = message_value.strip()
             if len(message) > MAX_MESSAGE_LENGTH:
                 self.send_error(413, "Chat message exceeds the conversation storage limit")
@@ -1229,7 +1249,13 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Research mode must be a boolean")
                 return
             request_context = self.request_context
-            context = ChatContext(language=language)
+            context = ChatContext(
+                language=language,
+                persona="voki" if assistant_surface == "voki" else "neutral",
+                response_length=payload.get("response_length", "balanced"),
+                response_style=payload.get("response_style", "normal"),
+                custom_instructions=payload.get("custom_instructions", ""),
+            )
             conversation_id = None
             recent_messages = context_payload.get("recent_messages") if isinstance(context_payload, dict) else None
             if request_context.principal.authenticated:
@@ -1494,6 +1520,8 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             mime_type = "application/javascript"
         elif file_path.suffix == ".json":
             mime_type = "application/json"
+        elif file_path.suffix == ".png":
+            mime_type = "image/png"
 
         self.send_response(200)
         self.send_header("Content-Type", mime_type)
@@ -1505,6 +1533,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
         body = json.dumps(payload, indent=2).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

@@ -5,6 +5,7 @@ from PARMAR.core.decision.decision_engine import DecisionEngine
 from PARMAR.core.intent.intent_engine import IntentEngine
 from PARMAR.core.mediation.mediation_engine import MediationEngine
 from PARMAR.core.risk.risk_engine import RiskEngine
+from PARMAR.audit.decision_logs import DecisionLogManager
 from PARMAR.interface.dashboard import TerminalDashboard
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
 from PARMAR.safety.autonomy_check import AutonomyCheck
@@ -118,6 +119,20 @@ def test_dashboard_approval_flow_reject(tmp_path):
     outcome = dashboard.handle_human_decision(result, "reject", "human rejected")
     assert outcome["human_decision"] == "REJECTED"
     assert "REJECTED" in outcome["decision"]["approval_message"]
+
+
+def test_dashboard_audit_does_not_store_free_form_human_reason(tmp_path):
+    dashboard = TerminalDashboard()
+    audit_path = tmp_path / "human-decision.jsonl"
+    dashboard.logger = DecisionLogManager(log_path=str(audit_path))
+    result = dashboard.run_pipeline("Purchase a $500 software license")
+    private_reason = "api_key=sk-12345678901234567890"
+
+    dashboard.handle_human_decision(result, "reject", private_reason)
+
+    audit = audit_path.read_text(encoding="utf-8")
+    assert private_reason not in audit
+    assert '"reason_provided": true' in audit
 
 
 def test_fail_closed_when_safety_input_missing():

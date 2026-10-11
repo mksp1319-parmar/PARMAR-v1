@@ -130,6 +130,11 @@ def test_http_provider_sends_structured_context_and_parses_untrusted_response():
         "context": {
             "language": "en",
             "persona": "neutral",
+            "response_preferences": {
+                "length": "balanced",
+                "style": "normal",
+                "custom_instructions": "",
+            },
             "policy_rules": ["No destructive action without approval"],
             "safety_status": "SAFE",
             "risk_level": "low",

@@ -94,6 +94,7 @@ test('Home actions navigate to the existing workflows', () => {
 
 test('Continue and Recent Work use persisted conversations, actual research, and existing audit entries', () => {
   const renderHome = functionSource('renderHome');
+  const researchHistoryRecords = functionSource('researchHistoryRecords');
   const renderHistory = functionSource('renderHistory');
   const continueConversation = functionSource('continueConversation');
   const addAuditEntry = functionSource('addAuditEntry');
@@ -101,7 +102,7 @@ test('Continue and Recent Work use persisted conversations, actual research, and
 
   assert.match(renderHome, /state\.sessions\.filter/);
   assert.match(renderHome, /state\.serverConversationIds\.has\(session\.id\)/);
-  assert.match(renderHome, /message\.analysis\?\.research/);
+  assert.match(researchHistoryRecords, /message\.analysis\?\.research/);
   assert.match(renderHome, /entry\.kind === 'simulation'/);
   assert.match(renderHome, /entry\.kind === 'decision'/);
   assert.match(renderHistory, /renderHome\(\)/);
@@ -124,11 +125,26 @@ test('Needs Attention is gated by a genuine pending approval and returns to its 
   assert.match(appSource, /apiRequest\('\/api\/approval'/);
 });
 
+test('proactive VOKKI events originate from accepted chat results, not scenario or phone simulations', () => {
+  const publish = functionSource('publishVerifiedVokiEvent');
+  const chat = functionSource('submitChatMessage');
+  const scenario = functionSource('evaluateScenario');
+  const phone = functionSource('runPhoneSimulation');
+
+  assert.match(publish, /PARMARVOKKISpeech\?\.createProactiveEvent\(result\)/);
+  assert.match(publish, /parmar-verified-voki-event/);
+  assert.match(chat, /publishVerifiedVokiEvent\(result\)/);
+  assert.doesNotMatch(scenario, /publishVerifiedVokiEvent|parmar-verified-voki-event/);
+  assert.doesNotMatch(phone, /publishVerifiedVokiEvent|parmar-verified-voki-event/);
+});
+
 test('Home motion is reduced with the user preference and follows real review state', () => {
-  const reducedMotion = styles.slice(styles.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
   assert.match(styles, /\.home-voki-presence\[data-lifecycle-state="THINKING"\] \.home-voki-halo-inner/);
   assert.match(styles, /\.home-voki-presence\[data-lifecycle-state="WAITING_FOR_HUMAN"\] \.home-voki-halo/);
-  assert.match(reducedMotion, /home-voki-presence\[data-lifecycle-state="THINKING"\]/);
+  assert.match(
+    styles,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.home-voki-presence\[data-lifecycle-state="RISK_CHECK"\] \.home-voki-halo-inner\s*\{\s*animation:\s*none;/,
+  );
   assert.match(html, /id="settings-reduced-motion"/);
 });
 

@@ -101,9 +101,25 @@ def test_emergency_gate():
 
 def test_audit_logging():
     logger = DecisionLogManager(log_path="/tmp/parmar_phone_audit_test.jsonl")
-    record = logger.log_event("phone_event", {"event": "battery_low", "risk_level": "LOW", "human_decision": "AUTO-ALLOW"})
+    record = logger.log_event("phone_event", {"risk_level": "LOW", "human_decision": "AUTO-ALLOW"})
     assert record["event_type"] == "phone_event"
     assert "risk_level" in record
+
+
+def test_phone_event_audit_does_not_store_free_form_event_name(tmp_path):
+    module = PhoneAwarenessModule()
+    audit_path = tmp_path / "phone-event.jsonl"
+    module.logger = DecisionLogManager(log_path=str(audit_path))
+    private_event_name = "api_key=sk-12345678901234567890"
+
+    module.process_event({
+        "event_type": private_event_name,
+        "permission_required": True,
+        "permission_granted": False,
+    })
+
+    audit = audit_path.read_text(encoding="utf-8")
+    assert private_event_name not in audit
 
 
 def test_permission_toggle_blocks_phone_event_when_disabled():

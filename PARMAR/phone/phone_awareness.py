@@ -158,7 +158,6 @@ class PhoneAwarenessModule:
                 "status": "PHONE AWARENESS DISABLED",
             })
             self.logger.log_event("phone_event_rejected", {
-                "event": event_type,
                 "risk_level": "LOW",
                 "human_decision": result["human_decision"],
                 "reason": "Phone Awareness Permission was disabled.",
@@ -183,7 +182,7 @@ class PhoneAwarenessModule:
                     "status": "BLOCKED",
                 },
             })
-            self.logger.log_event("phone_event", {"event": event_type, "risk_level": "LOW", "human_decision": result["human_decision"]})
+            self.logger.log_event("phone_event", {"risk_level": "LOW", "human_decision": result["human_decision"]})
             return result
 
         if event_type.lower() in self.HIGH_RISK_EVENTS or any(item.lower() in self.SENSITIVE_PHONE_DATA for item in requested_data):
@@ -258,7 +257,6 @@ class PhoneAwarenessModule:
         })
 
         self.logger.log_event("phone_event", {
-            "event": event_type,
             "detected_intent": decision["detected_intent"],
             "risk_level": risk_level,
             "safety_checks": ["privacy_check", "autonomy_check", "emergency_gate"],
