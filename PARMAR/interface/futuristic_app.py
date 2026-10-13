@@ -141,6 +141,88 @@ def _request_is_tls(request: object) -> bool:
     return isinstance(connection, ssl.SSLSocket)
 
 
+def _configured_ui_origin(
+    environ: dict[str, str] | None = None,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    scheme: str | None = None,
+) -> str | None:
+    settings = os.environ if environ is None else environ
+    configured_origin = settings.get("PARMAR_UI_ORIGIN", "").strip()
+    if configured_origin:
+        try:
+            parsed_origin = urlsplit(configured_origin)
+            parsed_port = parsed_origin.port
+        except ValueError as error:
+            raise ValueError("PARMAR_UI_ORIGIN must be a valid HTTP(S) origin.") from error
+        if (
+            configured_origin != configured_origin.strip()
+            or any(character.isspace() for character in configured_origin)
+            or parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.hostname
+            or parsed_origin.username is not None
+            or parsed_origin.password is not None
+            or parsed_origin.path
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or parsed_origin.netloc != parsed_origin.netloc.lower()
+            or (parsed_port is not None and not 1 <= parsed_port <= 65535)
+        ):
+            raise ValueError("PARMAR_UI_ORIGIN must be a canonical HTTP(S) origin without a path.")
+        return configured_origin
+
+    bind_host = host or settings.get("PARMAR_UI_HOST", "127.0.0.1").strip()
+    try:
+        bind_address = ipaddress.ip_address(bind_host)
+    except ValueError:
+        return None
+    if bind_address.is_unspecified or bind_address.is_multicast:
+        return None
+    origin_scheme = scheme or (
+        "https"
+        if settings.get("PARMAR_UI_TLS_CERTFILE", "").strip()
+        and settings.get("PARMAR_UI_TLS_KEYFILE", "").strip()
+        else "http"
+    )
+    listener_port = UI_PORT if port is None else port
+    authority = f"[{bind_host}]" if bind_address.version == 6 else bind_host
+    return f"{origin_scheme}://{authority}:{listener_port}"
+
+
+def _request_header_values(request: object, name: str) -> list[str]:
+    headers = getattr(request, "headers", None)
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        values = get_all(name, [])
+        if isinstance(values, (list, tuple)) and all(isinstance(value, str) for value in values):
+            return list(values)
+        return [] if values is None else [""]
+    get_header = getattr(headers, "get", None)
+    value = get_header(name) if callable(get_header) else None
+    return [value] if isinstance(value, str) else []
+
+
+def _unsafe_request_origin_is_valid(request: object) -> bool:
+    origins = _request_header_values(request, "Origin")
+    fetch_sites = _request_header_values(request, "Sec-Fetch-Site")
+    if not origins and not fetch_sites:
+        return True
+    if len(origins) > 1 or len(fetch_sites) > 1:
+        return False
+    try:
+        expected_origin = _configured_ui_origin()
+    except ValueError:
+        return False
+    if expected_origin is None:
+        return False
+    if origins and origins[0] != expected_origin:
+        return False
+    if fetch_sites and fetch_sites[0] != "same-origin":
+        return False
+    return True
+
+
 def _development_auth_available(request: object) -> bool:
     try:
         origin = _validate_development_auth_configuration()
@@ -154,13 +236,14 @@ def _development_login_origin_is_valid(request: object) -> bool:
         expected_origin = _validate_development_auth_configuration()
     except ValueError:
         return False
-    headers = getattr(request, "headers", None)
-    get_header = getattr(headers, "get", None)
+    origins = _request_header_values(request, "Origin")
+    fetch_sites = _request_header_values(request, "Sec-Fetch-Site")
     return (
         expected_origin is not None
-        and callable(get_header)
-        and get_header("Origin") == expected_origin
-        and get_header("Sec-Fetch-Site") == "same-origin"
+        and len(origins) == 1
+        and origins[0] == expected_origin
+        and len(fetch_sites) == 1
+        and fetch_sites[0] == "same-origin"
         and _request_is_tls(request)
     )
 
@@ -777,6 +860,12 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             value = self.headers.get(name)
             return [value] if isinstance(value, str) else []
 
+        if (
+            parsed.path != "/api/auth/development"
+            and not _unsafe_request_origin_is_valid(self)
+        ):
+            self.send_error(403, "Unsafe request origin is not allowed")
+            return
         if header_values("Transfer-Encoding"):
             self.send_error(400, "Transfer-Encoding is not supported")
             return
@@ -1550,6 +1639,11 @@ def main() -> None:
     keyfile = os.environ.get("PARMAR_UI_TLS_KEYFILE", "").strip()
     if bool(certfile) != bool(keyfile):
         raise ValueError("Configure both PARMAR_UI_TLS_CERTFILE and PARMAR_UI_TLS_KEYFILE.")
+    _configured_ui_origin(
+        host=host,
+        port=port,
+        scheme="https" if certfile and keyfile else "http",
+    )
     server = ThreadingHTTPServer((host, port), PARMARRequestHandler)
     try:
         scheme = "http"

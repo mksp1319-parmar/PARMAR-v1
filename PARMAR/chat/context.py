@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import base64
+import binascii
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -16,6 +18,10 @@ MAX_RECENT_MESSAGES = 12
 MAX_RECENT_MESSAGE_LENGTH = 4000
 MAX_RECENT_CONTEXT_LENGTH = 12000
 MAX_CUSTOM_INSTRUCTIONS_LENGTH = 1200
+MAX_CHAT_IMAGES = 4
+MAX_CHAT_IMAGE_BYTES = 2 * 1024 * 1024
+MAX_CHAT_IMAGES_TOTAL_BYTES = 8 * 1024 * 1024
+IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 
 RESPONSE_LENGTHS = {"concise", "balanced", "detailed"}
 RESPONSE_STYLES = {
@@ -106,6 +112,60 @@ def sanitize_recent_messages(messages: object) -> list[dict[str, str]]:
     return safe_messages
 
 
+@dataclass(frozen=True)
+class ChatImage:
+    """A validated, bounded image attachment for a single chat request."""
+
+    mime_type: str
+    data: bytes
+
+    def __post_init__(self) -> None:
+        if self.mime_type not in IMAGE_MIME_TYPES or type(self.data) is not bytes:
+            raise ValueError("Chat images must use a supported image type and binary data.")
+        if not self.data or len(self.data) > MAX_CHAT_IMAGE_BYTES:
+            raise ValueError("Chat images must be non-empty and no larger than 2 MiB.")
+        valid_signature = (
+            self.mime_type == "image/png" and self.data.startswith(b"\x89PNG\r\n\x1a\n")
+        ) or (
+            self.mime_type == "image/jpeg" and self.data.startswith(b"\xff\xd8\xff")
+        ) or (
+            self.mime_type == "image/webp"
+            and len(self.data) >= 12
+            and self.data[:4] == b"RIFF"
+            and self.data[8:12] == b"WEBP"
+        )
+        if not valid_signature:
+            raise ValueError("The uploaded image content does not match its declared type.")
+
+
+def chat_images_from_payload(value: object) -> list[ChatImage]:
+    """Decode and validate the JSON-safe image representation from /api/chat."""
+    if not isinstance(value, list) or not value or len(value) > MAX_CHAT_IMAGES:
+        raise ValueError("Provide between one and four supported images.")
+
+    images: list[ChatImage] = []
+    total_bytes = 0
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"mime_type", "data"}:
+            raise ValueError("Each image must include only mime_type and base64 data.")
+        mime_type = item.get("mime_type")
+        encoded = item.get("data")
+        if not isinstance(mime_type, str) or mime_type not in IMAGE_MIME_TYPES:
+            raise ValueError("Only PNG, JPG, JPEG, and WEBP images are supported.")
+        if not isinstance(encoded, str) or not encoded or len(encoded) > ((MAX_CHAT_IMAGE_BYTES + 2) // 3) * 4:
+            raise ValueError("Each image must be valid base64 data no larger than 2 MiB.")
+        try:
+            image_data = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("Image data must be valid base64.") from None
+        image = ChatImage(mime_type=mime_type, data=image_data)
+        total_bytes += len(image.data)
+        if total_bytes > MAX_CHAT_IMAGES_TOTAL_BYTES:
+            raise ValueError("The combined image size must not exceed 8 MiB.")
+        images.append(image)
+    return images
+
+
 @dataclass
 class ChatContext:
     """Structured chat data; saved memory is always untrusted user-owned context."""
@@ -124,6 +184,7 @@ class ChatContext:
     approval_state: str | None = None
     required_permissions: list[str] = field(default_factory=list)
     enforcement_result: dict[str, str | bool] = field(default_factory=dict)
+    images: list[ChatImage] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.language = sanitize_provider_text(self.language)[:32] if isinstance(self.language, str) else "en"
@@ -163,3 +224,7 @@ class ChatContext:
             limit=MAX_CONTEXT_ENTRIES,
             total_length=MAX_CONTEXT_TOTAL_LENGTH,
         )
+        if not isinstance(self.images, list) or any(type(image) is not ChatImage for image in self.images):
+            raise ValueError("Chat images must be validated ChatImage instances.")
+        if len(self.images) > MAX_CHAT_IMAGES or sum(len(image.data) for image in self.images) > MAX_CHAT_IMAGES_TOTAL_BYTES:
+            raise ValueError("Chat image attachments exceed the configured limits.")

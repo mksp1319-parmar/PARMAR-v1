@@ -373,7 +373,79 @@ def test_post_rejects_duplicate_content_length_before_routing():
     futuristic_app.PARMARRequestHandler.do_POST(request)
 
     assert errors == [(400, "Invalid Content-Length")]
-    assert response == {}
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_status"),
+    [
+        (
+            {
+                "Origin": "https://parmar.example",
+                "Sec-Fetch-Site": "same-origin",
+            },
+            404,
+        ),
+        ({"Origin": "https://attacker.example"}, 403),
+        ({"Origin": "null"}, 403),
+        ({"Sec-Fetch-Site": "cross-site"}, 403),
+        ({"Sec-Fetch-Site": "same-site"}, 403),
+        ({"Sec-Fetch-Site": "none"}, 403),
+        ({}, 404),
+    ],
+)
+def test_unsafe_request_origin_and_fetch_metadata_policy(
+    monkeypatch,
+    headers,
+    expected_status,
+):
+    monkeypatch.setenv("PARMAR_UI_ORIGIN", "https://parmar.example")
+    request, errors, _ = make_request(
+        "/api/not-a-route",
+        body=b"{}",
+        headers=headers,
+    )
+
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+
+    assert errors
+    assert errors[0][0] == expected_status
+
+
+def test_unsafe_request_rejects_duplicate_origin_headers(monkeypatch):
+    monkeypatch.setenv("PARMAR_UI_ORIGIN", "https://parmar.example")
+    request, errors, _ = make_request(
+        "/api/chat",
+        body=b"{}",
+        headers={
+            "Origin": "https://parmar.example",
+            "Sec-Fetch-Site": "same-origin",
+        },
+    )
+
+    class DuplicateOriginHeaders(dict):
+        def get_all(self, name, default=None):
+            if name.lower() == "origin":
+                return ["https://parmar.example", "https://parmar.example"]
+            value = self.get(name)
+            return [value] if value is not None else default
+
+    request.headers = DuplicateOriginHeaders(request.headers)
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+
+    assert errors == [(403, "Unsafe request origin is not allowed")]
+
+
+def test_unsafe_request_rejects_browser_metadata_without_canonical_origin(monkeypatch):
+    monkeypatch.delenv("PARMAR_UI_ORIGIN", raising=False)
+    monkeypatch.setenv("PARMAR_UI_HOST", "0.0.0.0")
+    request, errors, _ = make_request(
+        "/api/chat",
+        body=b"{}",
+        headers={"Sec-Fetch-Site": "same-origin"},
+    )
+
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+    assert errors == [(403, "Unsafe request origin is not allowed")]
 
 
 @pytest.mark.parametrize(

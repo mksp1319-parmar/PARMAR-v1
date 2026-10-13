@@ -651,6 +651,16 @@ test('Home workspace launches use section navigation and AETHER reports its unav
   assert.match(app, /selectSection\('home'\);[\s\S]*?configureCrossTabAuthentication/);
 });
 
+test('AETHER desktop launch uses only the narrow Electron bridge and stays restricted without it', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
+  const integration = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'aether-desktop.js'), 'utf8');
+  assert.match(html, /id="aether-desktop-open"[^>]*hidden/);
+  assert.match(html, /static\/aether-desktop\.js/);
+  assert.match(integration, /const bridge = window\.parmarAetherDesktop/);
+  assert.match(integration, /if \(!bridge \|\| !button \|\| !status\) return/);
+  assert.match(integration, /Remote browsing is disabled/);
+});
+
 test('local VOKKI requests use and update the selected Chat session instead of a second transcript', async () => {
   const messages = [{ role: 'user', content: 'Earlier question.' }];
   const appended = [];

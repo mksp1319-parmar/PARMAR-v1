@@ -1,0 +1,17 @@
+{
+  "name": "parmar-aether-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Restricted Electron desktop shell for PARMAR AETHER",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs"
+  },
+  "engines": {
+    "node": ">=22.12.0 <25"
+  },
+  "devDependencies": {
+    "electron": "44.7.0"
+  }
+}

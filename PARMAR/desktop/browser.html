@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' file:; img-src 'self' file: data:; style-src 'self'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    >
+    <title>AETHER — PARMAR</title>
+    <link rel="stylesheet" href="./browser.css">
+    <script src="./browser-renderer.cjs" defer></script>
+  </head>
+  <body>
+    <main class="browser-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">A</span>
+          <span><strong>AETHER</strong><small>by PARMAR</small></span>
+        </div>
+        <div class="security-state" id="security-state" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>Checking restricted mode</span>
+        </div>
+        <button class="icon-button" type="button" data-action="settings" aria-label="Browser settings" title="Browser settings">⚙</button>
+      </header>
+
+      <nav class="tab-strip" aria-label="Browser tabs">
+        <div class="tabs" id="tabs" role="tablist" aria-label="Open pages"></div>
+        <button class="tab-add" type="button" data-action="new-tab" aria-label="New tab" title="New tab (Ctrl+T)">+</button>
+      </nav>
+
+      <form class="toolbar" id="address-form" autocomplete="off">
+        <button class="icon-button" type="button" data-action="back" aria-label="Back" title="Back (Alt+Left)" disabled>←</button>
+        <button class="icon-button" type="button" data-action="forward" aria-label="Forward" title="Forward (Alt+Right)" disabled>→</button>
+        <button class="icon-button" type="button" data-action="reload" aria-label="Reload" title="Reload (Ctrl+R)">↻</button>
+        <button class="icon-button" type="button" data-action="stop" aria-label="Stop loading" title="Stop" disabled>×</button>
+        <label class="address-box">
+          <span class="address-lock" aria-hidden="true">⌕</span>
+          <span class="sr-only">Address or search</span>
+          <input id="address" name="address" type="text" inputmode="url" placeholder="Enter an address or search" aria-label="Address or search">
+          <button class="address-go" type="submit" aria-label="Go to address">Go</button>
+        </label>
+        <button class="icon-button" type="button" data-action="bookmark" aria-label="Bookmark this page" title="Bookmark this page" disabled>☆</button>
+        <button class="icon-button" type="button" data-action="history" aria-label="Browsing history" title="Browsing history">◷</button>
+        <button class="icon-button" type="button" data-action="downloads" aria-label="Downloads" title="Downloads">↓</button>
+      </form>
+
+      <section class="restricted-notice" id="restricted-notice" role="status" aria-live="polite">
+        Remote browsing is disabled because this installation has no verified operating-system network boundary.
+      </section>
+
+      <section class="workspace" aria-label="Browser content">
+        <aside class="side-panel" id="side-panel" aria-label="Browser panel" hidden>
+          <div class="panel-heading">
+            <h2 id="panel-title">Browser panel</h2>
+            <button class="icon-button" type="button" data-action="close-panel" aria-label="Close panel">×</button>
+          </div>
+          <div id="panel-content"></div>
+        </aside>
+        <div class="viewport" id="viewport" aria-label="Web page"></div>
+      </section>
+      <footer class="statusbar">
+        <span id="tab-state">No browser tab selected</span>
+        <span class="statusbar-right">Chromium · PARMAR safety boundary required</span>
+      </footer>
+    </main>
+  </body>
+</html>

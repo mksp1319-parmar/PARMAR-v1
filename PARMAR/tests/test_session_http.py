@@ -41,20 +41,21 @@ def authenticated_session(monkeypatch):
     return manager, credentials
 
 
-def make_request(path, *, body=None, credentials=None, csrf=True):
+def make_request(path, *, body=None, credentials=None, csrf=True, headers=None):
     response = {}
     errors = []
     body_bytes = json.dumps(body if body is not None else {}).encode("utf-8")
-    headers = {"Content-Length": str(len(body_bytes))}
+    request_headers = {"Content-Length": str(len(body_bytes))}
     if credentials is not None:
-        headers["Cookie"] = f"{SESSION_COOKIE_NAME}={credentials.session_token}"
+        request_headers["Cookie"] = f"{SESSION_COOKIE_NAME}={credentials.session_token}"
         manager = futuristic_app.SESSION_MANAGER
         csrf_token = manager.csrf_token(credentials.session.session_id) if manager else None
         if csrf and csrf_token:
-            headers["X-CSRF-Token"] = csrf_token
+            request_headers["X-CSRF-Token"] = csrf_token
+    request_headers.update(headers or {})
     request = SimpleNamespace(
         path=path,
-        headers=headers,
+        headers=request_headers,
         rfile=io.BytesIO(body_bytes),
         send_error=lambda status, message: errors.append((status, message)),
         _send_json=lambda status, result: response.update(status=status, result=result),
@@ -70,11 +71,16 @@ def make_request(path, *, body=None, credentials=None, csrf=True):
 @pytest.mark.parametrize("csrf", [False, "invalid"])
 def test_authenticated_post_rejects_missing_or_invalid_csrf(csrf, monkeypatch, authenticated_session):
     _manager, credentials = authenticated_session
+    monkeypatch.setenv("PARMAR_UI_ORIGIN", "https://parmar.example")
     request, _response, errors = make_request(
         "/api/chat",
         body={"message": "hello"},
         credentials=credentials,
         csrf=bool(csrf) if isinstance(csrf, bool) else False,
+        headers={
+            "Origin": "https://parmar.example",
+            "Sec-Fetch-Site": "same-origin",
+        },
     )
     if csrf == "invalid":
         request.headers["X-CSRF-Token"] = "invalid-token"
@@ -114,6 +120,74 @@ def test_authenticated_post_with_valid_csrf_reaches_chat(monkeypatch, authentica
     assert response["status"] == 200
     assert response["result"]["message"] == "hello"
     assert response["result"]["conversation_id"]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Origin": "https://attacker.example", "Sec-Fetch-Site": "same-origin"},
+        {"Origin": "null", "Sec-Fetch-Site": "same-origin"},
+        {"Origin": "https://parmar.example", "Sec-Fetch-Site": "cross-site"},
+        {"Origin": "https://parmar.example", "Sec-Fetch-Site": "same-site"},
+        {"Sec-Fetch-Site": "cross-site"},
+    ],
+)
+def test_authenticated_post_rejects_untrusted_browser_origin(
+    monkeypatch,
+    authenticated_session,
+    headers,
+):
+    _manager, credentials = authenticated_session
+    monkeypatch.setenv("PARMAR_UI_ORIGIN", "https://parmar.example")
+    request, _response, errors = make_request(
+        "/api/chat",
+        body={"message": "hello"},
+        credentials=credentials,
+        headers=headers,
+    )
+
+    class UnexpectedChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            pytest.fail("Request reached chat logic with an untrusted browser origin")
+
+    monkeypatch.setattr(futuristic_app, "ChatService", UnexpectedChatService)
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+
+    assert errors == [(403, "Unsafe request origin is not allowed")]
+
+
+def test_authenticated_same_origin_post_with_csrf_remains_supported(
+    monkeypatch,
+    authenticated_session,
+):
+    _manager, credentials = authenticated_session
+    monkeypatch.setenv("PARMAR_UI_ORIGIN", "https://parmar.example")
+    request, response, errors = make_request(
+        "/api/chat",
+        body={"message": "hello"},
+        credentials=credentials,
+        headers={
+            "Origin": "https://parmar.example",
+            "Sec-Fetch-Site": "same-origin",
+        },
+    )
+
+    class CapturingChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, prompt, context=None, **_options):
+            return {"message": prompt}
+
+    monkeypatch.setattr(futuristic_app, "ChatService", CapturingChatService)
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+
+    assert errors == []
+    assert response["status"] == 200
+    assert response["result"]["message"] == "hello"
 
 
 def test_authenticated_get_needs_no_csrf_and_session_endpoint_never_returns_cookie_token(authenticated_session):

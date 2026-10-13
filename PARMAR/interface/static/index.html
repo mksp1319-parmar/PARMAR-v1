@@ -330,6 +330,10 @@
               <div class="aether-governance" aria-label="Browser availability">
                 <span class="eyebrow">PARMAR / AETHER</span>
                 <p>Browser controls will appear here when a governed AETHER runtime is connected.</p>
+                <p id="aether-desktop-status" role="status" aria-live="polite">The PARMAR desktop shell is not connected.</p>
+                <button class="primary-btn" id="aether-desktop-open" type="button" hidden>
+                  <span>Open restricted AETHER desktop</span><span class="button-arrow" aria-hidden="true">↗</span>
+                </button>
               </div>
             </section>
           </section>
@@ -721,5 +725,6 @@
     <script src="/static/voki-interface.js"></script>
     <script src="/static/chat-presentation.js"></script>
     <script src="/static/app.js"></script>
+    <script src="/static/aether-desktop.js"></script>
   </body>
 </html>

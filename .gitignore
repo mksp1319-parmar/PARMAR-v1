@@ -57,6 +57,8 @@ Thumbs.db
 build/
 dist/
 site/
+node_modules/
+PARMAR/desktop/out/
 
 # Local runtime artifacts
 logs/
