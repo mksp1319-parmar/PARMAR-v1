@@ -186,6 +186,9 @@ test('category routes support direct loading, browser back/forward, and arrow-on
     functionSource('activateSettingsCategory', 'writeSettingsHistory'),
     functionSource('writeSettingsHistory', 'showSettingsHome'),
     functionSource('showSettingsHome', 'navigateSettingsCategory'),
+    functionSource('workspaceScrollElement', 'workspaceScrollTop'),
+    functionSource('workspaceScrollTop', 'scrollWorkspaceTo'),
+    functionSource('scrollWorkspaceTo', 'selectSection'),
     functionSource('navigateSettingsCategory', 'openSettingsHome'),
     functionSource('restoreSettingsRoute', 'handleSettingsCategoryKeydown'),
   ].join('\n'), runtime);

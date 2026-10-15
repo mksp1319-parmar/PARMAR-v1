@@ -230,7 +230,7 @@ test('Home and PARMAR Core are separate visible destinations', () => {
     syncSidebarToggle() {},
   });
   vm.runInContext(
-    `${functionSource('selectSection')}\nselectSection(dom.navButtons[0].dataset.section, dom.navButtons[0].dataset.navKey);`,
+    `${functionSource('workspaceScrollElement')}\n${functionSource('workspaceScrollTop')}\n${functionSource('scrollWorkspaceTo')}\n${functionSource('selectSection')}\nselectSection(dom.navButtons[0].dataset.section, dom.navButtons[0].dataset.navKey);`,
     context,
   );
 

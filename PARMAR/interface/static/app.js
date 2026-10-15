@@ -6,7 +6,8 @@ const STORAGE_KEYS = {
 };
 const ACTIVE_CONVERSATION_KEY = 'parmar-active-conversation-v1';
 const MAX_SAVED_MEMORIES = 25;
-const PANEL_DRAWER_BREAKPOINT = 1100;
+const SIDEBAR_DRAWER_BREAKPOINT = 920;
+const DISCOVERY_DRAWER_BREAKPOINT = 1100;
 const PANEL_TRANSITION_MS = 260;
 const PANEL_EDGE_ZONE = 24;
 const PANEL_DIRECTION_LOCK = 10;
@@ -335,6 +336,17 @@ const dom = {
   homeRecentResearch: document.getElementById('home-recent-research'),
   homeRecentSimulations: document.getElementById('home-recent-simulations'),
   homeRecentDecisions: document.getElementById('home-recent-decisions'),
+  homeMemoryHighlights: document.getElementById('home-memory-highlights'),
+  homeMemoryStatus: document.getElementById('home-memory-status'),
+  homeDate: document.getElementById('home-date'),
+  homeClock: document.getElementById('home-clock'),
+  homeVokiStatus: document.getElementById('home-voki-status'),
+  homeChatComposer: document.getElementById('home-chat-composer'),
+  homeChatInput: document.getElementById('home-chat-input'),
+  globalSearch: document.getElementById('global-search'),
+  globalSearchInput: document.getElementById('global-search-input'),
+  globalSearchResults: document.getElementById('global-search-results'),
+  globalSearchStatus: document.getElementById('global-search-status'),
   researchHistoryFilter: document.getElementById('research-history-filter'),
   researchHistoryList: document.getElementById('research-history-list'),
   researchHistoryStatus: document.getElementById('research-history-status'),
@@ -377,6 +389,11 @@ const dom = {
   views: Array.from(document.querySelectorAll('.section-view')),
   vokiState: document.getElementById('voki-state'),
   providerStatus: document.getElementById('provider-status'),
+  aetherDesktopStatus: document.getElementById('aether-desktop-status'),
+  systemLifecycleValue: document.getElementById('system-lifecycle-value'),
+  systemProviderValue: document.getElementById('system-provider-value'),
+  systemSessionValue: document.getElementById('system-session-value'),
+  systemAetherValue: document.getElementById('system-aether-value'),
   settingsProvider: document.getElementById('settings-provider'),
   settingsProviderRoute: document.getElementById('settings-provider-route'),
   settingsProviderReadiness: document.getElementById('settings-provider-readiness'),
@@ -437,7 +454,10 @@ let settingsHomeScrollPosition = 0;
 let currentSettingsCategory = null;
 let panelGesture = null;
 let gestureResetTimer = null;
-let lastCompactPanelViewport = window.innerWidth <= PANEL_DRAWER_BREAKPOINT;
+let lastCompactPanelViewports = {
+  left: window.innerWidth <= SIDEBAR_DRAWER_BREAKPOINT,
+  right: window.innerWidth <= DISCOVERY_DRAWER_BREAKPOINT,
+};
 
 function readJson(key, fallback) {
   try {
@@ -689,6 +709,7 @@ function renderAuthenticationControls() {
       : authenticated
         ? 'Authenticated Session'
         : 'Anonymous / Local Demo';
+    if (dom.systemSessionValue) dom.systemSessionValue.textContent = dom.authStateLabel.textContent;
   }
   if (dom.chatModeLabel) {
     dom.chatModeLabel.textContent = authenticated
@@ -908,7 +929,10 @@ function applySettings() {
   if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = Boolean(settings.phonePermission);
   if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = Boolean(settings.phonePermission);
   if (dom.memoryEnabledToggle) dom.memoryEnabledToggle.checked = Boolean(settings.memoryEnabled);
-  if (dom.providerStatus) dom.providerStatus.textContent = String(settings.provider || 'local-demo').toUpperCase();
+  if (dom.providerStatus) {
+    dom.providerStatus.textContent = String(settings.provider || 'local-demo').toUpperCase();
+    if (dom.systemProviderValue) dom.systemProviderValue.textContent = dom.providerStatus.textContent;
+  }
   if (dom.settingsProvider) dom.settingsProvider.textContent = settings.provider;
   renderPersonalizationPreview(settings);
 }
@@ -983,6 +1007,24 @@ function setVokiState(rawState) {
   if (dom.vokiState) {
     dom.vokiState.textContent = presentation.label;
   }
+  if (dom.homeVokiStatus) {
+    dom.homeVokiStatus.textContent = presentation.label;
+  }
+  if (dom.systemLifecycleValue && dom.systemState) {
+    dom.systemLifecycleValue.textContent = dom.systemState.textContent.trim() || 'Not assessed';
+  }
+}
+
+function renderSystemOverview() {
+  const values = [
+    [dom.systemLifecycleValue, dom.systemState?.textContent],
+    [dom.systemProviderValue, dom.providerStatus?.textContent],
+    [dom.systemSessionValue, dom.authStateLabel?.textContent],
+    [dom.systemAetherValue, dom.aetherDesktopStatus?.textContent],
+  ];
+  values.forEach(([target, value]) => {
+    if (target) target.textContent = value?.trim() || 'Unavailable';
+  });
 }
 
 function setBadge(status) {
@@ -1031,7 +1073,7 @@ function setBadge(status) {
 
 function syncSidebarToggle() {
   if (!dom.sidebarToggle) return;
-  if (window.innerWidth <= PANEL_DRAWER_BREAKPOINT) {
+  if (isCompactPanelViewport('left')) {
     const isOpen = ['opening', 'open'].includes(workspacePanels.left);
     dom.sidebarToggle.setAttribute('aria-expanded', String(isOpen));
     dom.sidebarToggle.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
@@ -1043,8 +1085,11 @@ function syncSidebarToggle() {
   dom.sidebarToggle.setAttribute('aria-label', isExpanded ? 'Collapse navigation' : 'Expand navigation');
 }
 
-function isCompactPanelViewport() {
-  return window.innerWidth <= PANEL_DRAWER_BREAKPOINT;
+function isCompactPanelViewport(side = 'left') {
+  const breakpoint = side === 'right'
+    ? DISCOVERY_DRAWER_BREAKPOINT
+    : SIDEBAR_DRAWER_BREAKPOINT;
+  return window.innerWidth <= breakpoint;
 }
 
 function panelElement(side) {
@@ -1058,16 +1103,18 @@ function panelTriggers(side) {
 }
 
 function syncWorkspaceAccessibility(activeSide = null) {
-  const compact = isCompactPanelViewport();
-  const active = compact && activeSide && workspacePanels[activeSide] !== 'closed';
+  const active = activeSide
+    && isCompactPanelViewport(activeSide)
+    && workspacePanels[activeSide] !== 'closed';
   if (dom.mainPanel) dom.mainPanel.inert = Boolean(active);
 
   for (const side of ['left', 'right']) {
     const panel = panelElement(side);
     if (!panel) continue;
+    const compact = isCompactPanelViewport(side);
     const visible = compact
       ? active && side === activeSide
-      : ['opening', 'open'].includes(workspacePanels[side]);
+      : !active && ['opening', 'open'].includes(workspacePanels[side]);
     panel.inert = !visible;
     panel.setAttribute('aria-hidden', String(!visible));
     if (compact && visible) {
@@ -1111,7 +1158,7 @@ function applyWorkspacePanelState(side, nextState, { immediate = false } = {}) {
   document.body.dataset[side === 'left' ? 'leftPanelState' : 'rightPanelState'] = nextState;
 
   const isVisible = ['opening', 'open'].includes(nextState);
-  if (isCompactPanelViewport()) {
+  if (isCompactPanelViewport(side)) {
     document.body.classList.toggle(side === 'left' ? 'sidebar-open' : 'discovery-open', isVisible);
   } else if (side === 'left') {
     document.body.classList.toggle('sidebar-collapsed', !isVisible);
@@ -1119,7 +1166,7 @@ function applyWorkspacePanelState(side, nextState, { immediate = false } = {}) {
     document.body.classList.toggle('discovery-collapsed', !isVisible);
   }
 
-  syncWorkspaceAccessibility(isCompactPanelViewport() && nextState !== 'closed' ? side : null);
+  syncWorkspaceAccessibility(isCompactPanelViewport(side) && nextState !== 'closed' ? side : null);
   if (!immediate && ['opening', 'closing'].includes(nextState)) {
     panelTransitionTimers[side] = window.setTimeout(
       () => finishWorkspacePanelTransition(side),
@@ -1145,18 +1192,18 @@ function finishWorkspacePanelTransition(side) {
 function openWorkspacePanel(side, trigger = document.activeElement) {
   const panel = panelElement(side);
   if (!panel) return;
-  if (isCompactPanelViewport()) {
+  if (isCompactPanelViewport(side)) {
     const otherSide = side === 'left' ? 'right' : 'left';
-    if (workspacePanels[otherSide] !== 'closed') {
+    if (isCompactPanelViewport(otherSide) && workspacePanels[otherSide] !== 'closed') {
       applyWorkspacePanelState(otherSide, 'closed', { immediate: true });
       panelFocusOrigins[otherSide] = null;
     }
     panelFocusOrigins[side] = trigger;
   }
-  if (!isCompactPanelViewport() && workspacePanels[side] === 'open') return;
+  if (!isCompactPanelViewport(side) && workspacePanels[side] === 'open') return;
   applyWorkspacePanelState(side, 'opening');
 
-  if (isCompactPanelViewport()) {
+  if (isCompactPanelViewport(side)) {
     const closeButton = side === 'left' ? dom.sidebarClose : dom.discoveryClose;
     closeButton?.focus({ preventScroll: true });
   }
@@ -1177,22 +1224,32 @@ function toggleWorkspacePanel(side, trigger) {
 }
 
 function syncWorkspacePanels() {
-  const compact = isCompactPanelViewport();
-  if (compact) {
-    const focusedSide = ['left', 'right'].find((side) => panelElement(side)?.contains(document.activeElement));
-    document.body.classList.remove('sidebar-collapsed', 'discovery-collapsed');
-    for (const side of ['left', 'right']) {
-      window.clearTimeout(panelTransitionTimers[side]);
-      panelFocusOrigins[side] = null;
+  const focusedSide = ['left', 'right'].find((side) => panelElement(side)?.contains(document.activeElement));
+  for (const side of ['left', 'right']) {
+    window.clearTimeout(panelTransitionTimers[side]);
+    panelFocusOrigins[side] = null;
+    if (isCompactPanelViewport(side)) {
       applyWorkspacePanelState(side, 'closed', { immediate: true });
-      panelElement(side)?.style.removeProperty('--gesture-x');
+    } else if (side === 'left') {
+      applyWorkspacePanelState(
+        side,
+        document.body.classList.contains('sidebar-collapsed') ? 'closed' : 'open',
+        { immediate: true },
+      );
+    } else {
+      applyWorkspacePanelState(
+        side,
+        document.body.classList.contains('discovery-collapsed')
+          || document.body.dataset.rightPanelState === 'closed'
+          ? 'closed'
+          : 'open',
+        { immediate: true },
+      );
     }
-    if (focusedSide) panelTriggers(focusedSide)[0]?.focus({ preventScroll: true });
-  } else {
-    document.body.classList.remove('sidebar-open', 'discovery-open', 'workspace-drawer-open');
-    if (dom.panelScrim) dom.panelScrim.hidden = true;
-    applyWorkspacePanelState('left', document.body.classList.contains('sidebar-collapsed') ? 'closed' : 'open', { immediate: true });
-    applyWorkspacePanelState('right', document.body.classList.contains('discovery-collapsed') ? 'closed' : 'open', { immediate: true });
+    panelElement(side)?.style.removeProperty('--gesture-x');
+  }
+  if (focusedSide && isCompactPanelViewport(focusedSide)) {
+    panelTriggers(focusedSide)[0]?.focus({ preventScroll: true });
   }
   syncSidebarToggle();
   syncWorkspaceAccessibility();
@@ -1200,15 +1257,23 @@ function syncWorkspacePanels() {
 
 function handleWorkspaceResize() {
   if (panelGesture) finishPanelGesture(null, true);
-  const compact = isCompactPanelViewport();
-  if (compact !== lastCompactPanelViewport) syncWorkspacePanels();
+  const compactViewports = {
+    left: isCompactPanelViewport('left'),
+    right: isCompactPanelViewport('right'),
+  };
+  const breakpointChanged = ['left', 'right'].some(
+    (side) => compactViewports[side] !== lastCompactPanelViewports[side],
+  );
+  if (breakpointChanged) syncWorkspacePanels();
   else {
     syncSidebarToggle();
     syncWorkspaceAccessibility(
-      compact ? ['left', 'right'].find((side) => workspacePanels[side] !== 'closed') : null,
+      ['left', 'right'].find(
+        (side) => compactViewports[side] && workspacePanels[side] !== 'closed',
+      ) || null,
     );
   }
-  lastCompactPanelViewport = compact;
+  lastCompactPanelViewports = compactViewports;
 }
 
 function openDiscoveryTarget(targetId, trigger) {
@@ -1243,13 +1308,15 @@ function panelGestureExcluded(target) {
 }
 
 function startPanelGesture(event) {
-  if (!isCompactPanelViewport() || !event.isPrimary || event.pointerType === 'mouse' || event.button !== 0) return;
+  if (!event.isPrimary || event.pointerType === 'mouse' || event.button !== 0) return;
   if (panelGestureExcluded(event.target) || window.getSelection?.()?.toString()) return;
   window.clearTimeout(gestureResetTimer);
   document.body.dataset.gestureState = 'idle';
 
   const x = event.clientX;
-  const openSide = ['left', 'right'].find((side) => ['opening', 'open'].includes(workspacePanels[side]));
+  const openSide = ['left', 'right'].find(
+    (side) => isCompactPanelViewport(side) && ['opening', 'open'].includes(workspacePanels[side]),
+  );
   let side = null;
   let wasOpen = false;
   if (openSide) {
@@ -1264,6 +1331,7 @@ function startPanelGesture(event) {
   } else {
     return;
   }
+  if (!isCompactPanelViewport(side)) return;
 
   panelGesture = {
     side,
@@ -1363,6 +1431,22 @@ function finishPanelGesture(event, cancelled = false) {
   }, PANEL_TRANSITION_MS);
 }
 
+function workspaceScrollElement() {
+  const usesMobileWorkspaceScroller = typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 760px)').matches;
+  return usesMobileWorkspaceScroller ? document.querySelector('.main-panel') : null;
+}
+
+function workspaceScrollTop() {
+  const scroller = workspaceScrollElement();
+  return scroller ? scroller.scrollTop : window.scrollY;
+}
+
+function scrollWorkspaceTo(options) {
+  const scroller = workspaceScrollElement();
+  (scroller || window).scrollTo(options);
+}
+
 function selectSection(sectionName, navKey = sectionName) {
   if (document.body.dataset.activeSection === 'settings' && sectionName !== 'settings') {
     const url = new URL(window.location.href);
@@ -1390,8 +1474,8 @@ function selectSection(sectionName, navKey = sectionName) {
     const active = view.dataset.section === sectionName;
     view.classList.toggle('active', active);
   });
-  if (sectionChanged && window.scrollY > 0) {
-    window.scrollTo({ top: 0, behavior: motionIsReduced() ? 'auto' : 'smooth' });
+  if (sectionChanged && workspaceScrollTop() > 0) {
+    scrollWorkspaceTo({ top: 0, behavior: motionIsReduced() ? 'auto' : 'smooth' });
   }
 
   document.querySelectorAll('.capability-toolbar [data-section]').forEach((button) => {
@@ -1404,6 +1488,7 @@ function selectSection(sectionName, navKey = sectionName) {
   const sectionLabels = {
     home: 'Home',
     core: 'PARMAR Core',
+    approvals: 'Approvals',
     chat: 'Chats / History',
     research: 'Research',
     voki: 'VOKKI',
@@ -1419,9 +1504,10 @@ function selectSection(sectionName, navKey = sectionName) {
   };
   if (dom.viewTitle) dom.viewTitle.textContent = sectionLabels[sectionName] || 'PARMAR';
   document.body.dataset.activeSection = sectionName;
-  if (isCompactPanelViewport()) {
-    for (const side of ['left', 'right']) {
-      if (workspacePanels[side] !== 'closed') closeWorkspacePanel(side);
+  if (sectionName === 'system' && typeof renderSystemOverview === 'function') renderSystemOverview();
+  for (const side of ['left', 'right']) {
+    if (isCompactPanelViewport(side) && workspacePanels[side] !== 'closed') {
+      closeWorkspacePanel(side);
     }
   }
   syncSidebarToggle();
@@ -1503,7 +1589,7 @@ function showSettingsHome({ focus = true, restoreScroll = true } = {}) {
   dom.settingsPanels.forEach((panel) => { panel.hidden = true; });
   dom.settingsSection?.setAttribute('aria-labelledby', 'settings-title');
   currentSettingsCategory = null;
-  if (restoreScroll) window.scrollTo({ top: settingsHomeScrollPosition, behavior: 'auto' });
+  if (restoreScroll) scrollWorkspaceTo({ top: settingsHomeScrollPosition, behavior: 'auto' });
   if (focus) {
     const categoryButton = dom.settingsCategoryButtons.find(
       (button) => button.dataset.settingsCategory === previousCategory,
@@ -1515,7 +1601,7 @@ function showSettingsHome({ focus = true, restoreScroll = true } = {}) {
 function navigateSettingsCategory(button, { historyMode = 'push', focus = true } = {}) {
   const category = button?.dataset.settingsCategory;
   if (!category || !SETTINGS_CATEGORY_IDS.has(category) || !activateSettingsCategory(button)) return false;
-  if (dom.settingsHomeView && !dom.settingsHomeView.hidden) settingsHomeScrollPosition = window.scrollY;
+  if (dom.settingsHomeView && !dom.settingsHomeView.hidden) settingsHomeScrollPosition = workspaceScrollTop();
   if (dom.settingsHomeView) dom.settingsHomeView.hidden = true;
   if (dom.settingsDetailView) dom.settingsDetailView.hidden = false;
   dom.settingsSection?.setAttribute('aria-labelledby', 'settings-page-title');
@@ -1529,7 +1615,7 @@ function navigateSettingsCategory(button, { historyMode = 'push', focus = true }
   }
   if (historyMode === 'push') writeSettingsHistory(category);
   else if (historyMode === 'replace') writeSettingsHistory(category, { replace: true });
-  window.scrollTo({ top: 0, behavior: motionIsReduced() ? 'auto' : 'smooth' });
+  scrollWorkspaceTo({ top: 0, behavior: motionIsReduced() ? 'auto' : 'smooth' });
   if (focus) dom.settingsPageTitle?.focus({ preventScroll: true });
   return true;
 }
@@ -1935,6 +2021,54 @@ function renderMemories() {
     return item;
   });
   dom.memoryList.replaceChildren(...items);
+  renderHomeMemoryHighlights();
+}
+
+function renderHomeMemoryHighlights() {
+  if (!dom.homeMemoryHighlights) return;
+  const memories = [...state.memories]
+    .sort((first, second) => Number(Date.parse(second.updatedAt || second.createdAt || ''))
+      - Number(Date.parse(first.updatedAt || first.createdAt || '')))
+    .slice(0, 4);
+  dom.homeMemoryHighlights.replaceChildren();
+
+  if (dom.homeMemoryStatus) {
+    const authenticatedUnavailable = state.authMode === 'authenticated'
+      && state.memoryStorage !== 'DURABLE_LOCAL';
+    dom.homeMemoryStatus.textContent = authenticatedUnavailable
+      ? 'Memory status unavailable'
+      : `${state.memories.length} saved ${state.memories.length === 1 ? 'memory' : 'memories'}`;
+  }
+
+  if (!memories.length) {
+    const empty = document.createElement('p');
+    empty.className = 'home-memory-empty';
+    empty.textContent = state.authMode === 'checking'
+      ? 'Checking your saved memories…'
+      : state.authMode === 'authenticated' && state.memoryStorage !== 'DURABLE_LOCAL'
+        ? 'Saved memories are unavailable until the server responds.'
+        : 'No saved memories yet.';
+    dom.homeMemoryHighlights.appendChild(empty);
+    return;
+  }
+
+  memories.forEach((memory) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'home-memory-highlight';
+    button.dataset.memorySearch = memory.text;
+    const title = document.createElement('strong');
+    title.textContent = memory.text.slice(0, 90);
+    const detail = document.createElement('small');
+    detail.textContent = memory.updatedAt || memory.createdAt
+      ? `Saved ${homeTimestamp(memory.updatedAt || memory.createdAt)}`
+      : 'Saved by you';
+    const arrow = document.createElement('span');
+    arrow.setAttribute('aria-hidden', 'true');
+    arrow.textContent = '›';
+    button.append(title, detail, arrow);
+    dom.homeMemoryHighlights.appendChild(button);
+  });
 }
 
 async function addMemory(event) {
@@ -2426,7 +2560,7 @@ function renderHome() {
   const latestConversations = availableConversations.slice(0, 3);
   dom.homeContinueList.replaceChildren();
   if (latestConversations.length) {
-    latestConversations.slice(0, 2).forEach((session) => {
+    latestConversations.slice(0, 3).forEach((session) => {
       const firstUserMessage = session.messages.find((message) => message.role === 'user');
       const title = String(session.title || firstUserMessage?.text || '').trim();
       if (!title) return;
@@ -2506,6 +2640,149 @@ function renderHome() {
   renderHomeWorkList(dom.homeRecentSimulations, simulations, 'No simulations recorded here yet.');
   renderHomeWorkList(dom.homeRecentDecisions, decisions, 'No decisions recorded here yet.');
   renderResearchWorkspace();
+  renderHomeMemoryHighlights();
+}
+
+function updateHomeClock(now = new Date()) {
+  if (dom.homeDate) {
+    dom.homeDate.textContent = new Intl.DateTimeFormat(undefined, {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(now);
+  }
+  if (dom.homeClock) {
+    dom.homeClock.textContent = new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(now);
+  }
+}
+
+function homeSearchRecords(query) {
+  const normalizedQuery = String(query || '').trim().toLocaleLowerCase();
+  if (!normalizedQuery) return [];
+  const records = [];
+  const matches = (...values) => values.some((value) => (
+    typeof value === 'string' && value.toLocaleLowerCase().includes(normalizedQuery)
+  ));
+
+  state.sessions.forEach((session) => {
+    const firstUserMessage = session.messages.find((message) => message.role === 'user');
+    const title = String(session.title || firstUserMessage?.text || 'Conversation').trim();
+    if (!matches(title, ...session.messages.map((message) => message.text))) return;
+    records.push({
+      kind: 'conversation',
+      title: title.slice(0, 72),
+      detail: 'Conversation',
+      timestamp: session.updatedAt || session.createdAt,
+      sessionId: session.id,
+    });
+  });
+
+  state.memories.forEach((memory) => {
+    if (!matches(memory.text)) return;
+    records.push({
+      kind: 'memory',
+      title: memory.text.slice(0, 72),
+      detail: 'Saved memory',
+      timestamp: memory.updatedAt || memory.createdAt,
+      memoryId: memory.id,
+    });
+  });
+
+  researchHistoryRecords().forEach((record) => {
+    if (!matches(record.title, record.question)) return;
+    records.push({
+      kind: 'research',
+      title: record.title,
+      detail: 'Saved research',
+      timestamp: record.timestamp,
+      sessionId: record.sessionId,
+    });
+  });
+
+  state.audit.forEach((entry) => {
+    if (!matches(entry.request, entry.message, entry.status)) return;
+    records.push({
+      kind: 'activity',
+      title: String(entry.request || entry.message || 'PARMAR activity').slice(0, 72),
+      detail: entry.status || 'Recorded activity',
+      timestamp: entry.timestamp,
+    });
+  });
+
+  return records
+    .sort((first, second) => (homeTimestampValue(second.timestamp) || 0)
+      - (homeTimestampValue(first.timestamp) || 0))
+    .slice(0, 8);
+}
+
+function renderHomeSearchResults(query) {
+  if (!dom.globalSearchResults || !dom.globalSearchInput) return [];
+  const trimmedQuery = String(query || '').trim();
+  const records = homeSearchRecords(trimmedQuery);
+  dom.globalSearchResults.replaceChildren();
+  dom.globalSearchResults.hidden = !trimmedQuery;
+  dom.globalSearchInput.setAttribute('aria-expanded', String(Boolean(trimmedQuery)));
+
+  if (trimmedQuery && !records.length) {
+    const empty = document.createElement('p');
+    empty.className = 'global-search-empty';
+    empty.textContent = 'No matches in currently loaded conversations, memories, research, or activity.';
+    dom.globalSearchResults.appendChild(empty);
+  }
+
+  records.forEach((record, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'global-search-result';
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', 'false');
+    button.dataset.searchIndex = String(index);
+    const title = document.createElement('strong');
+    title.textContent = record.title;
+    const detail = document.createElement('small');
+    detail.textContent = record.detail;
+    button.append(title, detail);
+    button.addEventListener('click', () => openHomeSearchResult(record, trimmedQuery));
+    dom.globalSearchResults.appendChild(button);
+  });
+
+  if (dom.globalSearchStatus && trimmedQuery) {
+    dom.globalSearchStatus.textContent = records.length
+      ? `${records.length} matching loaded ${records.length === 1 ? 'result' : 'results'}.`
+      : 'No matching loaded results.';
+  }
+  return records;
+}
+
+function openHomeSearchResult(record, query) {
+  dom.globalSearchResults.hidden = true;
+  dom.globalSearchInput?.setAttribute('aria-expanded', 'false');
+  if (record.kind === 'conversation' || record.kind === 'research') {
+    continueConversation(record.sessionId);
+    return;
+  }
+  if (record.kind === 'memory') {
+    state.memoryQuery = query;
+    if (dom.memorySearch) dom.memorySearch.value = query;
+    renderMemories();
+    selectSection('memory');
+    return;
+  }
+  if (record.kind === 'activity') selectSection('audit');
+}
+
+function sendHomeChatMessage(event) {
+  event.preventDefault();
+  const message = String(dom.homeChatInput?.value || '').trim();
+  if (!message || !dom.chatInput) return;
+  dom.chatInput.value = message;
+  dom.homeChatInput.value = '';
+  selectSection('chat');
+  submitChatMessage();
 }
 
 async function refreshServerConversationHistory({ navigateToChat = true } = {}) {
@@ -2637,6 +2914,15 @@ function historyGroupLabel(timestamp) {
   return 'Earlier';
 }
 
+function renderReviewEmptyState(container, message) {
+  if (!container) return;
+  const emptyState = document.createElement(container.tagName === 'UL' ? 'li' : 'p');
+  emptyState.className = 'review-empty-state';
+  emptyState.setAttribute('role', 'status');
+  emptyState.textContent = message;
+  container.replaceChildren(emptyState);
+}
+
 function resetReviewState(message = 'PARMAR is ready for a request.') {
   state.pendingApprovalId = null;
   setVokiState('UNKNOWN');
@@ -2647,9 +2933,9 @@ function resetReviewState(message = 'PARMAR is ready for a request.') {
   if (dom.outcomeState) dom.outcomeState.textContent = 'Not assessed';
   if (dom.systemState) dom.systemState.textContent = 'NOT ASSESSED';
   if (dom.statusMessage) dom.statusMessage.textContent = message;
-  dom.pipelineEl?.replaceChildren();
-  dom.riskCenterEl?.replaceChildren();
-  dom.explanationList?.replaceChildren();
+  renderReviewEmptyState(dom.pipelineEl, 'No request has been reviewed yet. Start in Chat to show pipeline stages here.');
+  renderReviewEmptyState(dom.riskCenterEl, 'No risk assessment is available until a request is reviewed.');
+  renderReviewEmptyState(dom.explanationList, 'No decision context is available until a request is reviewed.');
   if (dom.approvalActions) dom.approvalActions.hidden = true;
   if (dom.approvalStateTag) dom.approvalStateTag.textContent = 'No decision pending';
   if (dom.approvalAction) dom.approvalAction.textContent = 'No active proposal';
@@ -2927,12 +3213,16 @@ function appendLocalVokiConversationMessage({ sessionId, userMessage, response }
 function renderAuditEntries() {
   const entries = state.audit.slice(0, 6);
 
-  const markup = entries.map((entry) => `
-    <div class="audit-item">
-      <strong>${escapeHtml(entry.status || 'STATUS')}</strong>
-      <span>${escapeHtml(entry.message || entry.request || 'No audit record.')}</span>
-    </div>
-  `).join('');
+  const markup = entries.map((entry) => {
+    const timestamp = homeTimestamp(entry.timestamp);
+    return `
+      <div class="audit-item">
+        <strong>${escapeHtml(entry.status || 'STATUS')}</strong>
+        <span>${escapeHtml(entry.message || entry.request || 'No audit record.')}</span>
+        ${timestamp ? `<small>${escapeHtml(timestamp)}</small>` : ''}
+      </div>
+    `;
+  }).join('');
 
   if (dom.auditList) dom.auditList.innerHTML = markup || '<div class="audit-item"><strong>NO RECORDS</strong><span>No governance activity captured yet.</span></div>';
   if (dom.auditListSecondary) dom.auditListSecondary.innerHTML = markup || '<div class="audit-item"><strong>NO RECORDS</strong><span>No governance activity captured yet.</span></div>';
@@ -3008,11 +3298,18 @@ function renderRiskCenter(result) {
   const categories = Array.isArray(analysis.risk_center?.risk_categories)
     ? analysis.risk_center.risk_categories.join(', ')
     : Object.entries(risk.category_flags || {}).filter(([, enabled]) => enabled).map(([key]) => key).join(', ');
+  const riskLevel = risk.risk_level;
+  const detectedIntent = analysis.intent?.intent || risk.detected_intent;
+  const reasoning = analysis.risk_center?.reason_for_decision || risk.summary;
+  if (!riskLevel && !detectedIntent && !categories && !reasoning) {
+    renderReviewEmptyState(dom.riskCenterEl, 'Risk details were not reported for this result.');
+    return;
+  }
   const entries = [
-    ['Risk level', String(risk.risk_level || 'LOW').toUpperCase()],
-    ['Detected intent', analysis.intent?.intent || risk.detected_intent || 'unknown'],
-    ['Impact', categories || 'none_detected'],
-    ['Reasoning', analysis.risk_center?.reason_for_decision || risk.summary || 'Policy evaluation completed.'],
+    ['Risk level', riskLevel ? String(riskLevel).toUpperCase() : 'Not reported'],
+    ['Detected intent', detectedIntent || 'Not reported'],
+    ['Impact', categories || 'Not reported'],
+    ['Reasoning', reasoning || 'Not reported'],
   ];
 
   if (dom.riskCenterEl) {
@@ -3034,23 +3331,32 @@ function renderRiskCenter(result) {
 function renderExplainability(result) {
   const analysis = result?.analysis || result || {};
   const explanation = analysis.explanation || {};
+  const displayValue = (value) => {
+    if (Array.isArray(value)) return value.map((item) => String(item)).filter((item) => item.trim()).join(' • ');
+    if (typeof value === 'string') return value.trim();
+    return value == null ? '' : String(value);
+  };
   const entries = [
-    `Request: ${analysis.request || explanation.what_requested || 'No request provided.'}`,
-    `Detected: ${explanation.what_detected || analysis.intent?.summary || 'No intent detected.'}`,
-    `Risks: ${displayList(explanation.what_risks_found || analysis.risk?.reasons, 'No specific risks found.')}`,
-    `Conflict: ${displayList(explanation.what_conflict_found || analysis.conflict?.reasons, 'No conflict found.')}`,
-    `Recommendation: ${explanation.what_parmar_recommends || 'Continue with a safer, consent-based review.'}`,
-    `Human decision: ${explanation.what_human_decided || analysis.decision?.human_approval_status || 'PENDING HUMAN APPROVAL'}`,
-  ];
-
-  if (dom.explanationList) {
-    const items = entries.map((entry) => {
-      const item = document.createElement('li');
-      item.textContent = entry;
-      return item;
-    });
-    dom.explanationList.replaceChildren(...items);
+    ['Request', analysis.request || explanation.what_requested],
+    ['Detected', explanation.what_detected || analysis.intent?.summary],
+    ['Risks', explanation.what_risks_found || analysis.risk?.reasons],
+    ['Conflict', explanation.what_conflict_found || analysis.conflict?.reasons],
+    ['Recommendation', explanation.what_parmar_recommends],
+    ['Human decision', explanation.what_human_decided || analysis.decision?.human_approval_status],
+  ].map(([label, value]) => {
+    const text = displayValue(value);
+    return text ? `${label}: ${text}` : '';
+  }).filter(Boolean);
+  if (!entries.length) {
+    renderReviewEmptyState(dom.explanationList, 'No decision context was reported for this result.');
+    return;
   }
+  const items = entries.map((entry) => {
+    const item = document.createElement('li');
+    item.textContent = entry;
+    return item;
+  });
+  dom.explanationList?.replaceChildren(...items);
 }
 
 function renderPhoneCards(container, rows) {
@@ -3094,7 +3400,7 @@ function renderPipeline(result) {
   const pipeline = result?.pipeline || result?.analysis?.pipeline || [];
   if (!dom.pipelineEl) return;
   if (!Array.isArray(pipeline)) {
-    dom.pipelineEl.replaceChildren();
+    renderReviewEmptyState(dom.pipelineEl, 'Pipeline stages were not reported for this review.');
     return;
   }
   const steps = pipeline.filter((step) => step && typeof step === 'object').map((step) => {
@@ -3109,6 +3415,10 @@ function renderPipeline(result) {
     element.append(name, label);
     return element;
   });
+  if (!steps.length) {
+    renderReviewEmptyState(dom.pipelineEl, 'No pipeline stages were reported for this review.');
+    return;
+  }
   dom.pipelineEl.replaceChildren(...steps);
 }
 
@@ -3189,9 +3499,9 @@ function showRequestUnavailable(message) {
   if (dom.riskLevel) dom.riskLevel.textContent = '—';
   if (dom.approvalState) dom.approvalState.textContent = 'Not assessed';
   if (dom.outcomeState) dom.outcomeState.textContent = 'Unavailable';
-  dom.pipelineEl?.replaceChildren();
-  dom.riskCenterEl?.replaceChildren();
-  dom.explanationList?.replaceChildren();
+  renderReviewEmptyState(dom.pipelineEl, 'PARMAR could not return pipeline stages for this request.');
+  renderReviewEmptyState(dom.riskCenterEl, 'No risk assessment was returned for this request.');
+  renderReviewEmptyState(dom.explanationList, 'No decision context was returned for this request.');
   if (dom.approvalActions) dom.approvalActions.hidden = true;
   if (dom.approvalStateTag) dom.approvalStateTag.textContent = 'No decision pending';
   if (dom.approvalAction) dom.approvalAction.textContent = 'No active proposal';
@@ -3429,7 +3739,10 @@ async function submitChatMessage() {
       const provider = String(result.provider || state.settings.provider || 'local-demo').toUpperCase();
       state.settings.provider = provider.toLowerCase();
       persistSettings();
-      if (dom.providerStatus) dom.providerStatus.textContent = provider;
+      if (dom.providerStatus) {
+        dom.providerStatus.textContent = provider;
+        if (dom.systemProviderValue) dom.systemProviderValue.textContent = provider;
+      }
       if (dom.settingsProvider) dom.settingsProvider.textContent = provider;
       renderMemories();
     }
@@ -3565,8 +3878,9 @@ async function runPhoneSimulation(mode) {
 }
 
 function activeWorkspaceDrawer() {
-  if (!isCompactPanelViewport()) return null;
-  return ['left', 'right'].find((side) => workspacePanels[side] !== 'closed') || null;
+  return ['left', 'right'].find(
+    (side) => isCompactPanelViewport(side) && workspacePanels[side] !== 'closed',
+  ) || null;
 }
 
 function trapWorkspacePanelFocus(event, side) {
@@ -3591,6 +3905,46 @@ function trapWorkspacePanelFocus(event, side) {
 }
 
 function bindEvents() {
+  window.addEventListener('parmar-aether-status-changed', renderSystemOverview);
+  updateHomeClock();
+  window.setInterval(() => updateHomeClock(), 30_000);
+  dom.globalSearchInput?.addEventListener('input', () => {
+    renderHomeSearchResults(dom.globalSearchInput.value);
+  });
+  dom.globalSearch?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const firstResult = homeSearchRecords(dom.globalSearchInput?.value || '')[0];
+    if (firstResult) openHomeSearchResult(firstResult, dom.globalSearchInput?.value || '');
+    else renderHomeSearchResults(dom.globalSearchInput?.value || '');
+  });
+  dom.globalSearchInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      dom.globalSearchResults.hidden = true;
+      dom.globalSearchInput.setAttribute('aria-expanded', 'false');
+    } else if (event.key === 'ArrowDown') {
+      const firstResult = dom.globalSearchResults?.querySelector('.global-search-result');
+      if (firstResult) {
+        event.preventDefault();
+        firstResult.focus();
+      }
+    }
+  });
+  dom.homeChatComposer?.addEventListener('submit', sendHomeChatMessage);
+  dom.homeChatInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      dom.homeChatComposer?.requestSubmit();
+    }
+  });
+  dom.homeMemoryHighlights?.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-memory-search]');
+    if (!button) return;
+    state.memoryQuery = button.dataset.memorySearch || '';
+    if (dom.memorySearch) dom.memorySearch.value = state.memoryQuery;
+    renderMemories();
+    selectSection('memory');
+  });
+
   dom.developmentLoginBtn?.addEventListener('click', startDevelopmentSession);
   dom.logoutBtn?.addEventListener('click', logoutAuthenticatedSession);
   dom.refreshSessionBtn?.addEventListener('click', async () => {
@@ -3601,7 +3955,7 @@ function bindEvents() {
     }
   });
 
-  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .text-button[data-action], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section], .home-action[data-section], .home-action[data-action], .settings-workspace-link[data-section], .settings-workspace-link[data-action]').forEach((button) => {
+  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .text-button[data-action], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section], .home-action[data-section], .home-action[data-action], .home-voki-action[data-section], .home-quick-grid [data-section], .home-quick-grid [data-action], .home-dashboard-card [data-section], .home-quote-card[data-section], .settings-workspace-link[data-section], .settings-workspace-link[data-action]').forEach((button) => {
     button.addEventListener('click', () => navigateWorkspaceAction(button));
   });
   dom.settingsLogoutBtn?.addEventListener('click', () => dom.logoutBtn?.click());
@@ -3903,9 +4257,9 @@ function bindEvents() {
       if (dom.riskLevel) dom.riskLevel.textContent = '—';
       if (dom.approvalState) dom.approvalState.textContent = 'Not assessed';
       if (dom.outcomeState) dom.outcomeState.textContent = 'Not assessed';
-      if (dom.pipelineEl) dom.pipelineEl.replaceChildren();
-      if (dom.riskCenterEl) dom.riskCenterEl.replaceChildren();
-      if (dom.explanationList) dom.explanationList.replaceChildren();
+      renderReviewEmptyState(dom.pipelineEl, 'No request has been reviewed yet. Start in Chat to show pipeline stages here.');
+      renderReviewEmptyState(dom.riskCenterEl, 'No risk assessment is available until a request is reviewed.');
+      renderReviewEmptyState(dom.explanationList, 'No decision context is available until a request is reviewed.');
       if (dom.approvalActions) dom.approvalActions.hidden = true;
       if (dom.approvalStateTag) dom.approvalStateTag.textContent = 'No decision pending';
       if (dom.approvalAction) dom.approvalAction.textContent = 'No active proposal';

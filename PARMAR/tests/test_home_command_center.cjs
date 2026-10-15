@@ -23,17 +23,23 @@ function homeSection() {
   return section[0];
 }
 
-test('Home is a distinct command center and the existing Core and VOKKI workspaces remain separate', () => {
+test('Home matches the reference-led dashboard while Core and VOKKI remain separate', () => {
   const home = homeSection();
-  assert.match(home, /PARMAR \/ COMMAND CENTER/);
+  assert.match(home, /PARMAR \/ YOUR PERSONAL AI/);
   assert.match(home, /id="home-readiness-state"/);
   assert.match(home, /id="home-continue-list"/);
-  assert.match(home, /Start something new/);
+  assert.match(home, /id="home-activity-title">Recent Activity/);
+  assert.match(home, /id="home-memory-highlights"/);
+  assert.match(home, /class="home-quick-grid"/);
+  assert.match(home, /class="home-chat-composer"/);
+  assert.match(home, /id="home-clock"/);
+  assert.match(home, /Weather<br \/>not connected/);
   assert.match(home, /Needs your attention/);
-  for (const category of ['Conversations', 'Research', 'Simulations', 'Decisions']) {
-    assert.match(home, new RegExp(`>${category}<`));
+  for (const action of ['Ask Anything', 'Search Web', 'Open AETHER', 'View Memory', 'Run Research', 'Use Simulator', 'Request Approval', 'System Settings']) {
+    assert.match(home, new RegExp(`>${action}<`));
   }
-  assert.match(home, /System reassurance/);
+  assert.match(html, /id="global-search-input"/);
+  assert.match(appSource, /No saved memories yet\./);
   assert.match(home, /data-voki-home-avatar/);
   assert.match(home, /data-voki-default-image src="\/static\/assets\/voki\/default-avatar\.png"/);
   assert.doesNotMatch(home, /data-voki-interface|parmar-core/);
@@ -46,6 +52,83 @@ test('Home is a distinct command center and the existing Core and VOKKI workspac
   assert.equal((html.match(/id="analyze-btn"/g) || []).length, 1);
   assert.match(html, /data-section="home" data-nav-key="home"/);
   assert.match(appSource, /selectSection\('home'\);[\s\S]*?refreshAuthenticationState\(\{ navigateToChat: false \}\)/);
+});
+
+test('Home search and composer use loaded data and the existing PARMAR chat flow', () => {
+  const searchRecords = functionSource('homeSearchRecords');
+  const openSearchResult = functionSource('openHomeSearchResult');
+  const sendHomeChatMessage = functionSource('sendHomeChatMessage');
+  const renderMemoryHighlights = functionSource('renderHomeMemoryHighlights');
+
+  assert.match(searchRecords, /state\.sessions/);
+  assert.match(searchRecords, /state\.memories/);
+  assert.match(searchRecords, /researchHistoryRecords\(\)/);
+  assert.match(searchRecords, /state\.audit/);
+  assert.match(openSearchResult, /continueConversation\(record\.sessionId\)/);
+  assert.match(openSearchResult, /selectSection\('memory'\)/);
+  assert.match(sendHomeChatMessage, /dom\.chatInput\.value = message/);
+  assert.match(sendHomeChatMessage, /submitChatMessage\(\)/);
+  assert.match(renderMemoryHighlights, /state\.memories/);
+  assert.match(functionSource('bindEvents'), /dom\.homeChatComposer\?\.addEventListener\('submit', sendHomeChatMessage\)/);
+});
+
+test('The original equals-bar control retains its two-line styling and sidebar toggle behavior', () => {
+  const toggle = html.match(/<button class="sidebar-toggle"[^>]*>([\s\S]*?)<\/button>/);
+  assert.ok(toggle, 'Expected the original sidebar toggle in the top navigation.');
+  assert.match(toggle[1], /<span><\/span><span><\/span>/);
+  assert.match(
+    styles,
+    /\.sidebar-toggle\s*\{\s*display:\s*inline-flex;\s*flex-direction:\s*column;\s*gap:\s*4px;/,
+  );
+  assert.match(styles, /\.sidebar-toggle span\s*\{\s*width:\s*15px;\s*height:\s*1px;/);
+  assert.doesNotMatch(styles, /\.topbar-left \.sidebar-toggle[^{}]*\{[^}]*display:\s*none/);
+  assert.match(
+    styles,
+    /@media \(max-width: 640px\)[\s\S]*?\.sidebar-toggle \{ width: 38px; min-height: 38px; \}/,
+  );
+  assert.match(
+    functionSource('bindEvents'),
+    /dom\.sidebarToggle\.addEventListener\('click', \(\) => toggleWorkspacePanel\('left', dom\.sidebarToggle\)\)/,
+  );
+  assert.match(functionSource('toggleWorkspacePanel'), /workspacePanels\[side\]/);
+});
+
+test('The expanded sidebar retains every original labeled navigation option and icon', () => {
+  const sidebar = html.match(/<aside class="sidebar" id="sidebar"[\s\S]*?<\/aside>/)?.[0];
+  assert.ok(sidebar, 'Expected the original sidebar navigation.');
+  const options = [
+    ['New Chat', 'chat'],
+    ['Home', 'home'],
+    ['Chats / History', 'chat'],
+    ['Research', 'research'],
+    ['VOKKI', 'voki'],
+    ['AETHER', 'aether'],
+    ['PARMAR Core', 'core'],
+    ['Risk &amp; Safety', 'safety'],
+    ['Simulation', 'simulator'],
+    ['Memory', 'memory'],
+    ['Approvals', 'approvals'],
+    ['Tools / Plugins', 'tools'],
+    ['System Status', 'system'],
+    ['Settings', 'settings'],
+    ['Phone Awareness', 'phone'],
+    ['Activity', 'audit'],
+  ];
+  const entries = [...sidebar.matchAll(/<button class="nav-item[^"]*"([^>]*)>([\s\S]*?)<\/button>/g)];
+  assert.equal(entries.length, options.length);
+
+  for (const [index, [label, section]] of options.entries()) {
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const [, attributes, content] = entries[index];
+    assert.match(content, new RegExp(`<span>${escapedLabel}</span>`), `Missing sidebar label ${label}`);
+    assert.match(attributes, new RegExp(`data-section="${section}"`), `Incorrect destination for ${label}`);
+    assert.match(attributes, /\btitle="/, `Missing tooltip for ${label}`);
+    assert.match(content, /class="nav-mark nav-icon" aria-hidden="true"><svg/, `Missing icon for ${label}`);
+  }
+
+  assert.match(styles, /body\.sidebar-collapsed \.nav-item > span:not\(\.nav-mark\)/);
+  const redesignStyles = styles.slice(styles.indexOf('/* Reference-led PARMAR Home command center */'));
+  assert.doesNotMatch(redesignStyles, /\.(?:nav-label|sidebar-section-label|nav-item > span:not\(\.nav-mark\))[^{}]*\{\s*display:\s*none/);
 });
 
 test('Home actions navigate to the existing workflows', () => {
@@ -160,6 +243,8 @@ test('Home and dedicated VOKKI use the canonical avatar through the shared real 
   assert.deepEqual(avatarAsset.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
   assert.match(appInitialize, /state\.homeVokiAvatar = new window\.PARMARVOKKIAvatar\.VOKKIAvatarPresentation/);
   assert.match(setVokiState, /state\.homeVokiAvatar\?\.setLifecycle/);
+  assert.match(setVokiState, /dom\.homeVokiStatus\.textContent = presentation\.label/);
+  assert.match(html, /id="home-voki-status">STATE UNAVAILABLE<\/small>/);
   for (const lifecycle of ['LISTENING', 'THINKING', 'ANALYZING', 'RISK_CHECK', 'WAITING_FOR_HUMAN', 'RESPONSE_SAFETY', 'RELEASED', 'WITHHELD', 'BLOCKED', 'PROVIDER_FAILED']) {
     assert.match(avatarSource, new RegExp(`\\b${lifecycle}:`));
   }

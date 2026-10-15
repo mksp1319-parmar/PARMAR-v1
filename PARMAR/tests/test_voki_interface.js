@@ -640,7 +640,8 @@ test('Home workspace launches use section navigation and AETHER reports its unav
   assert.match(app, /\.home-action\[data-section\], \.home-action\[data-action\]/);
   assert.match(html, /data-action="new-chat"/);
   assert.match(html, /data-action="research-chat"/);
-  assert.match(html, /data-section="core" data-home-focus="request"/);
+  assert.match(html, /data-section="core" data-nav-key="core" aria-label="PARMAR Core" title="PARMAR Core" data-home-focus="request"/);
+  assert.match(html, /data-section="approvals" data-nav-key="approvals" data-home-focus="approval"/);
   assert.match(html, /data-section="simulator"/);
   assert.match(html, /data-section="safety"/);
   assert.match(html, /<button class="nav-item" data-section="voki"/);

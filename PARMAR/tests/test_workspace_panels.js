@@ -6,8 +6,10 @@ const vm = require('node:vm');
 
 const appPath = path.join(__dirname, '..', 'interface', 'static', 'app.js');
 const stylesPath = path.join(__dirname, '..', 'interface', 'static', 'styles.css');
+const premiumStylesPath = path.join(__dirname, '..', 'interface', 'static', 'premium.css');
 const appSource = fs.readFileSync(appPath, 'utf8');
 const stylesSource = fs.readFileSync(stylesPath, 'utf8');
+const premiumStylesSource = fs.readFileSync(premiumStylesPath, 'utf8');
 
 function functionSource(name) {
   const match = appSource.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`));
@@ -83,8 +85,14 @@ test('closed desktop discovery is inert and its open state remains accessible', 
   });
 
   vm.runInContext(`
-    const PANEL_DRAWER_BREAKPOINT = 1100;
-    function isCompactPanelViewport() { return window.innerWidth <= PANEL_DRAWER_BREAKPOINT; }
+    const SIDEBAR_DRAWER_BREAKPOINT = 920;
+    const DISCOVERY_DRAWER_BREAKPOINT = 1100;
+    function isCompactPanelViewport(side = 'left') {
+      const breakpoint = side === 'right'
+        ? DISCOVERY_DRAWER_BREAKPOINT
+        : SIDEBAR_DRAWER_BREAKPOINT;
+      return window.innerWidth <= breakpoint;
+    }
     function panelElement(side) { return side === 'left' ? dom.sidebar : dom.discoveryPanel; }
     function panelTriggers(side) {
       return side === 'left'
@@ -105,6 +113,19 @@ test('closed desktop discovery is inert and its open state remains accessible', 
   assert.equal(panels.discoveryPanel.inert, false);
   assert.equal(panels.discoveryPanel.attributes['aria-hidden'], 'false');
   assert.equal(panels.discoveryToggle.attributes['aria-expanded'], 'true');
+
+  testContext.window.innerWidth = 1000;
+  testContext.syncWorkspaceAccessibility('right');
+  assert.equal(panels.mainPanel.inert, true);
+  assert.equal(panels.sidebar.inert, true);
+  assert.equal(panels.sidebar.attributes['aria-hidden'], 'true');
+  assert.equal(panels.discoveryPanel.inert, false);
+  assert.equal(panels.discoveryPanel.attributes['aria-modal'], 'true');
+});
+
+test('left navigation drawer breakpoint matches CSS while discovery retains its wider drawer', () => {
+  assert.match(appSource, /const SIDEBAR_DRAWER_BREAKPOINT = 920;/);
+  assert.match(appSource, /const DISCOVERY_DRAWER_BREAKPOINT = 1100;/);
 });
 
 test('desktop discovery is removed from layout when closed and presented as an overlay when open', () => {
@@ -114,4 +135,14 @@ test('desktop discovery is removed from layout when closed and presented as an o
 
 test('mobile navigation remains above its dimming scrim and retains usable touch controls', () => {
   assert.match(stylesSource, /@media \(max-width: 1100px\)\s*\{\s*\.sidebar,\s*\.discovery-panel\s*\{\s*z-index:\s*var\(--layer-drawer\);/);
+});
+
+test('fullscreen VOKKI stays scrollable with a persistent workspace exit and tablet layout', () => {
+  assert.match(premiumStylesSource, /body\[data-active-section="voki"\]\s+\.section-view\.active#section-voki\s*\{[^}]*overflow-y:\s*auto;/);
+  assert.match(premiumStylesSource, /body\[data-active-section="voki"\]\s+\.voki-view-heading\s*\{[^}]*position:\s*sticky;/);
+  assert.match(premiumStylesSource, /@media \(min-width: 761px\) and \(max-width: 1100px\)[\s\S]*?body\[data-active-section="voki"\]\s+\.voki-interface-surface\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/);
+});
+
+test('short mobile home portrait follows viewport height instead of a desktop minimum', () => {
+  assert.match(premiumStylesSource, /@media \(max-width: 640px\)[\s\S]*?\.home-voki-presence\s*\{[^}]*height:\s*clamp\(160px,\s*30svh,\s*280px\);[^}]*min-height:\s*0;/);
 });

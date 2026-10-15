@@ -2,15 +2,45 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const staticDir = path.join(__dirname, '..', 'interface', 'static');
 const html = fs.readFileSync(path.join(staticDir, 'index.html'), 'utf8');
 const app = fs.readFileSync(path.join(staticDir, 'app.js'), 'utf8');
 const styles = fs.readFileSync(path.join(staticDir, 'styles.css'), 'utf8');
+const premiumStyles = fs.readFileSync(path.join(staticDir, 'premium.css'), 'utf8');
+
+function functionSource(name) {
+  const match = app.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`));
+  assert.ok(match, `Expected ${name} to exist in app.js`);
+  return match[0];
+}
+
+class TestElement {
+  constructor(tagName) {
+    this.tagName = tagName.toUpperCase();
+    this.children = [];
+    this.attributes = {};
+    this.className = '';
+    this.textContent = '';
+  }
+
+  append(...children) {
+    this.children.push(...children);
+  }
+
+  replaceChildren(...children) {
+    this.children = children;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = value;
+  }
+}
 
 test('primary workspace links use real Chat, Research, approval, and mobile navigation flows', () => {
   assert.match(html, /data-section="research" data-nav-key="research" aria-label="Research"/);
-  assert.match(html, /data-section="core" data-nav-key="approvals" data-home-focus="approval"/);
+  assert.match(html, /data-section="approvals" data-nav-key="approvals" data-home-focus="approval"/);
   for (const section of ['home', 'chat', 'voki']) {
     assert.match(html, new RegExp(`class="nav-item mobile-bottom-item"[^>]*data-section="${section}"`));
   }
@@ -18,6 +48,49 @@ test('primary workspace links use real Chat, Research, approval, and mobile navi
   assert.match(app, /dom\.mobileBottomMore\?\.addEventListener\('click', \(\) => dom\.sidebarToggle\?\.click\(\)\)/);
   assert.match(app, /if \(button\.dataset\.navKey\) selectSection\('chat', button\.dataset\.navKey\);\s*else selectSection\('chat'\)/);
   assert.match(app, /button\.dataset\.homeFocus === 'approval'/);
+});
+
+test('Approvals and System Status render their own real workspace state', () => {
+  assert.match(html, /data-section="approvals" id="section-approvals"[\s\S]*?id="approval-box"/);
+  assert.match(html, /id="section-system"[\s\S]*?id="system-lifecycle-value"[\s\S]*?id="system-aether-value"/);
+  assert.match(app, /function renderSystemOverview\(\)[\s\S]*?dom\.aetherDesktopStatus\?\.textContent/);
+});
+
+test('Safety review explains missing evidence and never invents a low-risk result', () => {
+  assert.match(app, /function renderReviewEmptyState\(container, message\)/);
+  assert.match(app, /No risk assessment is available until a request is reviewed\./);
+  assert.match(app, /Risk details were not reported for this result\./);
+  assert.doesNotMatch(app, /risk\.risk_level \|\| 'LOW'/);
+  assert.match(premiumStyles, /\.review-empty-state\s*\{/);
+});
+
+test('Safety review displays honest empty and partially reported result states', () => {
+  const riskCenterEl = new TestElement('div');
+  const explanationList = new TestElement('ul');
+  const context = vm.createContext({
+    document: { createElement: (tagName) => new TestElement(tagName) },
+    dom: { riskCenterEl, explanationList },
+  });
+  vm.runInContext([
+    functionSource('renderReviewEmptyState'),
+    functionSource('renderRiskCenter'),
+    functionSource('renderExplainability'),
+  ].join('\n'), context);
+
+  context.renderRiskCenter({ analysis: {} });
+  context.renderExplainability({ analysis: {} });
+  assert.equal(riskCenterEl.children[0].textContent, 'Risk details were not reported for this result.');
+  assert.equal(explanationList.children[0].textContent, 'No decision context was reported for this result.');
+
+  context.renderRiskCenter({ analysis: { risk: { risk_level: 'MEDIUM' } } });
+  assert.deepEqual(
+    riskCenterEl.children.map((card) => card.children[1].textContent),
+    ['MEDIUM', 'Not reported', 'Not reported', 'Not reported'],
+  );
+});
+
+test('VOKKI immersive layout is desktop-only so mobile navigation remains available', () => {
+  assert.match(styles, /@media \(min-width: 761px\) \{\s*body\[data-active-section="voki"\]/);
 });
 
 test('Research shows only stored conversation results and launches the real Chat research flow', () => {

@@ -4,7 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PARMAR | Human-Controlled AI Governance</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23100e0b'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='Arial' font-size='21' font-weight='bold' fill='%23f1bd82'%3EP%3C/text%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/premium.css" />
   </head>
   <body data-state="UNKNOWN" data-active-section="home" data-theme="midnight" data-animation="normal" data-voki-state="UNKNOWN" data-left-panel-state="closed" data-right-panel-state="closed" data-gesture-state="idle">
     <div class="app-shell">
@@ -26,11 +28,11 @@
           <button class="nav-item" data-section="research" data-nav-key="research" aria-label="Research" title="Research"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1M8 10.8h5.6M10.8 8v5.6" /></svg></span><span>Research</span></button>
           <button class="nav-item" data-section="voki" aria-label="VOKKI interface" title="VOKKI interface"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><path d="m8 9 4 6 4-6" /></svg></span><span>VOKKI</span></button>
           <button class="nav-item" data-section="aether" aria-label="AETHER browser workspace" title="AETHER browser workspace"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1.5" /><path d="M4 9h16M7 7h.01M10 7h.01" /></svg></span><span>AETHER</span></button>
-          <button class="nav-item" data-section="core" data-nav-key="core" aria-label="PARMAR Core" title="PARMAR Core"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><circle cx="12" cy="12" r="4.75" /><circle cx="12" cy="12" r="1.25" /></svg></span><span>PARMAR Core</span></button>
+          <button class="nav-item" data-section="core" data-nav-key="core" aria-label="PARMAR Core" title="PARMAR Core" data-home-focus="request"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.25" /><circle cx="12" cy="12" r="4.75" /><circle cx="12" cy="12" r="1.25" /></svg></span><span>PARMAR Core</span></button>
           <button class="nav-item" data-section="safety" aria-label="Risk & Safety" title="Risk & Safety"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span><span>Risk &amp; Safety</span></button>
           <button class="nav-item" data-section="simulator" aria-label="Simulation" title="Simulation"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.25 7.25A2.25 2.25 0 0 1 7.5 5h9A2.25 2.25 0 0 1 18.75 7.25v9.5A2.25 2.25 0 0 1 16.5 19h-9a2.25 2.25 0 0 1-2.25-2.25Z" /><path d="m10 9 5 3-5 3Z" /></svg></span><span>Simulation</span></button>
           <button class="nav-item" data-section="memory" aria-label="Memory" title="Memory"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6.25 5.5A1.75 1.75 0 0 1 8 3.75h10v16.5H8a1.75 1.75 0 0 1-1.75-1.75Z" /><path d="M6.25 17.25A2.75 2.75 0 0 1 9 14.5h9M10 8h4" /></svg></span><span>Memory</span></button>
-          <button class="nav-item" data-section="core" data-nav-key="approvals" data-home-focus="approval" aria-label="Approvals" title="Approvals"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span><span>Approvals</span></button>
+          <button class="nav-item" data-section="approvals" data-nav-key="approvals" data-home-focus="approval" aria-label="Approvals" title="Approvals"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span><span>Approvals</span></button>
           <button class="nav-item" data-section="tools" aria-label="Tools / Plugins" title="Tools / Plugins"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8.5 5.25v5.5M15.5 5.25v5.5M7 10.75h10v2.5A5 5 0 0 1 12 18.25v2M7 7.25h10" /></svg></span><span>Tools / Plugins</span></button>
           <button class="nav-item" data-section="system" aria-label="System Status" title="System Status"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.75 12h3l2-5 4.5 10 2.25-5h4.75" /></svg></span><span>System Status</span></button>
           <button class="nav-item" data-section="settings" aria-label="Settings" title="Settings"><span class="nav-mark nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="m19.2 13.8 1 1.7-2 2-1.7-1a7.5 7.5 0 0 1-1.5.6l-.5 1.9h-3l-.5-1.9a7.5 7.5 0 0 1-1.5-.6l-1.7 1-2-2 1-1.7a7.5 7.5 0 0 1-.6-1.8l-1.9-.5v-3l1.9-.5a7.5 7.5 0 0 1 .6-1.5l-1-1.7 2-2 1.7 1a7.5 7.5 0 0 1 1.5-.6l.5-1.9h3l.5 1.9a7.5 7.5 0 0 1 1.5.6l1.7-1 2 2-1 1.7a7.5 7.5 0 0 1 .6 1.5l1.9.5v3l-1.9.5a7.5 7.5 0 0 1-.6 1.8Z" /></svg></span><span>Settings</span></button>
@@ -59,8 +61,16 @@
           <div class="topbar-left">
             <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar" title="Toggle sidebar"><span></span><span></span></button>
             <div class="mobile-brand"><span class="brand-title">PARMAR</span><span class="brand-subtitle">Governance interface</span></div>
-            <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Overview</span></div>
+            <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Home</span></div>
           </div>
+          <form class="global-search" id="global-search" role="search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1" /></svg>
+            <label class="sr-only" for="global-search-input">Search loaded PARMAR conversations, memories, and activity</label>
+            <input id="global-search-input" type="search" placeholder="Ask PARMAR anything…" autocomplete="off" aria-controls="global-search-results" aria-expanded="false" />
+            <button type="submit" aria-label="Search PARMAR">Search</button>
+            <div class="global-search-results" id="global-search-results" role="listbox" aria-label="Loaded PARMAR search results" hidden></div>
+            <p class="sr-only" id="global-search-status" role="status" aria-live="polite"></p>
+          </form>
           <div class="header-controls">
             <div class="status-pill" id="status-pill" aria-live="polite">NOT ASSESSED</div>
             <div class="human-pill"><span class="human-mark" aria-hidden="true">+</span> Human in control</div>
@@ -110,60 +120,37 @@
           <section class="section-view active home-command-center" data-section="home" id="section-home" aria-labelledby="home-title">
             <section class="home-hero" aria-labelledby="home-title">
               <div class="home-hero-copy">
-                <span class="home-kicker"><span class="home-kicker-mark" aria-hidden="true"></span> PARMAR / COMMAND CENTER</span>
-                <h1 id="home-title">Welcome back</h1>
-                <p>Your intelligent partner for a safer, smarter tomorrow.</p>
-                <div class="home-hero-status" aria-live="polite">
-                  <span class="home-status-indicator" aria-hidden="true"></span>
-                  <span><small>Current review state</small><strong id="home-readiness-state">NOT YET ASSESSED</strong></span>
-                </div>
+                <span class="home-kicker"><span class="home-kicker-mark" aria-hidden="true"></span> PARMAR / YOUR PERSONAL AI</span>
+                <h1 id="home-title">A brighter future,<br /><em>built together.</em></h1>
+                <p>PARMAR is here — to help you think, plan, create, and protect.</p>
+                <p class="home-hero-motto">“Better decisions. Safer actions.<br />A brighter tomorrow.”</p>
+                <button class="home-voki-action" type="button" data-section="voki" aria-label="Talk with VOKKI">
+                  <span class="home-action-mic" aria-hidden="true">◉</span><span><strong>Talk to VOKKI</strong><small>Human authority always retained</small></span><span aria-hidden="true">↗</span>
+                </button>
               </div>
               <div class="home-voki-presence" data-voki-home-avatar data-expression="unavailable" data-lifecycle-state="UNKNOWN" role="img" aria-label="VOKKI, PARMAR’s canonical default avatar">
                 <span class="home-voki-halo home-voki-halo-outer" aria-hidden="true"></span>
                 <span class="home-voki-halo home-voki-halo-inner" aria-hidden="true"></span>
                 <img class="home-voki-avatar-image" data-voki-default-image src="/static/assets/voki/default-avatar.png" alt="VOKKI, PARMAR’s canonical default avatar" />
-                <span class="home-voki-caption" aria-hidden="true">VOKKI <span>PARMAR / HUMAN-FACING PRESENCE</span></span>
+                <span class="home-voki-caption" aria-hidden="true">VOKKI <span>PARMAR / HERE WHEN YOU NEED HER</span></span>
               </div>
-              <button class="home-voki-action" type="button" data-section="voki">
-                <img src="/static/assets/voki/default-avatar.png" alt="" />
-                <span><strong>Talk to VOKKI</strong><small>Your AI partner, always here.</small></span>
-                <span class="home-voki-action-link">Open VOKKI <span aria-hidden="true">→</span></span>
-              </button>
-              <div class="home-hero-footer"><span>Human-guided intelligence</span><span>Human authority retained</span></div>
-            </section>
-
-            <section class="home-section home-continue" aria-labelledby="home-continue-title">
-              <div class="home-section-heading"><div><span class="home-section-kicker">PICK UP WHERE YOU LEFT OFF</span><h2 id="home-continue-title">Continue</h2></div><button class="text-button home-subtle-link" type="button" data-section="chat">All conversations <span aria-hidden="true">↗</span></button></div>
-              <div class="home-continue-list" id="home-continue-list" aria-live="polite"></div>
-            </section>
-
-            <section class="home-section home-start" aria-labelledby="home-start-title">
-              <div class="home-section-heading">
-                <div><span class="home-section-kicker">A CLEAR NEXT STEP</span><h2 id="home-start-title">Start something new</h2></div>
-                <div class="home-workflow-links" aria-label="More PARMAR workflows">
-                  <button class="text-button" type="button" data-section="core" data-home-focus="request">Review a request</button>
-                  <button class="text-button" type="button" data-section="simulator">Simulation</button>
-                  <button class="text-button" type="button" data-section="safety">Safety review</button>
+              <div class="home-hero-date glass-panel" aria-label="Your local date and time">
+                <div><span class="home-panel-kicker" id="home-date">Your local date</span><strong id="home-clock" aria-live="off">--:--</strong><small>Local time</small></div>
+                <div class="home-weather" aria-label="Weather unavailable; no weather provider is configured"><span aria-hidden="true">☼</span><strong>—</strong><small>Weather<br />not connected</small></div>
+              </div>
+              <section class="home-quick-actions glass-panel" aria-labelledby="home-quick-actions-title">
+                <h2 id="home-quick-actions-title"><span aria-hidden="true">◈</span> QUICK ACTIONS</h2>
+                <div class="home-quick-grid">
+                  <button type="button" data-action="new-chat"><span class="home-quick-icon" aria-hidden="true">▤</span><span><strong>Ask Anything</strong><small>Chat with PARMAR</small></span></button>
+                  <button type="button" data-action="research-chat"><span class="home-quick-icon" aria-hidden="true">⌕</span><span><strong>Search Web</strong><small>Configured research</small></span></button>
+                  <button type="button" data-section="aether"><span class="home-quick-icon" aria-hidden="true">✧</span><span><strong>Open AETHER</strong><small>Browse securely</small></span></button>
+                  <button type="button" data-section="memory"><span class="home-quick-icon" aria-hidden="true">▣</span><span><strong>View Memory</strong><small>Your saved notes</small></span></button>
+                  <button type="button" data-action="research-chat"><span class="home-quick-icon" aria-hidden="true">⌖</span><span><strong>Run Research</strong><small>Provider dependent</small></span></button>
+                  <button type="button" data-section="simulator"><span class="home-quick-icon" aria-hidden="true">◇</span><span><strong>Use Simulator</strong><small>Local safety review</small></span></button>
+                  <button type="button" data-section="approvals" data-nav-key="approvals" data-home-focus="approval"><span class="home-quick-icon" aria-hidden="true">✓</span><span><strong>Request Approval</strong><small>Human oversight</small></span></button>
+                  <button type="button" data-section="settings"><span class="home-quick-icon" aria-hidden="true">⚙</span><span><strong>System Settings</strong><small>Customize PARMAR</small></span></button>
                 </div>
-              </div>
-              <div class="home-action-list">
-                <button class="home-action" type="button" data-action="new-chat" aria-label="Start a new PARMAR conversation">
-                  <span class="home-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 5.75h14a1.25 1.25 0 0 1 1.25 1.25v8A1.25 1.25 0 0 1 19 16.25H10l-4.5 3v-3.1A1.25 1.25 0 0 1 4.25 15V7A1.25 1.25 0 0 1 5.5 5.75Z" /><path d="M8 10h8M8 13h5" /></svg></span>
-                  <span class="home-action-title">Chat</span><span class="home-action-detail">Deep conversations and work</span>
-                </button>
-                <button class="home-action" type="button" data-action="research-chat" data-nav-key="research">
-                  <span class="home-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1M8 10.8h5.6M10.8 8v5.6" /></svg></span>
-                  <span class="home-action-title">Research</span><span class="home-action-detail">Find, verify, cite sources</span>
-                </button>
-                <button class="home-action" type="button" data-section="memory">
-                  <span class="home-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6.25 5.5A1.75 1.75 0 0 1 8 3.75h10v16.5H8a1.75 1.75 0 0 1-1.75-1.75Z" /><path d="M6.25 17.25A2.75 2.75 0 0 1 9 14.5h9M10 8h4" /></svg></span>
-                  <span class="home-action-title">Memory</span><span class="home-action-detail">Your knowledge repository</span>
-                </button>
-                <button class="home-action" type="button" data-section="core" data-nav-key="approvals" data-home-focus="approval">
-                  <span class="home-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span>
-                  <span class="home-action-title">Approvals</span><span class="home-action-detail">Human review and safety</span>
-                </button>
-              </div>
+              </section>
             </section>
 
             <section class="home-section home-attention" id="home-attention" aria-labelledby="home-attention-title" hidden>
@@ -171,21 +158,39 @@
               <button class="text-button home-attention-link" type="button" data-section="core" data-home-focus="approval">Open pending review <span aria-hidden="true">↗</span></button>
             </section>
 
-            <section class="home-section home-recent" aria-labelledby="home-recent-title">
-              <div class="home-section-heading"><div><span class="home-section-kicker">FROM YOUR EXISTING WORK</span><h2 id="home-recent-title">Recent work</h2></div></div>
-              <div class="home-recent-grid">
-                <section class="home-recent-group" aria-labelledby="home-recent-conversations-title"><h3 id="home-recent-conversations-title">Conversations</h3><div id="home-recent-conversations" class="home-work-list"></div></section>
-                <section class="home-recent-group" aria-labelledby="home-recent-research-title"><h3 id="home-recent-research-title">Research</h3><div id="home-recent-research" class="home-work-list"></div></section>
-                <section class="home-recent-group" aria-labelledby="home-recent-simulations-title"><h3 id="home-recent-simulations-title">Simulations</h3><div id="home-recent-simulations" class="home-work-list"></div></section>
-                <section class="home-recent-group" aria-labelledby="home-recent-decisions-title"><h3 id="home-recent-decisions-title">Decisions</h3><div id="home-recent-decisions" class="home-work-list"></div></section>
-              </div>
+            <section class="home-dashboard" aria-label="Your PARMAR dashboard">
+              <section class="home-dashboard-card home-activity-card" aria-labelledby="home-activity-title">
+                <div class="home-card-heading"><h2 id="home-activity-title">Recent Activity</h2><button type="button" data-section="audit">View all <span aria-hidden="true">›</span></button></div>
+                <div id="audit-list" class="audit-list home-audit-list" aria-live="polite"></div>
+              </section>
+              <section class="home-dashboard-card home-continue-card" aria-labelledby="home-continue-title">
+                <div class="home-card-heading"><h2 id="home-continue-title">Continue Where You Left Off</h2><button type="button" data-section="chat">View All <span aria-hidden="true">›</span></button></div>
+                <div class="home-continue-list" id="home-continue-list" aria-live="polite"></div>
+              </section>
+              <section class="home-dashboard-card home-memory-card" aria-labelledby="home-memory-title">
+                <div class="home-card-heading"><h2 id="home-memory-title">Memory Highlights</h2><button type="button" data-section="memory" aria-label="View saved memories">View all <span aria-hidden="true">›</span></button></div>
+                <div class="home-memory-highlights" id="home-memory-highlights" aria-live="polite"></div>
+              </section>
+              <button class="home-quote-card" type="button" data-section="aether" aria-label="Open AETHER workspace">
+                <span>“Better decisions.<br />Safer actions.<br />A brighter tomorrow.”</span><small>— PARMAR</small><span class="home-quote-link">Explore AETHER <span aria-hidden="true">›</span></span>
+              </button>
             </section>
 
-            <section class="home-reassurance" aria-label="System reassurance">
-              <span class="home-reassurance-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.75 19 6.5v5.1c0 4.1-2.9 7-7 8.65-4.1-1.65-7-4.55-7-8.65V6.5l7-2.75Z" /><path d="m9 12 2 2 4-4" /></svg></span>
-              <span><small>Human oversight</small><strong>Authority remains with you</strong></span>
-              <span class="home-reassurance-detail">PARMAR’s existing review, safety, and approval boundaries remain in force.</span>
-            </section>
+            <form class="home-chat-composer" id="home-chat-composer">
+              <img src="/static/assets/voki/default-avatar.png" alt="" />
+              <span class="home-composer-brand"><strong>VOKKI</strong><small id="home-voki-status">STATE UNAVAILABLE</small></span>
+              <label class="sr-only" for="home-chat-input">Ask PARMAR a question</label>
+              <textarea id="home-chat-input" rows="1" maxlength="6000" placeholder="How can I help you today?"></textarea>
+              <button type="submit" aria-label="Send message to PARMAR">➤</button>
+            </form>
+            <div class="home-status-strip" aria-label="PARMAR status">
+              <span><i class="status-dot" aria-hidden="true"></i>Human oversight active</span>
+              <span>Review <strong id="home-readiness-state">NOT YET ASSESSED</strong></span>
+              <span>Safety checks retained</span>
+              <span id="home-memory-status">Memory status loading</span>
+              <span>Weather unavailable</span>
+              <span>PARMAR · V1</span>
+            </div>
           </section>
 
           <section class="section-view core-workspace" data-section="core" id="section-core" aria-labelledby="core-title">
@@ -405,8 +410,13 @@
               <section class="review-section"><div class="section-title-row"><h2>Risk assessment</h2><span>Current request</span></div><div class="stat-grid" id="risk-center"></div></section>
               <section class="review-section"><div class="section-title-row"><h2>Reasoning</h2><span>Decision context</span></div><ul class="bullet-list" id="explanation-list"></ul></section>
             </div>
+            <p class="safety-note">Human decisions are handled separately in Approvals. No proposal is approved automatically.</p>
+          </section>
+
+          <section class="section-view" data-section="approvals" id="section-approvals" aria-labelledby="approvals-title">
+            <div class="view-heading"><div><span class="eyebrow">Human authority</span><h1 id="approvals-title">Approvals</h1></div><p>Review a real PARMAR proposal and decide whether it may proceed. No action is taken without your explicit decision.</p></div>
             <section class="approval-panel" aria-labelledby="approval-title">
-              <div class="section-title-row"><div><span class="eyebrow">Human authority</span><h2 id="approval-title">Your decision remains yours.</h2></div><span class="approval-state-tag" id="approval-state-tag">No decision pending</span></div>
+              <div class="section-title-row"><div><span class="eyebrow">Decision workspace</span><h2 id="approval-title">Your decision remains yours.</h2></div><span class="approval-state-tag" id="approval-state-tag">No decision pending</span></div>
               <div class="approval-box" id="approval-box">
                 <div class="approval-item"><span>Proposal</span><strong id="approval-action">No active proposal</strong></div>
                 <div class="approval-item"><span>Risk level</span><strong id="approval-risk">—</strong></div>
@@ -499,8 +509,19 @@
           </section>
 
           <section class="section-view" data-section="system" id="section-system" aria-labelledby="system-title">
-            <div class="view-heading"><div><span class="eyebrow">Local interface</span><h1 id="system-title">System Status</h1></div><p>This view reports only the current browser interface state.</p></div>
-            <section class="feature-placeholder"><span class="placeholder-mark status-mark" aria-hidden="true"></span><div><strong>Interface ready</strong><p>Backend health is not monitored from this view.</p></div></section>
+            <div class="view-heading"><div><span class="eyebrow">PARMAR / LIVE SESSION</span><h1 id="system-title">System Status</h1></div><p>Current interface, session, and browser-runtime states. External provider reachability and backend health are not inferred.</p></div>
+            <section class="system-overview" aria-label="Current PARMAR and browser states">
+              <div class="system-status-grid">
+                <article class="system-status-item"><span class="eyebrow">PARMAR LIFECYCLE</span><strong id="system-lifecycle-value">NOT ASSESSED</strong><p>Current request review state.</p></article>
+                <article class="system-status-item"><span class="eyebrow">PROVIDER ROUTE</span><strong id="system-provider-value">LOCAL-DEMO</strong><p>Selected route shown by the conversation workspace; no reachability check is implied.</p></article>
+                <article class="system-status-item"><span class="eyebrow">SESSION</span><strong id="system-session-value">Anonymous / Local Demo</strong><p>Authentication state for this browser session.</p></article>
+                <article class="system-status-item"><span class="eyebrow">AETHER DESKTOP</span><strong id="system-aether-value">The PARMAR desktop shell is not connected.</strong><p>Restricted browser-runtime connection status.</p></article>
+              </div>
+              <div class="system-overview-actions">
+                <button class="text-button" type="button" data-section="settings">Review Settings</button>
+                <button class="text-button" type="button" data-section="aether">Open AETHER</button>
+              </div>
+            </section>
           </section>
 
           <section class="section-view" data-section="settings" id="section-settings" aria-labelledby="settings-title">

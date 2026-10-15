@@ -1,8 +1,8 @@
 :root {
   color-scheme: dark;
   font-family: Inter, "Segoe UI", sans-serif;
-  background: #111116;
-  color: #f4f0e9;
+  background: #10100f;
+  color: #e9e5dd;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -16,9 +16,7 @@ body {
   height: 100vh;
   margin: 0;
   overflow: hidden;
-  background:
-    radial-gradient(ellipse at 50% -10%, rgba(162, 105, 51, .1), transparent 42%),
-    #111116;
+  background: #10100f;
 }
 
 button,
@@ -44,14 +42,14 @@ input:focus-visible {
 }
 
 .topbar {
-  height: 52px;
-  flex: 0 0 52px;
+  height: 58px;
+  flex: 0 0 58px;
   display: flex;
   align-items: center;
-  gap: 20px;
-  padding: 0 18px;
-  border-bottom: 1px solid rgba(255, 255, 255, .065);
-  background: rgba(22, 21, 24, .96);
+  gap: 24px;
+  padding: 0 22px;
+  border-bottom: 1px solid rgba(202, 181, 148, .12);
+  background: #171715;
   -webkit-app-region: drag;
 }
 
@@ -67,9 +65,9 @@ input:focus-visible {
   height: 29px;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(221, 174, 115, .54);
-  border-radius: 9px;
-  color: #e5bd8d;
+  border: 1px solid rgba(197, 163, 115, .44);
+  border-radius: 7px;
+  color: #d4b483;
   font-size: 16px;
 }
 
@@ -95,7 +93,7 @@ input:focus-visible {
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  color: #d6b98f;
+  color: #b9a17e;
   font-size: 11px;
   -webkit-app-region: no-drag;
 }
@@ -104,8 +102,8 @@ input:focus-visible {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #d7a256;
-  box-shadow: 0 0 12px rgba(215, 162, 86, .4);
+  background: #b99a69;
+  box-shadow: 0 0 8px rgba(185, 154, 105, .28);
 }
 
 .icon-button,
@@ -117,8 +115,8 @@ input:focus-visible {
   place-items: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 9px;
-  color: #c2bcb4;
+  border-radius: 7px;
+  color: #aaa69d;
   background: transparent;
   cursor: pointer;
   -webkit-app-region: no-drag;
@@ -126,9 +124,9 @@ input:focus-visible {
 
 .icon-button:hover:not(:disabled),
 .tab-add:hover {
-  border-color: rgba(212, 165, 103, .22);
-  color: #f1d3ab;
-  background: rgba(203, 148, 83, .1);
+  border-color: rgba(197, 163, 115, .24);
+  color: #e0c89f;
+  background: rgba(197, 163, 115, .08);
 }
 
 .icon-button:disabled {
@@ -137,14 +135,14 @@ input:focus-visible {
 }
 
 .tab-strip {
-  height: 43px;
-  flex: 0 0 43px;
+  height: 46px;
+  flex: 0 0 46px;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 4px 12px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, .055);
-  background: rgba(18, 17, 20, .84);
+  border-bottom: 1px solid rgba(202, 181, 148, .09);
+  background: #131312;
 }
 
 .tabs {
@@ -167,17 +165,17 @@ input:focus-visible {
   padding: 0 9px;
   border: 1px solid transparent;
   border-bottom: 0;
-  border-radius: 9px 9px 0 0;
-  color: #9e9992;
+  border-radius: 5px 5px 0 0;
+  color: #8f8c84;
   background: transparent;
   cursor: pointer;
   text-align: left;
 }
 
 .tab[aria-selected="true"] {
-  border-color: rgba(255, 255, 255, .07);
-  color: #e9e1d7;
-  background: linear-gradient(180deg, rgba(50, 45, 39, .84), rgba(34, 31, 29, .72));
+  border-color: rgba(202, 181, 148, .12);
+  color: #e2ddd2;
+  background: #201f1b;
 }
 
 .tab-title {
@@ -212,22 +210,22 @@ input:focus-visible {
 }
 
 .toolbar {
-  height: 54px;
-  flex: 0 0 54px;
+  height: 58px;
+  flex: 0 0 58px;
   display: flex;
   align-items: center;
   gap: 5px;
   padding: 0 13px;
-  border-bottom: 1px solid rgba(255, 255, 255, .06);
-  background: rgba(29, 27, 29, .94);
+  border-bottom: 1px solid rgba(202, 181, 148, .1);
+  background: #191917;
 }
 
 .restricted-notice {
   flex: 0 0 auto;
   padding: 9px 16px;
-  border-bottom: 1px solid rgba(215, 162, 86, .22);
-  color: #e0c49e;
-  background: rgba(111, 73, 33, .16);
+  border-bottom: 1px solid rgba(185, 154, 105, .18);
+  color: #c7b18e;
+  background: #211e18;
   font-size: 11px;
   line-height: 1.45;
 }
@@ -241,18 +239,18 @@ input:focus-visible {
   gap: 9px;
   margin: 0 5px;
   padding: 0 8px 0 12px;
-  border: 1px solid rgba(255, 255, 255, .1);
-  border-radius: 11px;
-  background: rgba(10, 10, 13, .62);
+  border: 1px solid rgba(202, 181, 148, .13);
+  border-radius: 7px;
+  background: #10100f;
 }
 
 .address-box:focus-within {
-  border-color: rgba(219, 171, 111, .57);
-  box-shadow: 0 0 0 3px rgba(198, 144, 82, .09);
+  border-color: rgba(197, 163, 115, .48);
+  box-shadow: 0 0 0 2px rgba(197, 163, 115, .08);
 }
 
 .address-lock {
-  color: #a88a66;
+  color: #a18a68;
   font-size: 15px;
 }
 
@@ -273,10 +271,10 @@ input:focus-visible {
 
 .address-go {
   padding: 5px 10px;
-  border: 1px solid rgba(217, 166, 104, .28);
-  border-radius: 7px;
-  color: #e6c397;
-  background: rgba(171, 111, 53, .14);
+  border: 1px solid rgba(197, 163, 115, .25);
+  border-radius: 5px;
+  color: #d7bf96;
+  background: #211e18;
   cursor: pointer;
   font-size: 10px;
 }
@@ -287,7 +285,7 @@ input:focus-visible {
   display: flex;
   position: relative;
   overflow: hidden;
-  background: #101014;
+  background: #111110;
 }
 
 .viewport {
@@ -302,8 +300,8 @@ input:focus-visible {
   z-index: 2;
   overflow: auto;
   padding: 18px 15px;
-  border-right: 1px solid rgba(255, 255, 255, .08);
-  background: rgba(25, 23, 24, .98);
+  border-right: 1px solid rgba(202, 181, 148, .12);
+  background: #181816;
 }
 
 .panel-heading {
@@ -315,7 +313,7 @@ input:focus-visible {
 
 .panel-heading h2 {
   margin: 0;
-  color: #e4c49b;
+  color: #d1b990;
   font-size: 13px;
   font-weight: 500;
 }
@@ -328,10 +326,10 @@ input:focus-visible {
 .panel-record {
   min-width: 0;
   padding: 10px;
-  border: 1px solid rgba(255, 255, 255, .07);
-  border-radius: 9px;
+  border: 1px solid rgba(202, 181, 148, .1);
+  border-radius: 5px;
   color: #d6d0c8;
-  background: rgba(255, 255, 255, .025);
+  background: #1e1e1b;
   font-size: 11px;
 }
 
@@ -359,10 +357,10 @@ input:focus-visible {
 .panel-action {
   margin: 9px 0 14px;
   padding: 7px 10px;
-  border: 1px solid rgba(216, 167, 104, .26);
-  border-radius: 8px;
-  color: #e3c095;
-  background: rgba(159, 100, 46, .13);
+  border: 1px solid rgba(197, 163, 115, .22);
+  border-radius: 5px;
+  color: #d2b88d;
+  background: #211e18;
   cursor: pointer;
   font-size: 10px;
 }
@@ -380,9 +378,9 @@ input:focus-visible {
   justify-content: space-between;
   gap: 12px;
   padding: 0 13px;
-  border-top: 1px solid rgba(255, 255, 255, .06);
+  border-top: 1px solid rgba(202, 181, 148, .1);
   color: #827c76;
-  background: #171619;
+  background: #151513;
   font-size: 9px;
 }
 
