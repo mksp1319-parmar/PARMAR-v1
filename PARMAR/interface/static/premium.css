@@ -118,6 +118,28 @@ summary:focus-visible {
   color: #e6bd8c;
 }
 
+.brand-logo-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.sidebar-logo-image {
+  width: 160px;
+  flex: 0 1 160px;
+}
+
+.mobile-brand-logo {
+  width: 118px;
+  flex: 0 1 118px;
+}
+
+.chat-brand-logo {
+  width: 100px;
+  flex: 0 1 100px;
+}
+
 .sidebar-brand .brand-copy {
   min-width: 0;
   gap: 3px;

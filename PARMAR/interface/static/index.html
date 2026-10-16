@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PARMAR | Human-Controlled AI Governance</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23100e0b'/%3E%3Ctext x='16' y='23' text-anchor='middle' font-family='Arial' font-size='21' font-weight='bold' fill='%23f1bd82'%3EP%3C/text%3E%3C/svg%3E" />
+    <link rel="icon" type="image/png" href="/static/assets/parmar-logo.png" />
     <link rel="stylesheet" href="/static/styles.css" />
     <link rel="stylesheet" href="/static/premium.css" />
   </head>
@@ -12,11 +12,7 @@
     <div class="app-shell">
       <aside class="sidebar" id="sidebar" aria-label="PARMAR workspace" aria-hidden="true" inert tabindex="-1">
         <a class="brand-block sidebar-brand" href="#section-home" data-section="home" data-nav-key="home" aria-label="PARMAR home">
-          <span class="brand-mark" aria-hidden="true"><span>P</span></span>
-          <span class="brand-copy">
-            <span class="brand-title">PARMAR</span>
-            <span class="brand-subtitle">Human-guided intelligence</span>
-          </span>
+          <img class="brand-logo-image sidebar-logo-image" src="/static/assets/parmar-logo.png" alt="" />
         </a>
         <button class="panel-close sidebar-close" id="sidebar-close" type="button" aria-label="Close navigation" title="Close navigation">×</button>
 
@@ -60,7 +56,7 @@
         <header class="topbar">
           <div class="topbar-left">
             <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar" title="Toggle sidebar"><span></span><span></span></button>
-            <div class="mobile-brand"><span class="brand-title">PARMAR</span><span class="brand-subtitle">Governance interface</span></div>
+            <div class="mobile-brand"><img class="brand-logo-image mobile-brand-logo" src="/static/assets/parmar-logo.png" alt="PARMAR, Safer AI. Brighter Future." /></div>
             <div class="breadcrumb"><span>PARMAR</span><span class="breadcrumb-divider">/</span><span id="view-title">Home</span></div>
           </div>
           <form class="global-search" id="global-search" role="search">
@@ -355,7 +351,7 @@
                 <ul class="history-list chat-history-list" id="chat-history-list" aria-label="Saved conversations"></ul>
               </aside>
               <div class="chat-main">
-                <div class="conversation-topline"><span class="presence-small" aria-hidden="true">P</span><span>PARMAR</span><span class="conversation-divider"></span><span id="chat-mode-label">Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
+                <div class="conversation-topline"><img class="brand-logo-image chat-brand-logo" src="/static/assets/parmar-logo.png" alt="PARMAR" /><span class="conversation-divider"></span><span id="chat-mode-label">Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
                 <div class="auth-control-row" aria-label="Authentication session controls">
                   <span id="auth-state-label" class="auth-state-label" aria-live="polite">Anonymous / Local Demo</span>
                   <span id="development-auth-note" class="development-auth-note" hidden>Development only — NOT identity verification.</span>
