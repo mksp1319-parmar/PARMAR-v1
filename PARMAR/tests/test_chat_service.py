@@ -397,6 +397,7 @@ def test_chat_context_contains_only_currently_available_fields():
         "approval_state",
         "required_permissions",
         "enforcement_result",
+        "images",
     }
 
 

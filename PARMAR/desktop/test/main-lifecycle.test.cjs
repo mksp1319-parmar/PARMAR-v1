@@ -16,6 +16,8 @@ class MockWebContents extends EventEmitter {
     this.calls = [];
     this.destroyed = false;
     this.windowOpenHandler = null;
+    this.canGoBackValue = true;
+    this.canGoForwardValue = true;
   }
 
   setWindowOpenHandler(handler) {
@@ -35,15 +37,15 @@ class MockWebContents extends EventEmitter {
   }
 
   canGoBack() {
-    return true;
+    return this.canGoBackValue;
   }
 
   canGoForward() {
-    return true;
+    return this.canGoForwardValue;
   }
 
   isLoading() {
-    return false;
+    return this.loading || false;
   }
 
   getZoomFactor() {
@@ -100,6 +102,7 @@ class MockBrowserWindow extends EventEmitter {
   static windows = [];
   static failControlLoad = false;
   static failBrowserLoad = false;
+  static browserLoadGate = null;
 
   constructor(options) {
     super();
@@ -141,6 +144,7 @@ class MockBrowserWindow extends EventEmitter {
     if (MockBrowserWindow.failBrowserLoad) {
       return Promise.reject(new Error('Browser chrome failed to load'));
     }
+    if (MockBrowserWindow.browserLoadGate) return MockBrowserWindow.browserLoadGate;
     return Promise.resolve();
   }
 
@@ -226,6 +230,7 @@ async function launchMainForTest({
   MockBrowserWindow.windows = [];
   MockBrowserWindow.failControlLoad = backendUnavailable;
   MockBrowserWindow.failBrowserLoad = browserLoadFailure;
+  MockBrowserWindow.browserLoadGate = null;
   const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'parmar-aether-main-'));
   const {
     electron,
@@ -238,11 +243,16 @@ async function launchMainForTest({
   vm.runInNewContext(source, {
     __dirname: path.dirname(mainPath),
     console,
-    process,
     require: (name) => {
       if (name === 'electron') return electron;
       if (name.startsWith('.')) return require(path.resolve(path.dirname(mainPath), name));
       return require(name);
+    },
+    process: {
+      platform: 'darwin',
+      argv: [],
+      execPath: process.execPath,
+      env: process.env,
     },
     setImmediate,
     URL,
@@ -254,6 +264,7 @@ async function launchMainForTest({
     browserSession,
     cleanup: () => {
       MockBrowserWindow.failBrowserLoad = false;
+      MockBrowserWindow.browserLoadGate = null;
       fs.rmSync(userDataPath, { recursive: true, force: true });
     },
     handlers,
@@ -285,6 +296,8 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   const opened = await handlers.get('parmar-aether:open')(controlEvent);
   assert.equal(opened.ok, true);
   const browserWindow = MockBrowserWindow.windows[1];
+  assert.equal(browserWindow.options.minWidth, 360);
+  assert.equal(browserWindow.options.minHeight, 480);
   assert.equal(
     browserWindow.webContents.windowOpenHandler({ url: 'mailto:user@example.com' }).action,
     'deny',
@@ -318,12 +331,25 @@ test('tab lifecycle detaches only the active view and routes navigation controls
     (decision) => { requestDecision = decision; },
   );
   assert.equal(requestDecision.cancel, true);
+  for (const url of [
+    'http://127.0.0.1:8080/',
+    'https://example.com/',
+    'ws://127.0.0.1:8080/socket',
+    'wss://example.com/socket',
+  ]) {
+    browserSession.requestPolicy.listener({ url }, (decision) => { requestDecision = decision; });
+    assert.equal(requestDecision.cancel, true, url);
+  }
 
   const getState = () => browserWindow.webContents.sent
     .filter((entry) => entry.channel === 'aether:state')
     .at(-1).payload;
   const originalTabId = getState().activeTabId;
   const initialView = [...browserWindow.contentView.children][0];
+  const navigationErrorCount = browserWindow.webContents.sent
+    .filter((entry) => entry.channel === 'aether:navigation-error').length;
+  initialView.webContents.canGoBackValue = false;
+  initialView.webContents.canGoForwardValue = true;
   assert.equal(initialView.bounds.y, 184);
   assert.equal(initialView.options.webPreferences.contextIsolation, true);
   assert.equal(initialView.options.webPreferences.nodeIntegration, false);
@@ -347,17 +373,161 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   const rejectedWebRedirect = { prevented: false, preventDefault() { this.prevented = true; } };
   initialView.webContents.emit('will-redirect', rejectedWebRedirect, 'https://redirect.example/');
   assert.equal(rejectedWebRedirect.prevented, true);
+  assert.equal(
+    browserWindow.webContents.sent.filter((entry) => entry.channel === 'aether:navigation-error').length,
+    navigationErrorCount,
+  );
+  assert.match(
+    getState().tabs.find((tab) => tab.id === originalTabId).error,
+    /no verified operating-system network boundary/,
+  );
 
   await handlers.get('aether:create-tab')(browserEvent);
   const secondTabId = getState().activeTabId;
   assert.notEqual(secondTabId, originalTabId);
   assert.equal(browserWindow.contentView.children.size, 1);
-  const blockedNavigation = await handlers.get('aether:navigate')(browserEvent, 'https://example.com');
+  const secondView = [...browserWindow.contentView.children][0];
+  let inactiveDownloadPrevented = false;
+  browserSession.emit('will-download', {
+    preventDefault() { inactiveDownloadPrevented = true; },
+  }, {}, initialView.webContents);
+  assert.equal(inactiveDownloadPrevented, true);
+  assert.equal(getState().activeTabId, secondTabId);
+  assert.match(
+    getState().tabs.find((tab) => tab.id === originalTabId).error,
+    /Downloads are disabled while remote browsing is restricted/,
+  );
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).error, null);
+  secondView.webContents.canGoBackValue = true;
+  secondView.webContents.canGoForwardValue = false;
+  secondView.webContents.emit('did-stop-loading');
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).canGoBack, true);
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).canGoForward, false);
+  secondView.webContents.loading = true;
+  secondView.webContents.emit('did-start-loading');
+  secondView.webContents.emit(
+    'did-redirect-navigation',
+    {},
+    'https://redirect.example/path',
+    false,
+    true,
+  );
+  let secondTabState = getState().tabs.find((tab) => tab.id === secondTabId);
+  assert.equal(secondTabState.url, 'https://redirect.example/path');
+  assert.equal(secondTabState.isLoading, true);
+  secondView.webContents.emit('did-navigate', {}, 'https://final.example/path');
+  secondTabState = getState().tabs.find((tab) => tab.id === secondTabId);
+  assert.equal(secondTabState.url, 'https://final.example/path');
+  assert.equal(secondTabState.title, 'final.example');
+  secondView.webContents.emit('page-title-updated', {}, 'Final page title');
+  secondView.webContents.canGoBackValue = true;
+  secondView.webContents.canGoForwardValue = true;
+  secondView.webContents.emit(
+    'did-navigate-in-page',
+    {},
+    'https://final.example/path#section',
+    true,
+  );
+  secondTabState = getState().tabs.find((tab) => tab.id === secondTabId);
+  assert.equal(secondTabState.url, 'https://final.example/path#section');
+  assert.equal(secondTabState.title, 'Final page title');
+  assert.equal(secondTabState.canGoBack, true);
+  assert.equal(secondTabState.canGoForward, true);
+  secondView.webContents.emit(
+    'did-navigate-in-page',
+    {},
+    'https://ignored.example/frame',
+    false,
+  );
+  secondView.webContents.emit(
+    'did-navigate-in-page',
+    {},
+    'javascript:alert(1)',
+    true,
+  );
+  assert.equal(
+    getState().tabs.find((tab) => tab.id === secondTabId).url,
+    'https://final.example/path#section',
+  );
+  secondView.webContents.emit(
+    'did-navigate',
+    {},
+    `https://example.com/${'x'.repeat(2049)}`,
+  );
+  assert.equal(
+    getState().tabs.find((tab) => tab.id === secondTabId).url,
+    'https://final.example/path#section',
+  );
+  assert.equal(
+    getState().stored.history.some((record) => record.url === 'https://final.example/path#section'),
+    false,
+  );
+  initialView.webContents.emit('did-navigate', {}, 'https://inactive.example/page');
+  initialView.webContents.emit('page-title-updated', {}, 'Inactive tab title');
+  initialView.webContents.emit('did-fail-load', {}, -2, 'ERR_NAME_NOT_RESOLVED', 'https://inactive.example/page', true);
+  const stateAfterInactiveNavigation = getState();
+  assert.equal(stateAfterInactiveNavigation.activeTabId, secondTabId);
+  assert.equal(stateAfterInactiveNavigation.tabs.find((tab) => tab.id === originalTabId).url, 'https://inactive.example/page');
+  assert.equal(stateAfterInactiveNavigation.tabs.find((tab) => tab.id === originalTabId).title, 'Inactive tab title');
+  assert.equal(stateAfterInactiveNavigation.tabs.find((tab) => tab.id === secondTabId).url, 'https://final.example/path#section');
+  assert.equal(stateAfterInactiveNavigation.tabs.find((tab) => tab.id === secondTabId).title, 'Final page title');
+  assert.equal(
+    stateAfterInactiveNavigation.tabs.find((tab) => tab.id === originalTabId).error,
+    'Navigation failed: ERR_NAME_NOT_RESOLVED',
+  );
+  assert.equal(
+    browserWindow.webContents.sent.filter((entry) => entry.channel === 'aether:navigation-error').length,
+    navigationErrorCount,
+  );
+  const staleNavigation = await handlers.get('aether:navigate')(
+    browserEvent,
+    'https://example.com',
+    originalTabId,
+  );
+  assert.equal(staleNavigation.ok, false);
+  assert.equal(staleNavigation.error, 'The active tab changed. Try again.');
+  const blockedNavigation = await handlers.get('aether:navigate')(
+    browserEvent,
+    'https://example.com',
+    secondTabId,
+  );
   assert.equal(blockedNavigation.ok, false);
   assert.match(blockedNavigation.error, /no verified operating-system network boundary/);
   assert.equal([...browserWindow.contentView.children][0].webContents.calls.length, 0);
+  const invalidNavigation = await handlers.get('aether:navigate')(
+    browserEvent,
+    'javascript:alert(1)',
+    secondTabId,
+  );
+  assert.equal(invalidNavigation.ok, false);
+  assert.match(invalidNavigation.error, /Only HTTPS web addresses are permitted/);
+  assert.equal([...browserWindow.contentView.children][0].webContents.calls.length, 0);
 
-  const secondView = [...browserWindow.contentView.children][0];
+  secondView.webContents.loading = true;
+  secondView.webContents.emit('did-start-loading');
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).isLoading, true);
+  secondView.webContents.loading = false;
+  secondView.webContents.emit('did-stop-loading');
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).isLoading, false);
+  secondView.webContents.emit('did-fail-load', {}, -2, 'ERR_NAME_NOT_RESOLVED', 'https://example.com/', true);
+  assert.equal(
+    getState().tabs.find((tab) => tab.id === secondTabId).error,
+    'Navigation failed: ERR_NAME_NOT_RESOLVED',
+  );
+  secondView.webContents.loading = true;
+  secondView.webContents.emit('did-start-loading');
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).error, null);
+  secondView.webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+  assert.match(
+    getState().tabs.find((tab) => tab.id === secondTabId).error,
+    /Browser renderer stopped \(crashed\)/,
+  );
+  const retry = await handlers.get('aether:reload')(browserEvent, secondTabId);
+  assert.equal(retry.ok, true);
+  secondView.webContents.emit('did-start-loading');
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).error, null);
+  secondView.webContents.loading = false;
+  secondView.webContents.emit('did-stop-loading');
   let shortcutPrevented = false;
   secondView.webContents.emit('before-input-event', {
     preventDefault() { shortcutPrevented = true; },
@@ -387,6 +557,30 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.equal(browserWindow.webContents.sent.at(-1).channel, 'aether:focus-address');
 
   await handlers.get('aether:activate-tab')(browserEvent, secondTabId);
+  await handlers.get('aether:activate-tab')(browserEvent, originalTabId);
+  assert.equal(getState().tabs.find((tab) => tab.id === originalTabId).canGoBack, false);
+  assert.equal(getState().tabs.find((tab) => tab.id === originalTabId).canGoForward, true);
+  const staleBack = await handlers.get('aether:back')(browserEvent, secondTabId);
+  const originalView = [...browserWindow.contentView.children][0];
+  assert.equal(staleBack.ok, false);
+  assert.equal(staleBack.error, 'The active tab changed. Try again.');
+  assert.deepEqual(originalView.webContents.calls, []);
+
+  secondView.webContents.canGoForwardValue = false;
+  secondView.webContents.emit('did-stop-loading');
+  await handlers.get('aether:activate-tab')(browserEvent, secondTabId);
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).canGoBack, true);
+  assert.equal(getState().tabs.find((tab) => tab.id === secondTabId).canGoForward, false);
+  for (const channel of ['aether:reload', 'aether:stop', 'aether:zoom']) {
+    const result = await handlers.get(channel)(
+      browserEvent,
+      ...(channel === 'aether:zoom' ? [1.2, originalTabId] : [originalTabId]),
+    );
+    assert.equal(result.ok, false, `${channel} should reject the stale tab ID`);
+    assert.equal(result.error, 'The active tab changed. Try again.');
+  }
+  secondView.webContents.canGoForwardValue = true;
+  secondView.webContents.emit('did-stop-loading');
   [...browserWindow.contentView.children][0].webContents.emit('before-input-event', {
     preventDefault() {},
   }, { type: 'keyDown', key: '+', control: true });
@@ -395,13 +589,34 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.deepEqual(Array.from(getState().tabs, (tab) => tab.id), [secondTabId]);
   assert.equal(browserWindow.contentView.children.size, 1);
 
-  for (const channel of ['aether:back', 'aether:forward', 'aether:reload', 'aether:stop']) {
-    const result = await handlers.get(channel)(browserEvent);
+  for (const channel of ['aether:back', 'aether:forward']) {
+    const result = await handlers.get(channel)(browserEvent, secondTabId);
     assert.equal(result.ok, true);
   }
   const activeView = [...browserWindow.contentView.children][0];
+  activeView.webContents.loading = true;
+  for (const channel of ['aether:reload', 'aether:stop']) {
+    const result = await handlers.get(channel)(browserEvent, secondTabId);
+    assert.equal(result.ok, true);
+  }
+  const zoomed = await handlers.get('aether:zoom')(browserEvent, 1.2, secondTabId);
+  assert.equal(zoomed.ok, true);
+  const closedTabReload = await handlers.get('aether:reload')(browserEvent, originalTabId);
+  assert.equal(closedTabReload.ok, false);
+  assert.equal(closedTabReload.error, 'The active tab changed. Try again.');
   assert.deepEqual(activeView.webContents.calls, [
-    ['zoom', 1.1], ['back'], ['forward'], ['reload'], ['stop'],
+    ['reload'], ['zoom', 1.1], ['back'], ['forward'], ['reload'], ['stop'], ['zoom', 1.2],
+  ]);
+  activeView.webContents.canGoBackValue = false;
+  activeView.webContents.canGoForwardValue = false;
+  const unavailableBack = await handlers.get('aether:back')(browserEvent, secondTabId);
+  const unavailableForward = await handlers.get('aether:forward')(browserEvent, secondTabId);
+  assert.equal(unavailableBack.ok, false);
+  assert.equal(unavailableBack.error, 'There is no previous page in this tab.');
+  assert.equal(unavailableForward.ok, false);
+  assert.equal(unavailableForward.error, 'There is no next page in this tab.');
+  assert.deepEqual(activeView.webContents.calls, [
+    ['reload'], ['zoom', 1.1], ['back'], ['forward'], ['reload'], ['stop'], ['zoom', 1.2],
   ]);
 
   const closeActive = await handlers.get('aether:close-tab')(browserEvent, secondTabId);
@@ -409,12 +624,60 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.equal(getState().tabs.length, 1);
   assert.notEqual(getState().activeTabId, secondTabId);
   assert.equal(browserWindow.contentView.children.size, 1);
+  const closedTabBack = await handlers.get('aether:back')(browserEvent, secondTabId);
+  assert.equal(closedTabBack.ok, false);
+  assert.equal(closedTabBack.error, 'The active tab changed. Try again.');
+  activeView.webContents.emit('did-navigate', {}, 'https://late.example/after-close');
+  activeView.webContents.emit('page-title-updated', {}, 'Late closed-tab event');
+  const remainingTab = getState().tabs[0];
+  assert.equal(remainingTab.active, true);
+  assert.equal(remainingTab.canGoBack, true);
+  assert.equal(remainingTab.canGoForward, true);
+  assert.equal(getState().tabs.some((tab) => tab.id === secondTabId), false);
+  assert.equal(remainingTab.url, '');
+  assert.equal(remainingTab.title, 'New Tab');
 
   browserWindow.close();
   const reopened = await handlers.get('parmar-aether:open')(controlEvent);
   assert.equal(reopened.ok, true);
   assert.equal(browserSession.listenerCount('will-download'), 1);
   assert.equal(browserSession.requestPolicyRegistrations, 1);
+});
+
+test('concurrent AETHER open requests wait for the same browser startup', async (context) => {
+  const { cleanup, handlers } = await launchMainForTest();
+  context.after(cleanup);
+
+  const controlWindow = MockBrowserWindow.windows[0];
+  const controlEvent = {
+    sender: controlWindow.webContents,
+    senderFrame: { isMainFrame: true, url: 'http://127.0.0.1:8080/' },
+  };
+  let finishBrowserLoad;
+  MockBrowserWindow.browserLoadGate = new Promise((resolve) => {
+    finishBrowserLoad = resolve;
+  });
+
+  const firstOpen = handlers.get('parmar-aether:open')(controlEvent);
+  const secondOpen = handlers.get('parmar-aether:open')(controlEvent);
+  let secondSettled = false;
+  secondOpen.then(() => { secondSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(MockBrowserWindow.windows.length, 2);
+  assert.equal(secondSettled, false);
+
+  finishBrowserLoad();
+  const results = await Promise.all([firstOpen, secondOpen]);
+  assert.equal(results[0].ok, true);
+  assert.equal(results[1].ok, true);
+  assert.equal(MockBrowserWindow.windows.length, 2);
+  const browserWindow = MockBrowserWindow.windows[1];
+  const state = browserWindow.webContents.sent
+    .filter((entry) => entry.channel === 'aether:state')
+    .at(-1).payload;
+  assert.equal(state.tabs.length, 1);
+  assert.equal(state.remoteBrowsing, false);
 });
 
 test('duplicate Electron launches quit without registering handlers or opening windows', async (context) => {

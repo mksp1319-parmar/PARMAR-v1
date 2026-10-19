@@ -27,13 +27,23 @@ contextBridge.exposeInMainWorld('aetherDesktop', Object.freeze({
   createTab: () => invoke('aether:create-tab'),
   activateTab: (id) => validTabId(id) ? invoke('aether:activate-tab', id) : Promise.resolve({ ok: false, error: 'Invalid tab.' }),
   closeTab: (id) => validTabId(id) ? invoke('aether:close-tab', id) : Promise.resolve({ ok: false, error: 'Invalid tab.' }),
-  navigate: (value) => typeof value === 'string' && value.length <= MAX_ADDRESS_LENGTH
-    ? invoke('aether:navigate', value)
-    : Promise.resolve({ ok: false, error: 'The address is invalid or too long.' }),
-  back: () => invoke('aether:back'),
-  forward: () => invoke('aether:forward'),
-  reload: () => invoke('aether:reload'),
-  stop: () => invoke('aether:stop'),
+  navigate: (value, id) => typeof value === 'string'
+    && value.length <= MAX_ADDRESS_LENGTH
+    && validTabId(id)
+    ? invoke('aether:navigate', value, id)
+    : Promise.resolve({ ok: false, error: 'The address or active tab is invalid.' }),
+  back: (id) => validTabId(id)
+    ? invoke('aether:back', id)
+    : Promise.resolve({ ok: false, error: 'The active tab changed. Try again.' }),
+  forward: (id) => validTabId(id)
+    ? invoke('aether:forward', id)
+    : Promise.resolve({ ok: false, error: 'The active tab changed. Try again.' }),
+  reload: (id) => validTabId(id)
+    ? invoke('aether:reload', id)
+    : Promise.resolve({ ok: false, error: 'The active tab changed. Try again.' }),
+  stop: (id) => validTabId(id)
+    ? invoke('aether:stop', id)
+    : Promise.resolve({ ok: false, error: 'The active tab changed. Try again.' }),
   layout: (bounds) => {
     if (
       !bounds
@@ -60,9 +70,10 @@ contextBridge.exposeInMainWorld('aetherDesktop', Object.freeze({
     ? invoke('aether:remove-bookmark', url)
     : Promise.resolve({ ok: false, error: 'Invalid bookmark.' }),
   clearHistory: () => invoke('aether:clear-history'),
-  zoom: (factor) => Number.isFinite(factor) && factor >= 0.5 && factor <= 2
-    ? invoke('aether:zoom', factor)
-    : Promise.resolve({ ok: false, error: 'Zoom must be between 50% and 200%.' }),
+  zoom: (factor, id) => Number.isFinite(factor) && factor >= 0.5 && factor <= 2
+    && validTabId(id)
+    ? invoke('aether:zoom', factor, id)
+    : Promise.resolve({ ok: false, error: 'Zoom or active tab is invalid.' }),
   onState: (callback) => subscribe('aether:state', callback),
   onNavigationError: (callback) => subscribe('aether:navigation-error', callback),
   onFocusAddress: (callback) => subscribe('aether:focus-address', callback),

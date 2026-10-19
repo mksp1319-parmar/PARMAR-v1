@@ -1,0 +1,420 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="3240" viewBox="0 0 1680 3240" role="img" aria-labelledby="title description">
+  <title id="title">PARMAR mobile experience reference collection</title>
+  <desc id="description">Ten mobile screen design references for existing PARMAR features. The canonical VOKKI portrait is used from the approved project asset. The original PARMAR knot-and-wordmark crops come directly from Logo.jpg.</desc>
+  <defs>
+    <linearGradient id="canvas" x2="0" y2="1">
+      <stop stop-color="#111313"/>
+      <stop offset="1" stop-color="#08090a"/>
+    </linearGradient>
+    <linearGradient id="phone" x2="0" y2="1">
+      <stop stop-color="#343331"/>
+      <stop offset=".5" stop-color="#111314"/>
+      <stop offset="1" stop-color="#272522"/>
+    </linearGradient>
+    <linearGradient id="gold" x2="1" y2="1">
+      <stop stop-color="#e1bd8b"/>
+      <stop offset="1" stop-color="#b77c45"/>
+    </linearGradient>
+    <linearGradient id="panel" x2="0" y2="1">
+      <stop stop-color="#1a1c1d"/>
+      <stop offset="1" stop-color="#111314"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#c4935f" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#c4935f" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="screen-clip"><rect x="12" y="12" width="366" height="696" rx="29"/></clipPath>
+    <clipPath id="home-voki-clip"><rect x="55" y="273" width="85" height="130" rx="12"/></clipPath>
+    <clipPath id="voki-portrait-clip"><circle cx="195" cy="291" r="76"/></clipPath>
+    <symbol id="phone-shell" viewBox="0 0 390 720">
+      <rect width="390" height="720" rx="42" fill="url(#phone)" stroke="#56534d" stroke-width="1.5"/>
+      <rect x="7" y="7" width="376" height="706" rx="36" fill="#030405"/>
+      <rect x="12" y="12" width="366" height="696" rx="29" fill="#0b0d0e"/>
+      <g clip-path="url(#screen-clip)">
+        <rect x="12" y="12" width="366" height="696" fill="#0b0d0e"/>
+        <ellipse cx="286" cy="160" rx="210" ry="170" fill="url(#glow)"/>
+        <text x="34" y="39" class="tiny">9:41</text>
+        <rect x="158" y="19" width="74" height="17" rx="9" fill="#030405"/>
+        <circle cx="337" cy="32" r="3" fill="#81ad8b"/>
+        <path d="M347 34h13m-9-4v4m20-3h6v6h-6z" fill="none" stroke="#b7b2a8" stroke-width="1.4"/>
+        <path d="M26 52h338" stroke="#2b2c2b"/>
+        <text x="31" y="78" class="brand">PARMAR</text>
+        <text x="280" y="77" class="tiny">Human-led</text>
+        <path d="M26 92h338" stroke="#292a29"/>
+        <path d="M36 668h318" stroke="#343332"/>
+        <rect x="146" y="687" width="98" height="4" rx="2" fill="#efede7"/>
+      </g>
+    </symbol>
+    <style>
+      text{font-family:Inter,"Segoe UI",Arial,sans-serif;fill:#e9e5dc}
+      .title{font-size:34px;letter-spacing:5px;font-weight:500}
+      .subtitle{font-size:14px;letter-spacing:1px;fill:#aaa69d}
+      .label{font-size:14px;letter-spacing:2px;fill:#d1ad7b;font-weight:600}
+      .brand{font-size:15px;letter-spacing:4px;fill:#e4d5bd}
+      .tiny{font-size:8px;fill:#aaa69d}
+      .section{font-size:9px;letter-spacing:1.6px;fill:#c49c6b}
+      .heading{font-size:20px;font-weight:500}
+      .body{font-size:10px;fill:#c6c2ba}
+      .muted{font-size:9px;fill:#908c84}
+      .small{font-size:8px;fill:#b5b0a7}
+      .strong{font-size:11px;font-weight:600}
+      .card{fill:url(#panel);stroke:#343431;stroke-width:1}
+      .line{stroke:#2e302f;stroke-width:1}
+      .pill{fill:#211b14;stroke:#6c5033;stroke-width:1}
+      .button{fill:url(#gold)}
+      .accent{fill:#d8b788}
+      .green{fill:#92b49a}
+      .phone-shadow{filter:drop-shadow(0 18px 26px #0009)}
+    </style>
+  </defs>
+  <rect width="1680" height="3240" fill="url(#canvas)"/>
+  <circle cx="1450" cy="170" r="310" fill="url(#glow)"/>
+  <text x="54" y="67" class="title">PARMAR / MOBILE</text>
+  <text x="56" y="98" class="subtitle">A responsive companion for thoughtful, human-governed AI</text>
+  <g transform="translate(56 123)">
+    <rect width="112" height="22" rx="11" fill="#17191a" stroke="#373634"/>
+    <text x="13" y="15" class="small">OBSIDIAN</text>
+    <rect x="122" width="112" height="22" rx="11" fill="#17191a" stroke="#373634"/>
+    <text x="135" y="15" class="small">GRAPHITE</text>
+    <rect x="244" width="112" height="22" rx="11" fill="#211b14" stroke="#705536"/>
+    <text x="258" y="15" class="small">CHAMPAGNE</text>
+  </g>
+  <text x="56" y="177" class="subtitle">Reference layouts use real PARMAR destinations only. Canonical VOKKI portrait restored from the original project asset.</text>
+
+  <g transform="translate(52 206)">
+    <text x="0" y="0" class="label">01 / HOME</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="32" y="129" class="section">YOUR PARMAR WORKSPACE</text>
+        <text x="32" y="166" class="heading">A brighter future,</text>
+        <text x="32" y="192" class="heading accent">built together.</text>
+        <text x="32" y="218" class="body">Think, plan, create and review</text>
+        <text x="32" y="234" class="body">with a human always in control.</text>
+        <rect x="31" y="258" width="328" height="160" rx="16" fill="#121414" stroke="#4e4030"/>
+        <ellipse cx="194" cy="329" rx="110" ry="78" fill="url(#glow)"/>
+        <image x="55" y="273" width="85" height="130" href="../assets/voki/default-avatar.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#home-voki-clip)" aria-label="Canonical VOKKI portrait"/>
+        <text x="157" y="316" class="strong">VOKKI</text>
+        <text x="157" y="339" class="small">Connected to the</text>
+        <text x="157" y="355" class="small">PARMAR conversation</text>
+        <text x="157" y="378" class="tiny">Human authority retained</text>
+        <rect x="31" y="433" width="328" height="49" rx="14" class="button"/>
+        <text x="195" y="463" fill="#17130e" class="strong" text-anchor="middle">Start a new conversation</text>
+        <text x="32" y="514" class="section">QUICK ACCESS</text>
+        <rect x="31" y="528" width="155" height="44" rx="11" class="card"/>
+        <text x="45" y="548" class="strong">Research</text><text x="45" y="562" class="small">Provider dependent</text>
+        <rect x="197" y="528" width="162" height="44" rx="11" class="card"/>
+        <text x="211" y="548" class="strong">Safety review</text><text x="211" y="562" class="small">Human authority retained</text>
+        <text x="32" y="602" class="section">RECENT ACTIVITY</text>
+        <text x="32" y="624" class="small">Your saved conversations appear here.</text>
+        <path d="M12 625h366" stroke="#2b2c2b"/>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(645 206)">
+    <text x="0" y="0" class="label">02 / AI CHAT</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">CONVERSATION</text>
+        <text x="31" y="153" class="heading">Chat</text>
+        <text x="31" y="176" class="muted">PARMAR reviews every request before release.</text>
+        <rect x="32" y="210" width="238" height="61" rx="14" fill="#211d18" stroke="#4a3b2b"/>
+        <text x="47" y="235" class="body">What would you like to</text><text x="47" y="251" class="body">think through today?</text>
+        <rect x="32" y="291" width="310" height="140" rx="14" class="card"/>
+        <text x="48" y="318" class="section">PARMAR RESPONSE</text>
+        <text x="48" y="345" class="body">Responses appear here after</text>
+        <text x="48" y="362" class="body">the existing safety pipeline</text>
+        <text x="48" y="379" class="body">completes its review.</text>
+        <text x="48" y="409" class="small">Copy · Regenerate · Review details</text>
+        <rect x="32" y="474" width="310" height="52" rx="15" fill="#121516" stroke="#5c4933"/>
+        <text x="49" y="505" class="muted">Type a message...</text>
+        <circle cx="319" cy="500" r="16" class="button"/>
+        <text x="319" y="504" fill="#17130e" class="strong" text-anchor="middle">↗</text>
+        <rect x="32" y="539" width="94" height="31" rx="10" class="pill"/>
+        <text x="49" y="559" class="small">Research</text>
+        <text x="32" y="604" class="small">Searchable history remains one tap away.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(1238 206)">
+    <text x="0" y="0" class="label">03 / VOKKI</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">PARMAR / PRIVATE SESSION</text>
+        <text x="31" y="156" class="heading">VOKKI</text>
+        <rect x="31" y="181" width="328" height="242" rx="18" class="card"/>
+        <ellipse cx="195" cy="295" rx="116" ry="103" fill="url(#glow)"/>
+        <circle cx="195" cy="291" r="77" fill="#101314" stroke="#544432"/>
+        <circle cx="195" cy="291" r="59" fill="none" stroke="#776042" stroke-opacity=".48"/>
+        <image x="119" y="215" width="152" height="152" href="../assets/voki/default-avatar.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#voki-portrait-clip)" aria-label="Canonical VOKKI portrait"/>
+        <text x="195" y="390" class="section" text-anchor="middle">PARMAR / VOKKI</text>
+        <text x="195" y="410" class="tiny" text-anchor="middle">LIFECYCLE / UNKNOWN</text>
+        <text x="31" y="454" class="small">Connected to the existing PARMAR chat flow.</text>
+        <rect x="31" y="478" width="100" height="40" rx="12" class="pill"/>
+        <text x="81" y="503" class="strong" text-anchor="middle">Talk*</text>
+        <rect x="141" y="478" width="218" height="40" rx="12" class="card"/>
+        <text x="154" y="495" class="small">Read released responses aloud</text>
+        <text x="154" y="508" class="tiny">Browser support dependent</text>
+        <rect x="31" y="533" width="328" height="61" rx="13" fill="#121516" stroke="#363431"/>
+        <text x="47" y="557" class="small">Voice input uses on-device recognition</text>
+        <text x="47" y="574" class="small">only when supported; no cloud fallback.</text>
+        <text x="32" y="626" class="tiny">* Enabled only when browser support is verified.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(52 956)">
+    <text x="0" y="0" class="label">04 / TOOLS &amp; PLUGINS</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">PARMAR CAPABILITIES</text>
+        <text x="31" y="157" class="heading">Tools</text>
+        <text x="31" y="180" class="muted">Available experiences, clearly distinguished.</text>
+        <rect x="31" y="204" width="328" height="74" rx="14" class="card"/>
+        <circle cx="61" cy="240" r="17" fill="#271f15" stroke="#745738"/>
+        <text x="91" y="236" class="strong">PARMAR review</text><text x="91" y="254" class="small">Risk, safety and approvals</text>
+        <rect x="31" y="289" width="328" height="74" rx="14" class="card"/>
+        <circle cx="61" cy="325" r="17" fill="#271f15" stroke="#745738"/>
+        <text x="91" y="321" class="strong">Research</text><text x="91" y="339" class="small">Search provider when configured</text>
+        <rect x="31" y="374" width="328" height="74" rx="14" class="card"/>
+        <circle cx="61" cy="410" r="17" fill="#271f15" stroke="#745738"/>
+        <text x="91" y="406" class="strong">Memory</text><text x="91" y="424" class="small">User-managed, consent based</text>
+        <rect x="31" y="459" width="328" height="74" rx="14" class="card"/>
+        <circle cx="61" cy="495" r="17" fill="#271f15" stroke="#745738"/>
+        <text x="91" y="491" class="strong">Simulation</text><text x="91" y="509" class="small">Synthetic scenarios only</text>
+        <rect x="31" y="549" width="328" height="66" rx="13" fill="#171414" stroke="#51403a"/>
+        <text x="47" y="574" class="small">Files, image generation and executable</text>
+        <text x="47" y="590" class="small">plugins are not connected in this build.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(645 956)">
+    <text x="0" y="0" class="label">05 / RESEARCH</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">VALIDATED SOURCES</text>
+        <text x="31" y="157" class="heading">Research</text>
+        <rect x="31" y="179" width="328" height="44" rx="12" class="card"/>
+        <circle cx="50" cy="201" r="7" fill="none" stroke="#c2a070"/>
+        <path d="m55 206 6 6" stroke="#c2a070"/>
+        <text x="70" y="205" class="small">Search saved research...</text>
+        <text x="31" y="254" class="body">Review sources returned in loaded</text>
+        <text x="31" y="271" class="body">PARMAR conversations.</text>
+        <rect x="31" y="296" width="328" height="186" rx="15" class="card"/>
+        <circle cx="195" cy="349" r="26" fill="#1d1a15" stroke="#5f4a31"/>
+        <path d="M195 334v30m-15-15h30" stroke="#c3a071" stroke-width="1.4"/>
+        <text x="195" y="403" class="strong" text-anchor="middle">No saved research yet</text>
+        <text x="195" y="424" class="small" text-anchor="middle">Start a request in Chat with Research</text>
+        <text x="195" y="440" class="small" text-anchor="middle">enabled and a provider configured.</text>
+        <rect x="31" y="505" width="328" height="48" rx="13" class="button"/>
+        <text x="195" y="535" class="strong" fill="#17130e" text-anchor="middle">Open Chat</text>
+        <text x="31" y="590" class="small">No search runs until you request it.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(1238 956)">
+    <text x="0" y="0" class="label">06 / CHAT HISTORY</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">YOUR CONVERSATIONS</text>
+        <text x="31" y="157" class="heading">History</text>
+        <rect x="31" y="179" width="328" height="44" rx="12" class="card"/>
+        <circle cx="50" cy="201" r="7" fill="none" stroke="#c2a070"/>
+        <path d="m55 206 6 6" stroke="#c2a070"/>
+        <text x="70" y="205" class="small">Search loaded conversations</text>
+        <text x="31" y="254" class="section">RECENT</text>
+        <rect x="31" y="272" width="328" height="58" rx="12" class="card"/>
+        <text x="47" y="296" class="strong">Conversation titles</text>
+        <text x="47" y="314" class="small">Open a saved conversation to continue</text>
+        <rect x="31" y="340" width="328" height="58" rx="12" class="card"/>
+        <text x="47" y="364" class="strong">Stored research results</text>
+        <text x="47" y="382" class="small">Search only records available in this session</text>
+        <rect x="31" y="422" width="328" height="132" rx="15" fill="#121415" stroke="#343431"/>
+        <text x="195" y="470" class="strong" text-anchor="middle">History stays yours</text>
+        <text x="195" y="492" class="small" text-anchor="middle">Empty, loading and error states explain</text>
+        <text x="195" y="509" class="small" text-anchor="middle">when records cannot be loaded.</text>
+        <text x="31" y="592" class="small">Local demo and authenticated records stay separate.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(52 1706)">
+    <text x="0" y="0" class="label">07 / SAFETY REVIEW</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">EVIDENCE BEFORE OUTCOME</text>
+        <text x="31" y="157" class="heading">Safety review</text>
+        <text x="31" y="181" class="small">Backend-reported stages only.</text>
+        <rect x="31" y="205" width="328" height="111" rx="14" class="card"/>
+        <text x="47" y="231" class="section">PIPELINE</text>
+        <circle cx="57" cy="264" r="6" fill="#77736c"/>
+        <circle cx="110" cy="264" r="6" fill="#77736c"/>
+        <circle cx="163" cy="264" r="6" fill="#77736c"/>
+        <circle cx="216" cy="264" r="6" fill="#77736c"/>
+        <circle cx="269" cy="264" r="6" fill="#77736c"/>
+        <text x="47" y="293" class="small">Not assessed until a request is reviewed.</text>
+        <rect x="31" y="332" width="328" height="123" rx="14" class="card"/>
+        <text x="47" y="359" class="section">RISK ASSESSMENT</text>
+        <text x="47" y="388" class="strong">No risk assessment available</text>
+        <text x="47" y="410" class="small">Missing evidence is shown as unavailable,</text>
+        <text x="47" y="427" class="small">never as an invented low-risk result.</text>
+        <rect x="31" y="473" width="328" height="119" rx="14" class="card"/>
+        <text x="47" y="500" class="section">REASONING</text>
+        <text x="47" y="530" class="small">Decision context appears after PARMAR</text>
+        <text x="47" y="547" class="small">reports it. Human decisions stay separate.</text>
+        <text x="31" y="625" class="small">No proposal is approved automatically.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(645 1706)">
+    <text x="0" y="0" class="label">08 / HUMAN APPROVALS</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">HUMAN AUTHORITY</text>
+        <text x="31" y="157" class="heading">Approvals</text>
+        <rect x="31" y="188" width="328" height="81" rx="14" fill="#171512" stroke="#6a5134"/>
+        <circle cx="60" cy="228" r="15" fill="#261f16" stroke="#775b38"/>
+        <path d="M60 219v18m-9-9h18" stroke="#d1a56e"/>
+        <text x="87" y="222" class="strong">Your decision remains yours.</text>
+        <text x="87" y="241" class="small">No action proceeds without your decision.</text>
+        <rect x="31" y="287" width="328" height="177" rx="15" class="card"/>
+        <text x="47" y="318" class="section">PENDING DECISION</text>
+        <text x="195" y="373" class="strong" text-anchor="middle">No decision is pending</text>
+        <text x="195" y="397" class="small" text-anchor="middle">A real PARMAR proposal appears here</text>
+        <text x="195" y="414" class="small" text-anchor="middle">with its review context.</text>
+        <rect x="31" y="487" width="328" height="67" rx="14" class="card"/>
+        <text x="47" y="513" class="small">Approve and Reject controls are only shown</text>
+        <text x="47" y="531" class="small">for an actual proposal requiring a decision.</text>
+        <text x="31" y="592" class="small">Approval never means execution has occurred.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(1238 1706)">
+    <text x="0" y="0" class="label">09 / PROFILE &amp; SETTINGS</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">WORKSPACE PREFERENCES</text>
+        <text x="31" y="157" class="heading">Settings</text>
+        <rect x="31" y="179" width="328" height="44" rx="12" class="card"/>
+        <text x="48" y="205" class="small">Search settings</text>
+        <rect x="31" y="241" width="328" height="50" rx="12" fill="#1a1815" stroke="#745738"/>
+        <text x="51" y="271" class="strong accent">Appearance</text>
+        <rect x="31" y="298" width="328" height="50" rx="12" class="card"/>
+        <text x="51" y="328" class="strong">Language</text>
+        <rect x="31" y="355" width="328" height="50" rx="12" class="card"/>
+        <text x="51" y="385" class="strong">Personalization</text>
+        <rect x="31" y="412" width="328" height="50" rx="12" class="card"/>
+        <text x="51" y="442" class="strong">Voice &amp; VOKKI</text>
+        <rect x="31" y="469" width="328" height="50" rx="12" class="card"/>
+        <text x="51" y="499" class="strong">Privacy &amp; safety</text>
+        <rect x="31" y="533" width="328" height="70" rx="13" fill="#141616" stroke="#333431"/>
+        <text x="48" y="559" class="small">Local preferences are saved in this browser.</text>
+        <text x="48" y="579" class="small">Voice availability depends on this device.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(52 2456)">
+    <text x="0" y="0" class="label">10 / EMPTY, LOADING &amp; ERROR STATES</text>
+    <g transform="translate(0 20)" class="phone-shadow">
+      <use href="#phone-shell"/>
+      <g clip-path="url(#screen-clip)">
+        <text x="31" y="127" class="section">SYSTEM FEEDBACK</text>
+        <text x="31" y="157" class="heading">Clear next steps</text>
+        <rect x="31" y="184" width="328" height="98" rx="14" class="card"/>
+        <circle cx="58" cy="218" r="9" fill="#c8a26e"/>
+        <text x="82" y="217" class="strong">Processing</text>
+        <text x="47" y="249" class="small">PARMAR is reviewing the request.</text>
+        <rect x="31" y="298" width="328" height="113" rx="14" fill="#181412" stroke="#69513d"/>
+        <circle cx="58" cy="333" r="9" fill="#cf9188"/>
+        <text x="82" y="332" class="strong">Request unavailable</text>
+        <text x="47" y="363" class="small">The provider did not return a response.</text>
+        <rect x="47" y="379" width="90" height="22" rx="11" class="pill"/>
+        <text x="92" y="394" class="small" text-anchor="middle">Retry</text>
+        <rect x="31" y="428" width="328" height="112" rx="14" fill="#111516" stroke="#343c39"/>
+        <circle cx="58" cy="464" r="9" fill="#91b59a"/>
+        <text x="82" y="463" class="strong">Saved</text>
+        <text x="47" y="494" class="small">Your browser preference was saved.</text>
+        <text x="31" y="579" class="small">No silent failure. No success-shaped fallback.</text>
+        <text x="31" y="606" class="tiny">Uploads and network-dependent features are not connected.</text>
+        <text x="49" y="653" class="tiny">Home</text><text x="136" y="653" class="tiny">Chat</text><text x="226" y="653" class="tiny">VOKKI</text><text x="318" y="653" class="tiny">More</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(645 2456)">
+    <text x="0" y="0" class="label">DESIGN PRINCIPLES</text>
+    <rect x="0" y="20" width="365" height="720" rx="28" fill="#101213" stroke="#393632"/>
+    <text x="30" y="73" class="section">SAME SYSTEM, MOBILE FIRST</text>
+    <text x="30" y="121" class="heading">Comfortable by</text>
+    <text x="30" y="149" class="heading accent">design.</text>
+    <path d="M30 178h305" class="line"/>
+    <text x="30" y="216" class="strong">01 / Focused navigation</text>
+    <text x="30" y="239" class="body">Home, Chat and VOKKI stay one tap away.</text>
+    <text x="30" y="257" class="body">Secondary areas live behind More.</text>
+    <text x="30" y="305" class="strong">02 / Keyboard-aware chat</text>
+    <text x="30" y="328" class="body">The composer stays in the scroll flow and</text>
+    <text x="30" y="346" class="body">responds to dynamic viewport changes.</text>
+    <text x="30" y="394" class="strong">03 / Honest availability</text>
+    <text x="30" y="417" class="body">Research depends on a configured provider.</text>
+    <text x="30" y="435" class="body">Uploads and tools are not fabricated.</text>
+    <text x="30" y="483" class="strong">04 / Accessible interaction</text>
+    <text x="30" y="506" class="body">Readable contrast, touch targets, focus rings</text>
+    <text x="30" y="524" class="body">and reduced-motion support.</text>
+    <text x="30" y="572" class="strong">05 / Brand integrity</text>
+    <text x="30" y="595" class="body">Original PARMAR logo crops come from Logo.jpg;</text>
+    <text x="30" y="613" class="body">canonical VOKKI art is restored.</text>
+    <rect x="30" y="649" width="294" height="48" rx="13" class="pill"/>
+    <text x="177" y="678" class="small" text-anchor="middle">Human authority always retained</text>
+  </g>
+
+  <g transform="translate(1238 2456)">
+    <text x="0" y="0" class="label">ASSET NOTE</text>
+    <rect x="0" y="20" width="365" height="720" rx="28" fill="#101213" stroke="#393632"/>
+    <text x="30" y="73" class="section">ORIGINAL SOURCE ARTWORK</text>
+    <text x="30" y="121" class="heading">The approved</text>
+    <text x="30" y="149" class="heading accent">identity is preserved.</text>
+    <path d="M30 178h305" class="line"/>
+    <text x="30" y="216" class="strong">PARMAR source: Logo.jpg</text>
+    <text x="30" y="241" class="body">The central metallic knot and PARMAR wordmark</text>
+    <text x="30" y="259" class="body">are cropped directly from the original artwork.</text>
+    <text x="30" y="313" class="strong">Original artwork preserved</text>
+    <text x="30" y="338" class="body">The source is unchanged; extracted PNG pixels</text>
+    <text x="30" y="356" class="body">match the corresponding source crop exactly.</text>
+    <text x="30" y="411" class="strong">What is not shown</text>
+    <text x="30" y="436" class="body">No generic avatar, robot, generated artwork,</text>
+    <text x="30" y="454" class="body">cropped collage or improvised logo.</text>
+    <rect x="30" y="503" width="294" height="117" rx="15" fill="#171513" stroke="#5d4933"/>
+    <text x="48" y="536" class="section">LOGO ASSETS INTEGRATED</text>
+    <text x="48" y="563" class="small">Full lockup, compact wordmark and emblem crops</text>
+    <text x="48" y="583" class="small">are used across desktop, mobile and favicon.</text>
+    <text x="30" y="674" class="small">Source files can be integrated without changing</text>
+    <text x="30" y="692" class="small">the implemented navigation or conversation flows.</text>
+  </g>
+
+  <path d="M52 3198h1550" stroke="#33322f"/>
+  <text x="54" y="3223" class="subtitle">PARMAR / MOBILE REFERENCE BOARD · Design specification, not a flattened application UI</text>
+</svg>

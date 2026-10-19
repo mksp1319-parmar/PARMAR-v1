@@ -173,6 +173,8 @@ test('Home actions navigate to the existing workflows', () => {
   assert.match(functionSource('analyzeRequest'), /apiRequest\('\/api\/analyze'/);
   assert.match(functionSource('evaluateScenario'), /apiRequest\('\/api\/scenarios\/evaluate'/);
   assert.match(html, /id="section-safety"/);
+  assert.match(html, /<strong>Open AETHER<\/strong><small>Check availability<\/small>/);
+  assert.match(html, /UNAVAILABLE IN THIS BUILD/);
 });
 
 test('Continue and Recent Work use persisted conversations, actual research, and existing audit entries', () => {
@@ -233,6 +235,7 @@ test('Home motion is reduced with the user preference and follows real review st
 
 test('Home and dedicated VOKKI use the canonical avatar through the shared real lifecycle renderer', () => {
   const avatarSource = fs.readFileSync(path.join(staticDir, 'voki-avatar.js'), 'utf8');
+  const premiumStyles = fs.readFileSync(path.join(staticDir, 'premium.css'), 'utf8');
   const appInitialize = functionSource('initialize');
   const setVokiState = functionSource('setVokiState');
   const avatarAsset = fs.readFileSync(path.join(staticDir, 'assets', 'voki', 'default-avatar.png'));
@@ -241,6 +244,13 @@ test('Home and dedicated VOKKI use the canonical avatar through the shared real 
   assert.match(avatarSource, /asset: '\/static\/assets\/voki\/default-avatar\.png'/);
   assert.match(avatarSource, /data-voki-default-image/);
   assert.deepEqual(avatarAsset.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.equal((html.match(/src="\/static\/assets\/voki\/default-avatar\.png"/g) || []).length, 2);
+  const homeComposer = html.match(/<form class="home-chat-composer"[\s\S]*?<\/form>/)?.[0];
+  assert.ok(homeComposer);
+  assert.doesNotMatch(homeComposer, /<img\b/);
+  assert.match(premiumStyles, /\.home-voki-avatar-image\s*\{[^}]*object-fit:\s*contain;/s);
+  assert.match(premiumStyles, /\.voki-avatar\s*\{\s*width:\s*min\(100%, 620px\);/);
+  assert.match(premiumStyles, /body\[data-active-section="voki"\] \.voki-avatar\s*\{\s*width:\s*100%;/);
   assert.match(appInitialize, /state\.homeVokiAvatar = new window\.PARMARVOKKIAvatar\.VOKKIAvatarPresentation/);
   assert.match(setVokiState, /state\.homeVokiAvatar\?\.setLifecycle/);
   assert.match(setVokiState, /dom\.homeVokiStatus\.textContent = presentation\.label/);
@@ -250,4 +260,27 @@ test('Home and dedicated VOKKI use the canonical avatar through the shared real 
   }
   assert.match(html, /id="section-chat"/);
   assert.match(html, /id="section-core"/);
+});
+
+test('PARMAR logo variants are available at their responsive app entry points', () => {
+  const logo = fs.readFileSync(path.join(staticDir, 'assets', 'parmar-logo.png'));
+  const emblem = fs.readFileSync(path.join(staticDir, 'assets', 'parmar-emblem.png'));
+  const wordmark = fs.readFileSync(path.join(staticDir, 'assets', 'parmar-wordmark.png'));
+  const premiumStyles = fs.readFileSync(path.join(staticDir, 'premium.css'), 'utf8');
+  assert.deepEqual(logo.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.deepEqual(emblem.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.deepEqual(wordmark.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.match(html, /rel="icon" type="image\/png" href="\/static\/assets\/parmar-emblem\.png"/);
+  assert.match(html, /class="sidebar-brand-emblem" src="\/static\/assets\/parmar-emblem\.png"/);
+  assert.match(html, /class="sidebar-brand-wordmark" src="\/static\/assets\/parmar-wordmark\.png"/);
+  assert.match(html, /class="mobile-brand-emblem" src="\/static\/assets\/parmar-emblem\.png"/);
+  assert.match(html, /class="mobile-brand-wordmark" src="\/static\/assets\/parmar-wordmark\.png"/);
+  assert.equal((html.match(/src="\/static\/assets\/parmar-wordmark\.png"/g) || []).length, 3);
+  assert.match(html, /class="brand-logo-image chat-brand-logo" src="\/static\/assets\/parmar-wordmark\.png"/);
+  assert.doesNotMatch(html.match(/<a class="brand-block sidebar-brand"[\s\S]*?<\/a>/)?.[0] || '', /parmar-logo\.png/);
+  assert.match(premiumStyles, /\.sidebar-brand-lockup\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;/s);
+  assert.match(premiumStyles, /\.sidebar-brand-emblem\s*\{[^}]*width:\s*34px;[^}]*height:\s*34px;/s);
+  assert.match(premiumStyles, /\.sidebar-brand-wordmark\s*\{[^}]*width:\s*min\(100px,/s);
+  assert.match(premiumStyles, /\.mobile-brand-emblem\s*\{[^}]*width:\s*25px;[^}]*height:\s*25px;/s);
+  assert.match(premiumStyles, /body\.sidebar-collapsed \.sidebar-brand-wordmark\s*\{\s*display:\s*none;/);
 });

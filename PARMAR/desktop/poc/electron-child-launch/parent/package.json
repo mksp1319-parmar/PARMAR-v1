@@ -1,0 +1,19 @@
+{
+  "name": "parmar-child-launch-poc",
+  "productName": "ParmarChildLaunch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Disposable Electron parent-to-child packaging experiment",
+  "main": "main.cjs",
+  "scripts": {
+    "package": "electron-forge package --platform=linux --arch=x64",
+    "test": "node --test test/*.test.cjs",
+    "test:artifact": "node --test test/artifact.test.cjs",
+    "test:runtime": "node --test test/runtime-harness.test.cjs"
+  },
+  "devDependencies": {
+    "@electron/asar": "4.0.1",
+    "@electron-forge/cli": "8.0.1",
+    "electron": "44.7.0"
+  }
+}

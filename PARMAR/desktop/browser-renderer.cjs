@@ -74,14 +74,16 @@ function renderTabs() {
   }
   const tab = activeTab();
   updateAddress(tab);
+  elements.tabState.setAttribute('aria-busy', String(Boolean(tab?.isLoading)));
   document.querySelector('[data-action="back"]').disabled = !tab?.canGoBack;
   document.querySelector('[data-action="forward"]').disabled = !tab?.canGoForward;
   document.querySelector('[data-action="stop"]').disabled = !tab?.isLoading;
   document.querySelector('[data-action="reload"]').disabled = !tab;
   document.querySelector('[data-action="bookmark"]').disabled = !state.remoteBrowsing || !tab?.url;
   elements.tabState.textContent = tab
-    ? (tab.isLoading ? 'Loading local browser content' : (tab.url || 'New tab · remote browsing restricted'))
+    ? (tab.error || (tab.isLoading ? 'Loading…' : (tab.url || 'New tab · remote browsing restricted')))
     : 'No browser tab selected';
+  elements.tabState.style.color = tab?.error ? '#e49b83' : '';
 }
 
 function renderStatus() {
@@ -105,6 +107,23 @@ function renderRecords(records, { removable = false } = {}) {
   for (const record of records) {
     const card = element('div', 'panel-record');
     card.append(element('strong', '', record.title), element('span', '', record.url));
+    const open = element('button', 'panel-action', 'Open page');
+    open.type = 'button';
+    open.addEventListener('click', async () => {
+      const tab = activeTab();
+      if (!tab) {
+        setMessage('No browser tab is selected.', true);
+        return;
+      }
+      const result = await api.navigate(record.url, tab.id);
+      if (activeTab()?.id !== tab.id) return;
+      if (!result.ok) {
+        setMessage(result.error, true);
+        return;
+      }
+      setMessage('Navigation started');
+    });
+    card.append(open);
     if (removable) {
       const remove = element('button', 'panel-action', 'Remove bookmark');
       remove.type = 'button';
@@ -112,9 +131,11 @@ function renderRecords(records, { removable = false } = {}) {
         const result = await api.removeBookmark(record.url);
         if (result.ok) {
           state.stored.bookmarks = result.data;
-          renderRecords(state.stored.bookmarks, { removable: true });
+          if (activePanel === 'bookmarks') {
+            renderRecords(state.stored.bookmarks, { removable: true });
+          }
         } else {
-          setMessage(result.error, true);
+          if (activePanel === 'bookmarks') setMessage(result.error, true);
         }
       });
       card.append(remove);
@@ -122,6 +143,22 @@ function renderRecords(records, { removable = false } = {}) {
     list.append(card);
   }
   elements.panelContent.append(list);
+}
+
+function renderHistoryPanel() {
+  renderRecords(state.stored.history);
+  const clear = element('button', 'panel-action', 'Clear browsing history');
+  clear.type = 'button';
+  clear.addEventListener('click', async () => {
+    const result = await api.clearHistory();
+    if (result.ok) {
+      state.stored.history = result.data;
+      if (activePanel === 'history') renderHistoryPanel();
+    } else {
+      if (activePanel === 'history') setMessage(result.error, true);
+    }
+  });
+  elements.panelContent.prepend(clear);
 }
 
 function openPanel(name) {
@@ -136,19 +173,7 @@ function openPanel(name) {
   elements.panelContent.replaceChildren();
 
   if (name === 'history') {
-    const clear = element('button', 'panel-action', 'Clear browsing history');
-    clear.type = 'button';
-    clear.addEventListener('click', async () => {
-      const result = await api.clearHistory();
-      if (result.ok) {
-        state.stored.history = result.data;
-        renderRecords(state.stored.history);
-      } else {
-        setMessage(result.error, true);
-      }
-    });
-    elements.panelContent.append(clear);
-    renderRecords(state.stored.history);
+    renderHistoryPanel();
   } else if (name === 'bookmarks') {
     renderRecords(state.stored.bookmarks, { removable: true });
   } else if (name === 'downloads') {
@@ -175,7 +200,8 @@ async function changeZoom(delta) {
   if (!tab) return;
   const current = tab.zoomFactor || 1;
   const factor = delta === 1 ? 1 : Math.max(0.5, Math.min(2, current + delta));
-  const result = await api.zoom(factor);
+  const result = await api.zoom(factor, tab.id);
+  if (activeTab()?.id !== tab.id) return;
   if (!result.ok) setMessage(result.error, true);
   else {
     state.tabs = state.tabs.map((entry) => entry.id === tab.id ? { ...entry, zoomFactor: factor } : entry);
@@ -185,12 +211,34 @@ async function changeZoom(delta) {
 
 async function submitAddress(event) {
   event.preventDefault();
-  const result = await api.navigate(elements.address.value);
+  const tab = activeTab();
+  if (!tab) {
+    setMessage('No browser tab is selected.', true);
+    return;
+  }
+  const result = await api.navigate(elements.address.value, tab.id);
+  if (activeTab()?.id !== tab.id) return;
   if (!result.ok) {
     setMessage(result.error, true);
     return;
   }
   setMessage('Navigation started');
+}
+
+async function traverseHistory(direction) {
+  const tab = activeTab();
+  if (!tab) return;
+  const result = await api[direction](tab.id);
+  if (activeTab()?.id !== tab.id) return;
+  if (!result.ok) setMessage(result.error, true);
+}
+
+async function controlActiveTab(action) {
+  const tab = activeTab();
+  if (!tab) return;
+  const result = await api[action](tab.id);
+  if (activeTab()?.id !== tab.id || result.ok) return;
+  setMessage(result.error, true);
 }
 
 document.querySelectorAll('[data-action]').forEach((button) => {
@@ -200,13 +248,13 @@ document.querySelectorAll('[data-action]').forEach((button) => {
       const result = await api.createTab();
       if (!result?.ok) setMessage(result?.error || 'A new tab could not be created.', true);
     } else if (action === 'back') {
-      api.back();
+      await traverseHistory('back');
     } else if (action === 'forward') {
-      api.forward();
+      await traverseHistory('forward');
     } else if (action === 'reload') {
-      api.reload();
+      await controlActiveTab('reload');
     } else if (action === 'stop') {
-      api.stop();
+      await controlActiveTab('stop');
     } else if (action === 'bookmark') {
       const tab = activeTab();
       if (!state.remoteBrowsing || !tab?.url) {
@@ -216,11 +264,11 @@ document.querySelectorAll('[data-action]').forEach((button) => {
       const result = await api.addBookmark({ title: tab.title, url: tab.url });
       if (result.ok) {
         state.stored.bookmarks = result.data;
-        setMessage('Bookmark saved.');
+        if (activeTab()?.id === tab.id) setMessage('Bookmark saved.');
       } else {
-        setMessage(result.error, true);
+        if (activeTab()?.id === tab.id) setMessage(result.error, true);
       }
-    } else if (['history', 'downloads', 'settings'].includes(action)) {
+    } else if (['history', 'bookmarks', 'downloads', 'settings'].includes(action)) {
       openPanel(action);
     } else if (action === 'close-panel') {
       activePanel = null;
@@ -249,7 +297,7 @@ window.addEventListener('keydown', (event) => {
     if (tab) api.closeTab(tab.id);
   } else if (command && event.key.toLowerCase() === 'r') {
     event.preventDefault();
-    api.reload();
+    controlActiveTab('reload');
   } else if (command && (event.key === '+' || event.key === '=')) {
     event.preventDefault();
     changeZoom(0.1);
@@ -260,11 +308,13 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault();
     changeZoom(1);
   } else if (event.altKey && event.key === 'ArrowLeft') {
-    api.back();
+    event.preventDefault();
+    traverseHistory('back');
   } else if (event.altKey && event.key === 'ArrowRight') {
-    api.forward();
+    event.preventDefault();
+    traverseHistory('forward');
   } else if (event.key === 'Escape') {
-    api.stop();
+    controlActiveTab('stop');
     if (activePanel) {
       activePanel = null;
       elements.panel.hidden = true;
@@ -282,7 +332,7 @@ api.onState((next) => {
   state = next;
   renderStatus();
   renderTabs();
-  if (activePanel === 'history') renderRecords(state.stored.history);
+  if (activePanel === 'history') renderHistoryPanel();
   if (activePanel === 'bookmarks') renderRecords(state.stored.bookmarks, { removable: true });
 });
 api.onNavigationError((message) => setMessage(message, true));

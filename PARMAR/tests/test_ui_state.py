@@ -513,7 +513,7 @@ def test_vokki_identity_uses_real_lifecycle_and_not_a_speaking_orb_for_local_dem
     lifecycle_mapping = re.search(r"function setVokiState\(rawState\) \{(.*?)\n\}", app_source, re.DOTALL)
     assert lifecycle_mapping
 
-    assert "PARMAR / COMMAND CENTER" in html_source
+    assert "PARMAR / YOUR PERSONAL AI" in html_source
     assert "data-voki-home-avatar" in html_source
     assert "data-voki-default-image src=\"/static/assets/voki/default-avatar.png\"" in html_source
     assert "state.homeVokiAvatar?.setLifecycle" in app_source

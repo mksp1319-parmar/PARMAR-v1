@@ -38,7 +38,7 @@ input:focus-visible {
   height: 100%;
   display: flex;
   flex-direction: column;
-  min-width: 720px;
+  min-width: 0;
 }
 
 .topbar {
@@ -398,4 +398,104 @@ input:focus-visible {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   clip-path: inset(50%);
+}
+
+#tab-state[aria-busy="true"]::before {
+  width: 8px;
+  height: 8px;
+  display: inline-block;
+  margin-right: 7px;
+  border: 1px solid rgba(213, 163, 102, .3);
+  border-top-color: #d5a366;
+  border-radius: 50%;
+  content: "";
+  vertical-align: -1px;
+  animation: aether-loading 800ms linear infinite;
+}
+
+@keyframes aether-loading {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    gap: 10px;
+    padding: 0 10px;
+  }
+
+  .brand {
+    min-width: 0;
+  }
+
+  .security-state {
+    gap: 6px;
+    font-size: 10px;
+  }
+
+  .tab-strip {
+    gap: 4px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .tab {
+    width: 160px;
+    min-width: 96px;
+  }
+
+  .toolbar {
+    height: auto;
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(7, minmax(32px, 1fr));
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .address-box {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .side-panel {
+    width: min(280px, 72vw);
+    flex-basis: min(280px, 72vw);
+    padding: 14px 10px;
+  }
+}
+
+@media (max-width: 400px) {
+  .topbar {
+    gap: 7px;
+    padding: 0 8px;
+  }
+
+  .brand small {
+    font-size: 8px;
+  }
+
+  .security-state {
+    gap: 5px;
+    font-size: 9px;
+  }
+
+  .restricted-notice {
+    padding: 7px 10px;
+    font-size: 10px;
+  }
+
+  .statusbar {
+    height: auto;
+    flex: 0 0 auto;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 10px;
+  }
+
+  .statusbar-right {
+    max-width: 100%;
+  }
 }

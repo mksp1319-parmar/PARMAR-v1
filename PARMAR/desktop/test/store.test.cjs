@@ -37,6 +37,25 @@ test('AETHER bookmark removal and history clearing are explicit operations', (co
   assert.equal(store.clearHistory().history.length, 0);
 });
 
+test('AETHER history titles update without changing visit order or timestamps', (context) => {
+  const store = createTemporaryStore(context);
+  store.addHistory({ title: 'example.com', url: 'https://example.com/page', visitedAt: 123 });
+  store.addHistory({ title: 'Other page', url: 'https://other.example/', visitedAt: 456 });
+
+  const updated = store.updateHistoryTitle(
+    'https://example.com/page',
+    'Example page title',
+  ).history;
+  assert.deepEqual(updated.map(({ title, visitedAt }) => ({ title, visitedAt })), [
+    { title: 'Other page', visitedAt: 456 },
+    { title: 'Example page title', visitedAt: 123 },
+  ]);
+  assert.throws(
+    () => store.updateHistoryTitle('javascript:alert(1)', 'Unsafe'),
+    /valid HTTPS pages/,
+  );
+});
+
 test('AETHER stored-record validation rejects credentials and non-HTTPS schemes', () => {
   assert.equal(safeWebRecord({ url: 'http://example.com' }), null);
   assert.equal(safeWebRecord({ url: 'https://name:secret@example.com' }), null);

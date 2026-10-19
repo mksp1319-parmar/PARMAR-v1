@@ -1,0 +1,599 @@
+:root {
+  color-scheme: dark;
+  --void: #08090a;
+  --night: #0e1012;
+  --deep: #151719;
+  --panel: rgba(17, 19, 21, 0.94);
+  --panel-strong: #0d0f10;
+  --surface: #121516;
+  --surface-raised: #191c1e;
+  --surface-glass: rgba(14, 16, 18, 0.88);
+  --border: rgba(207, 198, 183, 0.14);
+  --line-soft: rgba(207, 198, 183, 0.09);
+  --line-mid: rgba(207, 198, 183, 0.16);
+  --line-bright: rgba(220, 211, 195, 0.3);
+  --text: #f1eee8;
+  --type-primary: #f1eee8;
+  --type-secondary: #cbc7bf;
+  --muted: #a19d94;
+  --type-tertiary: #908c84;
+  --type-quiet: #706e69;
+  --accent: #c79a68;
+  --accent-strong: #e0bb8b;
+  --accent-soft: rgba(199, 154, 104, 0.12);
+  --accent-text: #e5c89f;
+  --focus-ring: #e0bb8b;
+  --shadow: 0 18px 54px rgba(0, 0, 0, 0.34);
+  --shadow-deep: 0 30px 88px rgba(0, 0, 0, 0.54);
+  --radius-control: 10px;
+  --radius-surface: 16px;
+  --radius-stage: 22px;
+  --surface-radius: 16px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --motion-fast: 140ms;
+  --motion-mid: 220ms;
+  --motion-slow: 420ms;
+  --ease-premium: cubic-bezier(0.2, 0.75, 0.25, 1);
+  --ease-settle: cubic-bezier(0.16, 1, 0.3, 1);
+  --sidebar-width: 264px;
+  --content-width: 1600px;
+}
+
+html {
+  background: var(--void);
+  scrollbar-color: #45413a var(--panel-strong);
+}
+
+body {
+  background:
+    radial-gradient(ellipse at 76% -18%, rgba(176, 128, 75, 0.13), transparent 42%),
+    radial-gradient(ellipse at 13% 42%, rgba(96, 111, 112, 0.045), transparent 38%),
+    var(--void);
+  color: var(--type-primary);
+  font-family: "Avenir Next", Avenir, "Segoe UI Variable", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+a,
+input,
+textarea,
+select,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.sidebar {
+  border-right-color: var(--line-soft);
+  background:
+    linear-gradient(180deg, rgba(17, 19, 20, 0.98), rgba(10, 11, 12, 0.99)),
+    var(--panel-strong);
+}
+
+.sidebar-brand,
+.topbar {
+  border-color: var(--line-soft);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  background: rgba(9, 10, 11, 0.86);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+}
+
+.global-search,
+.sidebar-lower .history-filter,
+.chat-history-search,
+.research-history-search,
+.settings-search input,
+.memory-search input {
+  border-radius: var(--radius-control);
+  background: rgba(16, 18, 19, 0.88);
+}
+
+.global-search:focus-within,
+.chat-history-search:focus-within,
+.research-history-search:focus-within,
+.settings-search input:focus,
+.memory-search input:focus {
+  border-color: rgba(220, 177, 123, 0.48);
+  box-shadow: 0 0 0 3px rgba(199, 154, 104, 0.08);
+}
+
+.sidebar .nav-item,
+.primary-btn,
+.secondary-btn,
+.text-button,
+.new-session-btn,
+.approve-btn,
+.reject-btn,
+.info-btn,
+.alt-btn,
+.settings-workspace-link,
+.capability-button {
+  border-radius: var(--radius-control);
+}
+
+.sidebar .nav-item {
+  min-height: 42px;
+  transition:
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    transform var(--motion-fast) ease;
+}
+
+.sidebar .nav-item:active,
+.mobile-bottom-nav .nav-item:active {
+  transform: scale(0.985);
+}
+
+.primary-btn {
+  border-color: #d2a36c;
+  background: linear-gradient(135deg, #d8b17d, #bd8952);
+  color: #17130e;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.23), 0 5px 18px rgba(150, 99, 49, 0.15);
+}
+
+.primary-btn:hover:not(:disabled) {
+  border-color: #e3c08f;
+  background: linear-gradient(135deg, #e4c18e, #ce9a62);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.3), 0 7px 22px rgba(150, 99, 49, 0.22);
+}
+
+.primary-btn:active:not(:disabled),
+.secondary-btn:active:not(:disabled),
+.text-button:active:not(:disabled),
+.new-session-btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
+}
+
+.secondary-btn,
+.text-button,
+.new-session-btn,
+.settings-workspace-link {
+  background: linear-gradient(180deg, rgba(31, 32, 31, 0.88), rgba(21, 23, 23, 0.92));
+}
+
+.section-view {
+  padding-block: clamp(24px, 3vw, 42px);
+}
+
+.view-heading {
+  margin-bottom: clamp(20px, 2.4vw, 32px);
+}
+
+.view-heading h1,
+.home-hero h1 {
+  text-wrap: balance;
+}
+
+.home-hero {
+  position: relative;
+  border: 1px solid rgba(211, 169, 116, 0.2);
+  border-radius: var(--radius-stage);
+  background:
+    radial-gradient(ellipse at 71% 41%, rgba(168, 116, 62, 0.16), transparent 36%),
+    linear-gradient(112deg, #17130f 0%, #131516 58%, #0d1011 100%);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035), var(--shadow);
+}
+
+.home-hero::before {
+  opacity: 0.58;
+  pointer-events: none;
+}
+
+.home-hero::after {
+  right: 18%;
+  opacity: 0.72;
+}
+
+.home-voki-presence,
+.home-hero-date,
+.home-quick-actions,
+.home-dashboard-card,
+.home-quote-card,
+.home-interaction,
+.conversation-surface,
+.research-workspace,
+.review-ribbon,
+.review-section,
+.approval-panel,
+.scenario-surface,
+.phone-surface,
+.activity-surface,
+.memory-preferences,
+.memory-composer,
+.memory-list-section,
+.settings-grid,
+.system-overview,
+.aether-workspace,
+.feature-placeholder,
+.capability-catalog,
+.settings-layout,
+.settings-detail-view,
+.voki-interface-surface {
+  border-radius: var(--radius-surface);
+}
+
+.home-hero-date,
+.home-quick-actions,
+.home-dashboard-card,
+.home-quote-card,
+.home-interaction,
+.quick-review,
+.review-ribbon,
+.review-section,
+.approval-panel,
+.scenario-surface,
+.phone-surface,
+.activity-surface,
+.memory-preferences,
+.memory-composer,
+.memory-list-section,
+.settings-layout,
+.settings-detail-view,
+.system-overview,
+.capability-catalog,
+.voki-interface-status,
+.voki-interface-output,
+.voki-speech-controls,
+.voki-identity-onboarding,
+.voki-interface-approval,
+.voki-interface-form,
+.voki-history,
+.voki-research-results {
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.025), 0 10px 32px rgba(0, 0, 0, 0.12);
+}
+
+.home-quick-grid > button,
+.home-continue-item,
+.home-memory-item,
+.home-recent-item,
+.pipeline-step,
+.stat-card,
+.approval-box,
+.approval-item,
+.system-status-item,
+.memory-item,
+.setting-card,
+.audit-item {
+  border-radius: 12px;
+}
+
+.home-quick-grid > button:hover,
+.home-continue-item:hover,
+.home-memory-item:hover,
+.home-recent-item:hover,
+.history-item:hover {
+  transform: translateY(-1px);
+}
+
+.chat-thread {
+  scroll-padding-block: 24px;
+  overscroll-behavior-y: contain;
+}
+
+.message-bubble {
+  border-radius: 5px 16px 16px 16px;
+}
+
+.message.user .message-bubble {
+  border-radius: 16px 5px 16px 16px;
+}
+
+.chat-composer,
+.home-chat-composer,
+.voki-interface-form {
+  border-radius: 16px;
+}
+
+.chat-composer,
+.home-chat-composer {
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2);
+}
+
+.chat-composer:focus-within,
+.home-chat-composer:focus-within,
+.voki-interface-form:focus-within {
+  border-color: rgba(222, 177, 122, 0.56);
+  box-shadow: 0 0 0 3px rgba(199, 154, 104, 0.08), 0 12px 36px rgba(0, 0, 0, 0.2);
+}
+
+.mobile-bottom-nav {
+  border-top: 1px solid var(--line-mid);
+  background: rgba(12, 14, 15, 0.94);
+  box-shadow: 0 -12px 38px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(20px) saturate(125%);
+  -webkit-backdrop-filter: blur(20px) saturate(125%);
+}
+
+.mobile-bottom-nav .nav-item {
+  min-height: 48px;
+  border-radius: 12px;
+}
+
+.panel-scrim {
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+}
+
+.panel-close,
+.capability-menu,
+.settings-search-results,
+.global-search-results {
+  border-radius: 14px;
+  box-shadow: var(--shadow-deep);
+}
+
+.review-empty-state {
+  border-radius: 12px;
+}
+
+@media (min-width: 1500px) {
+  .app-shell {
+    --sidebar-width: 278px;
+  }
+
+  .main-panel {
+    padding-inline: clamp(28px, 2.7vw, 54px);
+  }
+
+  .home-command-center {
+    gap: 18px;
+  }
+}
+
+@media (max-width: 1100px) and (min-width: 761px) {
+  .main-panel {
+    padding-inline: 22px;
+  }
+
+  .topbar {
+    margin-inline: -22px;
+    padding-inline: 22px;
+  }
+
+  .header-controls .human-pill {
+    display: none;
+  }
+
+  .home-hero {
+    border-radius: 18px;
+  }
+}
+
+@media (max-width: 760px) {
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+
+  .main-panel {
+    height: calc(100dvh - 72px - env(safe-area-inset-bottom));
+    padding: 0 14px 20px;
+    scroll-padding-bottom: 20px;
+  }
+
+  .topbar {
+    min-height: 62px;
+    margin-inline: -14px;
+    padding: 8px 14px;
+  }
+
+  .global-search {
+    min-width: 0;
+  }
+
+  .global-search input {
+    min-width: 0;
+  }
+
+  .section-view {
+    padding-block: 18px 26px;
+  }
+
+  .home-command-center {
+    gap: 12px;
+  }
+
+  .home-hero {
+    border-radius: 18px;
+  }
+
+  .home-hero-copy {
+    padding-inline: 18px;
+  }
+
+  .home-hero h1 {
+    font-size: clamp(2rem, 9vw, 2.75rem);
+  }
+
+  .home-hero-date,
+  .home-quick-actions {
+    border-radius: 14px;
+  }
+
+  .home-quick-grid > button {
+    min-height: 54px;
+    border-radius: 11px;
+  }
+
+  .conversation-surface {
+    min-height: max(480px, calc(100dvh - 242px));
+    border-radius: 15px;
+  }
+
+  .chat-history-panel {
+    max-height: 126px;
+    border-radius: 15px 15px 0 0;
+  }
+
+  .chat-main {
+    min-height: 320px;
+    padding-inline: 12px;
+  }
+
+  .chat-thread {
+    max-height: min(42dvh, 390px);
+    min-height: 165px;
+    padding-inline: 4px;
+    scroll-padding-bottom: 18px;
+  }
+
+  .chat-composer {
+    position: relative;
+    z-index: 2;
+    padding: 9px;
+  }
+
+  .chat-composer textarea {
+    min-height: 46px;
+    max-height: 30dvh;
+    resize: vertical;
+  }
+
+  .composer-actions > button,
+  .composer-actions > label {
+    min-height: 42px;
+  }
+
+  .settings-layout {
+    overflow: hidden;
+  }
+
+  .settings-category-nav {
+    display: flex;
+    max-height: none;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 6px;
+    padding: 10px;
+    scrollbar-width: thin;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-category {
+    min-width: max-content;
+    min-height: 42px;
+    scroll-snap-align: start;
+  }
+
+  .settings-detail-view {
+    padding: 16px;
+  }
+
+  .voki-presence-stage {
+    height: clamp(250px, 42svh, 340px);
+    min-height: clamp(250px, 42svh, 340px);
+  }
+
+  .voki-interface-surface {
+    border-radius: 16px;
+  }
+
+  .voki-interface-form {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: rgba(18, 20, 21, 0.97);
+    backdrop-filter: blur(12px);
+  }
+
+  .mobile-bottom-nav {
+    height: calc(72px + env(safe-area-inset-bottom));
+    padding: 7px 12px calc(7px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 420px) {
+  .main-panel {
+    padding-inline: 10px;
+  }
+
+  .topbar {
+    margin-inline: -10px;
+    padding-inline: 10px;
+  }
+
+  .topbar-left {
+    gap: 8px;
+  }
+
+  .global-search {
+    gap: 5px;
+    padding-inline: 7px;
+  }
+
+  .global-search input {
+    font-size: 0.72rem;
+  }
+
+  .home-hero {
+    padding-inline: 0;
+  }
+
+  .home-hero-copy {
+    padding-inline: 14px;
+  }
+
+  .home-quick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .home-chat-composer {
+    grid-template-columns: minmax(0, 1fr) 38px;
+  }
+
+  .home-chat-composer > img,
+  .home-composer-brand {
+    display: none;
+  }
+
+  .chat-main {
+    padding-inline: 9px;
+  }
+
+  .composer-actions {
+    gap: 5px;
+  }
+}
+
+@media (max-height: 560px) and (max-width: 760px) {
+  .voki-presence-stage {
+    height: 220px;
+    min-height: 220px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -33,6 +33,7 @@ test('broker protocol accepts only the fixed lifecycle and status message shape'
     '{',
     '[]',
     JSON.stringify({ capability: session.capability, sequence: 0, type: 'browser.exec', payload: {} }),
+    JSON.stringify({ capability: session.capability, sequence: 0, type: 'browser.start', payload: {} }),
     JSON.stringify({ capability: session.capability, sequence: 0, type: 'browser.stop', payload: { command: 'quit' } }),
     JSON.stringify({ capability: session.capability, sequence: -1, type: 'browser.stop', payload: {} }),
     JSON.stringify({ ...JSON.parse(request(session)), extra: true }),
@@ -61,6 +62,20 @@ test('broker launch capability expires and does not authorize after expiry', () 
   );
 });
 
+test('an authenticated broker session remains valid for its process lifetime', () => {
+  const session = createBrokerSession(peer, 100);
+  assert.equal(authorizeBrokerMessage(session, peer, request(session), 101).ok, true);
+  assert.equal(
+    authorizeBrokerMessage(
+      session,
+      peer,
+      request(session, { sequence: 1, type: 'browser.stop' }),
+      100 + BROKER_SESSION_TTL_MS + 1,
+    ).ok,
+    true,
+  );
+});
+
 test('broker launch capability rejects a replayed sequence number', () => {
   const session = createBrokerSession(peer, 100);
   const first = request(session);
@@ -73,4 +88,11 @@ test('broker authorization does not consume a sequence number on a rejected requ
   const invalid = request(session, { capability: 'A'.repeat(43) });
   assert.equal(authorizeBrokerMessage(session, peer, invalid, 101).ok, false);
   assert.equal(authorizeBrokerMessage(session, peer, request(session), 102).ok, true);
+});
+
+test('broker sessions accept a caller-provided launch capability only in the required format', () => {
+  const capability = createBrokerSession(peer, 100).capability;
+  const session = createBrokerSession(peer, 100, capability);
+  assert.equal(session.capability, capability);
+  assert.throws(() => createBrokerSession(peer, 100, 'invalid'), TypeError);
 });

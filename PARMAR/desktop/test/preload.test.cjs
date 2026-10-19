@@ -51,16 +51,31 @@ test('browser preload exposes only the fixed, validated AETHER interface', async
     'onFocusAddress', 'removeBookmark', 'stop', 'zoom',
   ].sort());
 
-  await api.navigate('x'.repeat(2049));
+  await api.navigate('x'.repeat(2049), '123e4567-e89b-12d3-a456-426614174000');
+  await api.navigate('https://example.com');
   await api.closeTab('../../unexpected');
   await api.zoom(10);
   assert.equal(calls.length, 0);
 
-  await api.navigate('https://example.com');
+  const tabId = '123e4567-e89b-12d3-a456-426614174000';
+  await api.navigate('https://example.com', tabId);
+  await api.reload('../../stale');
+  await api.stop(undefined);
+  await api.zoom(1, '../../stale');
   assert.deepEqual(calls[0], {
     channel: 'aether:navigate',
-    args: ['https://example.com'],
+    args: ['https://example.com', tabId],
   });
+  assert.equal(calls.length, 1);
+
+  await api.reload(tabId);
+  await api.stop(tabId);
+  await api.zoom(1.2, tabId);
+  assert.deepEqual(calls.slice(1), [
+    { channel: 'aether:reload', args: [tabId] },
+    { channel: 'aether:stop', args: [tabId] },
+    { channel: 'aether:zoom', args: [1.2, tabId] },
+  ]);
 });
 
 test('preload event subscriptions can be removed and have no generic IPC method', () => {
@@ -73,4 +88,20 @@ test('preload event subscriptions can be removed and have no generic IPC method'
   assert.equal(listeners.has('aether:state'), false);
   assert.equal(Object.hasOwn(api, 'send'), false);
   assert.equal(calls.length, 0);
+});
+
+test('history traversal IPC requires a valid tab ID and forwards it for main-process freshness checks', async () => {
+  const { api, calls } = loadPreload('browser-preload.cjs');
+  const tabId = '123e4567-e89b-12d3-a456-426614174000';
+
+  await api.back('../../closed-tab');
+  await api.forward(null);
+  assert.equal(calls.length, 0);
+
+  await api.back(tabId);
+  await api.forward(tabId);
+  assert.deepEqual(calls, [
+    { channel: 'aether:back', args: [tabId] },
+    { channel: 'aether:forward', args: [tabId] },
+  ]);
 });

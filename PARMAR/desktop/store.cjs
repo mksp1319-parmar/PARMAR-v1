@@ -110,6 +110,18 @@ class AetherStore {
     return this.snapshot();
   }
 
+  updateHistoryTitle(url, title) {
+    const safeRecord = safeWebRecord({ url, title });
+    if (!safeRecord) throw new TypeError('Only valid HTTPS pages can be updated in history.');
+    const existing = this.data.history.find((item) => item.url === safeRecord.url);
+    if (!existing || existing.title === safeRecord.title) return this.snapshot();
+    const history = this.data.history.map((item) => (
+      item.url === safeRecord.url ? { ...item, title: safeRecord.title } : item
+    ));
+    this.save({ ...this.data, history });
+    return this.snapshot();
+  }
+
   clearHistory() {
     this.save({ ...this.data, history: [] });
     return this.snapshot();

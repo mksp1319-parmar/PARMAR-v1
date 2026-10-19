@@ -125,19 +125,71 @@ summary:focus-visible {
   object-fit: contain;
 }
 
-.sidebar-logo-image {
-  width: 160px;
-  flex: 0 1 160px;
+.sidebar-brand-lockup {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
 }
 
-.mobile-brand-logo {
-  width: 118px;
-  flex: 0 1 118px;
+.sidebar-brand-emblem {
+  display: block;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  object-fit: contain;
+}
+
+.sidebar-brand-wordmark {
+  display: block;
+  width: min(100px, calc(100% - 43px));
+  height: auto;
+  min-width: 0;
+  object-fit: contain;
+}
+
+.topbar-left .mobile-brand {
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.mobile-brand-emblem {
+  display: block;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  object-fit: contain;
+}
+
+.mobile-brand-wordmark {
+  display: block;
+  width: min(82px, 100%);
+  height: auto;
+  min-width: 0;
+  object-fit: contain;
 }
 
 .chat-brand-logo {
   width: 100px;
   flex: 0 1 100px;
+}
+
+@media (max-width: 360px) {
+  .mobile-brand-wordmark {
+    width: 70px;
+  }
+}
+
+@media (min-width: 921px) {
+  body.sidebar-collapsed .sidebar-brand-lockup {
+    justify-content: center;
+  }
+
+  body.sidebar-collapsed .sidebar-brand-wordmark {
+    display: none;
+  }
 }
 
 .sidebar-brand .brand-copy {
@@ -690,7 +742,7 @@ textarea::placeholder {
   inset: auto 34% -1% auto;
   height: 101%;
   max-height: none;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center 18%;
   filter: saturate(0.82) contrast(1.025);
 }
@@ -959,7 +1011,7 @@ textarea::placeholder {
   position: static;
   width: min(590px, 100%);
   min-height: 68px;
-  grid-template-columns: 42px 63px minmax(0, 1fr) 39px;
+  grid-template-columns: 63px minmax(0, 1fr) 39px;
   gap: 8px;
   justify-self: start;
   margin: 0;
@@ -1849,7 +1901,7 @@ textarea::placeholder {
 }
 
 .voki-avatar {
-  width: min(60%, 460px);
+  width: min(100%, 620px);
   height: 100%;
 }
 
@@ -2978,13 +3030,13 @@ textarea::placeholder {
   }
 
   body[data-active-section="voki"] .voki-presence {
-    width: min(100%, 330px);
+    width: min(100%, 380px);
     height: 100%;
     min-height: 0;
   }
 
   body[data-active-section="voki"] .voki-avatar {
-    width: min(88%, 300px);
+    width: 100%;
     height: 100%;
   }
 }

@@ -3,7 +3,10 @@
 const { randomBytes, timingSafeEqual } = require('node:crypto');
 
 const BROKER_MESSAGE_TYPES = new Set([
-  'browser.start',
+  'browser.close-tab',
+  'browser.focus',
+  'browser.new-tab',
+  'browser.ready',
   'browser.stop',
   'browser.status',
 ]);
@@ -20,20 +23,24 @@ function validPeerIdentity(identity) {
     && identity.uid >= 0;
 }
 
-function createBrokerSession(expectedPeer, now = Date.now()) {
+function createBrokerSession(expectedPeer, now = Date.now(), capability = randomBytes(32).toString('base64url')) {
   if (
     !validPeerIdentity(expectedPeer)
     || !Number.isSafeInteger(now)
     || !Number.isSafeInteger(now + BROKER_SESSION_TTL_MS)
+    || typeof capability !== 'string'
+    || !CAPABILITY_PATTERN.test(capability)
+    || Buffer.from(capability, 'base64url').length !== 32
   ) {
-    throw new TypeError('A valid OS peer identity and issue time are required.');
+    throw new TypeError('A valid OS peer identity, issue time, and capability are required.');
   }
 
   return {
     expectedPeer: { pid: expectedPeer.pid, uid: expectedPeer.uid },
-    capability: randomBytes(32).toString('base64url'),
+    capability,
     expiresAt: now + BROKER_SESSION_TTL_MS,
     nextSequence: 0,
+    authorized: false,
   };
 }
 
@@ -90,7 +97,7 @@ function authorizeBrokerMessage(session, peerIdentity, message, now = Date.now()
   ) {
     return { ok: false, error: 'Broker peer is not authorized for this launch.' };
   }
-  if (now >= session.expiresAt) {
+  if (now >= session.expiresAt && !session.authorized) {
     return { ok: false, error: 'Broker launch authorization has expired.' };
   }
 
@@ -122,11 +129,13 @@ function authorizeBrokerMessage(session, peerIdentity, message, now = Date.now()
   }
 
   session.nextSequence += 1;
+  session.authorized = true;
   return { ok: true, type: request.type };
 }
 
 module.exports = {
   BROKER_MESSAGE_TYPES,
+  CAPABILITY_PATTERN,
   BROKER_SESSION_TTL_MS,
   MAX_MESSAGE_LENGTH,
   authorizeBrokerMessage,

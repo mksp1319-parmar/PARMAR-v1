@@ -66,3 +66,6 @@ PARMAR/audit/decision_log.jsonl
 test-results/
 *.sqlite3
 *.db
+
+# Generated Electron build output
+PARMAR/desktop/poc/electron-child-launch/parent/out/

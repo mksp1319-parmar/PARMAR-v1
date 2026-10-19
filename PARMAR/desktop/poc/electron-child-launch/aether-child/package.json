@@ -1,0 +1,10 @@
+{
+  "name": "aether-child-poc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Separate child application resource for the Electron launch experiment",
+  "main": "main.cjs",
+  "devDependencies": {
+    "electron": "44.7.0"
+  }
+}

@@ -285,13 +285,13 @@
         this.submitRequest();
       });
       this.talkButton?.addEventListener('click', () => {
-        this.voiceInput?.start((transcript) => this.submitVoiceTranscript(transcript));
+        void this.voiceInput?.start((transcript) => this.submitVoiceTranscript(transcript));
       });
       this.cancelVoiceButton?.addEventListener('click', () => this.voiceInput?.cancel());
       const languageSelect = globalThis.document?.getElementById?.('language-select');
       languageSelect?.addEventListener('change', () => {
         this.cancelVoiceInput();
-        void this.voiceInput?.refreshAvailability();
+        this.voiceInput?.resetAvailability();
       });
       this.identityStart?.addEventListener('click', () => {
         this.identityOnboarding?.start();
@@ -803,7 +803,9 @@
         'TRANSCRIBING',
         'SUBMITTING',
       ].includes(this.voiceInputState);
-      this.talkButton.disabled = this.voiceInput?.available !== true
+      this.talkButton.disabled = (this.voiceInput?.available !== true
+        && this.voiceInput?.canCheckAvailability !== true)
+        || this.voiceInput?.availabilityPending === true
         || busySpeech
         || busyVoice
         || Boolean(this.voiceInput?.recognition)

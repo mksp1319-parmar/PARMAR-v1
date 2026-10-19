@@ -400,76 +400,112 @@
       this.onStateChange = onStateChange;
       this.state = 'IDLE';
       this.available = false;
-      this.message = 'Checking on-device speech recognition support.';
+      this.message = this.canCheckAvailability
+        ? 'Press Talk to check on-device speech availability.'
+        : 'On-device speech recognition is unsupported in this browser.';
       this.recognition = null;
       this.generation = 0;
       this.availabilityGeneration = 0;
+      this.availabilityPending = false;
       this.availableLanguage = null;
       this.onStateChange({ state: this.state, message: this.message, available: false });
-      void this.refreshAvailability();
+    }
+
+    get canCheckAvailability() {
+      return Boolean(this.Recognition && typeof this.Recognition.available === 'function');
+    }
+
+    resetAvailability() {
+      this.availabilityGeneration += 1;
+      this.availabilityPending = false;
+      this.available = false;
+      this.availableLanguage = null;
+      if (this.canCheckAvailability) {
+        this.setState('IDLE', 'Press Talk to check on-device speech availability.');
+      } else {
+        this.setState('ERROR', 'On-device speech recognition is unsupported in this browser.');
+      }
     }
 
     async refreshAvailability() {
       const generation = ++this.availabilityGeneration;
       const language = recognitionLanguage(this.getLanguage());
+      this.availabilityPending = true;
       this.available = false;
       this.availableLanguage = null;
 
-      if (!this.Recognition || typeof this.Recognition.available !== 'function') {
-        this.setState('ERROR', 'On-device speech recognition is unsupported in this browser.');
-        return false;
-      }
-      if (!language) {
-        this.setState('ERROR', 'Voice input supports English or Hindi. Select one of those languages.');
-        return false;
-      }
-
-      let probe;
+      this.message = 'Checking on-device speech availability.';
+      this.onStateChange({ state: this.state, message: this.message, available: false });
       try {
-        probe = new this.Recognition();
-      } catch (_error) {
-        this.setState('ERROR', 'On-device speech recognition is unavailable in this browser.');
-        return false;
-      }
-      if (!('processLocally' in probe)) {
-        this.setState('ERROR', 'This browser cannot guarantee on-device speech recognition.');
-        return false;
-      }
+        if (!this.canCheckAvailability) {
+          this.setState('ERROR', 'On-device speech recognition is unsupported in this browser.');
+          return false;
+        }
+        if (!language) {
+          this.setState('ERROR', 'Voice input supports English or Hindi. Select one of those languages.');
+          return false;
+        }
 
-      let availability;
-      try {
-        availability = await this.Recognition.available({
-          langs: [language],
-          processLocally: true,
-        });
-      } catch (_error) {
+        let probe;
+        try {
+          probe = new this.Recognition();
+        } catch (_error) {
+          this.setState('ERROR', 'On-device speech recognition is unavailable in this browser.');
+          return false;
+        }
+        if (!('processLocally' in probe)) {
+          this.setState('ERROR', 'This browser cannot guarantee on-device speech recognition.');
+          return false;
+        }
+
+        let availability;
+        try {
+          availability = await this.Recognition.available({
+            langs: [language],
+            processLocally: true,
+          });
+        } catch (_error) {
+          if (generation !== this.availabilityGeneration) return false;
+          this.setState('ERROR', 'On-device speech availability could not be confirmed.');
+          return false;
+        }
         if (generation !== this.availabilityGeneration) return false;
-        this.setState('ERROR', 'On-device speech availability could not be confirmed.');
-        return false;
-      }
-      if (generation !== this.availabilityGeneration) return false;
 
-      if (availability === 'available') {
-        this.available = true;
-        this.availableLanguage = language;
-        this.setState('IDLE', 'On-device speech is ready. Press Talk to request microphone access.');
-        return true;
+        if (availability === 'available') {
+          this.available = true;
+          this.availableLanguage = language;
+          this.setState('IDLE', 'On-device speech is ready. Press Talk to request microphone access.');
+          return true;
+        }
+        const availabilityMessages = {
+          downloadable: 'The on-device speech language pack is not installed. This build does not download language packs.',
+          downloading: 'The on-device speech language pack is downloading. Try Talk again when it is ready.',
+          unavailable: 'On-device speech recognition is unavailable for the selected language.',
+        };
+        this.setState(
+          'ERROR',
+          availabilityMessages[availability] || 'On-device speech recognition is unavailable.',
+        );
+        return false;
+      } finally {
+        if (generation === this.availabilityGeneration) {
+          this.availabilityPending = false;
+          this.onStateChange({
+            state: this.state,
+            message: this.message,
+            available: this.available,
+          });
+        }
       }
-      const availabilityMessages = {
-        downloadable: 'The on-device speech language pack is not installed. This build does not download language packs.',
-        downloading: 'The on-device speech language pack is downloading. Try Talk again when it is ready.',
-        unavailable: 'On-device speech recognition is unavailable for the selected language.',
-      };
-      this.setState(
-        'ERROR',
-        availabilityMessages[availability] || 'On-device speech recognition is unavailable.',
-      );
-      return false;
     }
 
-    start(onTranscript) {
+    async start(onTranscript) {
       if (typeof onTranscript !== 'function') {
         throw new TypeError('Voice input requires a transcript handler.');
+      }
+      if (this.recognition || this.availabilityPending) return false;
+      if (!this.available || this.availableLanguage !== recognitionLanguage(this.getLanguage())) {
+        if (this.canCheckAvailability && !(await this.refreshAvailability())) return false;
       }
       if (!this.available || this.availableLanguage !== recognitionLanguage(this.getLanguage())) {
         if (this.state !== 'ERROR') {

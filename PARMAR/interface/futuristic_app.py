@@ -1609,6 +1609,8 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             mime_type = "application/javascript"
         elif file_path.suffix == ".json":
             mime_type = "application/json"
+        elif file_path.suffix == ".svg":
+            mime_type = "image/svg+xml"
         elif file_path.suffix == ".png":
             mime_type = "image/png"
 

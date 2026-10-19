@@ -292,6 +292,25 @@ def test_static_png_is_served_with_image_content_type(tmp_path):
     assert request.wfile.getvalue() == image_content
 
 
+def test_static_svg_is_served_with_image_content_type(tmp_path):
+    image_content = b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"
+    image_path = tmp_path / "reference.svg"
+    image_path.write_bytes(image_content)
+    response = {"headers": {}, "statuses": []}
+    request = SimpleNamespace(
+        send_response=lambda status: response["statuses"].append(status),
+        send_header=lambda name, value: response["headers"].update({name: value}),
+        end_headers=lambda: None,
+        wfile=io.BytesIO(),
+    )
+
+    futuristic_app.PARMARRequestHandler._serve_file(request, image_path)
+
+    assert response["statuses"] == [200]
+    assert response["headers"]["Content-Type"] == "image/svg+xml"
+    assert request.wfile.getvalue() == image_content
+
+
 def test_root_index_rejects_symlink_escape(tmp_path, monkeypatch):
     static_root = tmp_path / "static"
     static_root.mkdir()

@@ -1063,7 +1063,7 @@ test('recognition is unsupported unless on-device processing and a local languag
   await unsupported.refreshAvailability();
   assert.equal(unsupported.available, false);
   assert.match(unsupported.message, /unsupported/);
-  assert.equal(unsupported.start(() => {}), false);
+  assert.equal(await unsupported.start(() => {}), false);
 
   const downloadable = makeRecognitionHarness('downloadable');
   const adapter = await makeAvailableRecognitionAdapter(downloadable);
@@ -1074,6 +1074,22 @@ test('recognition is unsupported unless on-device processing and a local languag
     langs: ['en-US'],
     processLocally: true,
   });
+});
+
+test('on-device availability is checked only after the user presses Talk', async () => {
+  const harness = makeRecognitionHarness();
+  const adapter = new VOKKIRecognitionAdapter({
+    Recognition: harness.Recognition,
+    getLanguage: () => 'en',
+  });
+
+  assert.equal(harness.calls.availability.length, 0);
+  assert.equal(adapter.canCheckAvailability, true);
+  assert.match(adapter.message, /Press Talk/);
+
+  assert.equal(await adapter.start(() => {}), true);
+  assert.equal(harness.calls.availability.length, 1);
+  assert.equal(harness.calls.starts, 1);
 });
 
 test('a Talk press alone starts one-shot local recognition and routes its transcript through VOKKI chat', async () => {
