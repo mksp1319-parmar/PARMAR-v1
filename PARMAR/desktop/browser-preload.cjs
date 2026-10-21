@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld('aetherDesktop', Object.freeze({
   removeBookmark: (url) => typeof url === 'string' && url.length <= MAX_ADDRESS_LENGTH
     ? invoke('aether:remove-bookmark', url)
     : Promise.resolve({ ok: false, error: 'Invalid bookmark.' }),
+  removeHistory: (url) => typeof url === 'string' && url.length <= MAX_ADDRESS_LENGTH
+    ? invoke('aether:remove-history', url)
+    : Promise.resolve({ ok: false, error: 'Invalid history entry.' }),
   clearHistory: () => invoke('aether:clear-history'),
   zoom: (factor, id) => Number.isFinite(factor) && factor >= 0.5 && factor <= 2
     && validTabId(id)

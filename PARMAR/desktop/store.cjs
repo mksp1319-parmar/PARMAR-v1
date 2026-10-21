@@ -7,6 +7,7 @@ const STORE_VERSION = 1;
 const MAX_BOOKMARKS = 500;
 const MAX_HISTORY = 1000;
 const MAX_TITLE_LENGTH = 300;
+const MAX_SESSION_TABS = 16;
 
 function safeWebRecord(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
@@ -28,10 +29,37 @@ function safeWebRecord(record) {
   };
 }
 
+function safeSession(session) {
+  if (!session || typeof session !== 'object' || Array.isArray(session)) return null;
+  const keys = Object.keys(session).sort();
+  if (keys.length !== 2 || keys[0] !== 'activeIndex' || keys[1] !== 'tabs') return null;
+  if (!Array.isArray(session.tabs) || session.tabs.length > MAX_SESSION_TABS) return null;
+  if (!Number.isSafeInteger(session.activeIndex)) return null;
+  if (session.tabs.length === 0) {
+    if (session.activeIndex !== 0) return null;
+  } else if (session.activeIndex < 0 || session.activeIndex >= session.tabs.length) {
+    return null;
+  }
+
+  const tabs = session.tabs.map((url) => {
+    if (url === null) return null;
+    if (typeof url !== 'string') return undefined;
+    const record = safeWebRecord({ url });
+    return record ? record.url : undefined;
+  });
+  if (tabs.some((url) => url === undefined)) return null;
+  return { tabs, activeIndex: session.activeIndex };
+}
+
 class AetherStore {
   constructor(userDataPath) {
     this.filePath = path.join(userDataPath, 'aether-state.json');
-    this.data = { version: STORE_VERSION, bookmarks: [], history: [] };
+    this.data = {
+      version: STORE_VERSION,
+      bookmarks: [],
+      history: [],
+      session: { tabs: [], activeIndex: 0 },
+    };
     this.load();
   }
 
@@ -56,6 +84,10 @@ class AetherStore {
     if (!Array.isArray(parsed.bookmarks) || !Array.isArray(parsed.history)) {
       throw new Error('AETHER browser data has an invalid record list.');
     }
+    const session = parsed.session === undefined
+      ? { tabs: [], activeIndex: 0 }
+      : safeSession(parsed.session);
+    if (!session) throw new Error('AETHER browser session state is invalid.');
     if (parsed.bookmarks.length > MAX_BOOKMARKS || parsed.history.length > MAX_HISTORY) {
       throw new Error('AETHER browser data exceeds the supported record limits.');
     }
@@ -72,6 +104,7 @@ class AetherStore {
       version: STORE_VERSION,
       bookmarks: validateRecords(parsed.bookmarks, 'bookmark'),
       history: validateRecords(parsed.history, 'history'),
+      session,
     };
   }
 
@@ -80,6 +113,23 @@ class AetherStore {
       bookmarks: this.data.bookmarks.map((record) => ({ ...record })),
       history: this.data.history.map((record) => ({ ...record })),
     };
+  }
+
+  sessionSnapshot() {
+    return { tabs: [...this.data.session.tabs], activeIndex: this.data.session.activeIndex };
+  }
+
+  saveSession(session) {
+    const safe = safeSession(session);
+    if (!safe) throw new TypeError('AETHER tab session is invalid.');
+    if (
+      safe.activeIndex === this.data.session.activeIndex
+      && JSON.stringify(safe.tabs) === JSON.stringify(this.data.session.tabs)
+    ) {
+      return this.sessionSnapshot();
+    }
+    this.save({ ...this.data, session: safe });
+    return this.sessionSnapshot();
   }
 
   addBookmark(record) {
@@ -98,6 +148,14 @@ class AetherStore {
     if (typeof url !== 'string') throw new TypeError('A bookmark URL is required.');
     const bookmarks = this.data.bookmarks.filter((item) => item.url !== url);
     this.save({ ...this.data, bookmarks });
+    return this.snapshot();
+  }
+
+  removeHistory(url) {
+    const safeRecord = safeWebRecord({ url });
+    if (!safeRecord) throw new TypeError('Only valid HTTPS pages can be removed from history.');
+    const history = this.data.history.filter((item) => item.url !== safeRecord.url);
+    this.save({ ...this.data, history });
     return this.snapshot();
   }
 
@@ -150,5 +208,7 @@ module.exports = {
   AetherStore,
   MAX_BOOKMARKS,
   MAX_HISTORY,
+  MAX_SESSION_TABS,
+  safeSession,
   safeWebRecord,
 };

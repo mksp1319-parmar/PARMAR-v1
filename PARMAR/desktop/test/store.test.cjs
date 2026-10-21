@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { AetherStore, safeWebRecord } = require('../store.cjs');
+const { AetherStore, safeSession, safeWebRecord } = require('../store.cjs');
 
 function createTemporaryStore(context) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'parmar-aether-'));
@@ -34,7 +34,13 @@ test('AETHER bookmark removal and history clearing are explicit operations', (co
   store.addHistory({ title: 'Example', url: 'https://example.com' });
 
   assert.equal(store.removeBookmark('https://example.com/').bookmarks.length, 0);
+  assert.equal(store.removeHistory('https://example.com/').history.length, 0);
   assert.equal(store.clearHistory().history.length, 0);
+});
+
+test('AETHER rejects invalid URLs when removing an individual history entry', (context) => {
+  const store = createTemporaryStore(context);
+  assert.throws(() => store.removeHistory('javascript:alert(1)'), /valid HTTPS pages/);
 });
 
 test('AETHER history titles update without changing visit order or timestamps', (context) => {
@@ -76,6 +82,40 @@ test('AETHER refuses corrupted persisted records instead of silently discarding 
   }));
 
   assert.throws(() => new AetherStore(directory), /bookmark record 1 is invalid/);
+});
+
+test('AETHER persists bounded session tabs as validated HTTPS URLs without auto-restoring navigation', (context) => {
+  const store = createTemporaryStore(context);
+  store.saveSession({
+    tabs: ['https://example.com/path', null],
+    activeIndex: 1,
+  });
+
+  const reopened = new AetherStore(path.dirname(store.filePath));
+  assert.deepEqual(reopened.sessionSnapshot(), {
+    tabs: ['https://example.com/path', null],
+    activeIndex: 1,
+  });
+  assert.equal(reopened.snapshot().history.length, 0);
+  assert.deepEqual(safeSession({ tabs: ['https://user:secret@example.com/'], activeIndex: 0 }), null);
+  assert.deepEqual(safeSession({ tabs: ['file:///etc/passwd'], activeIndex: 0 }), null);
+  assert.deepEqual(safeSession({ tabs: ['https://example.com/'], activeIndex: 1 }), null);
+});
+
+test('AETHER rejects malformed persisted tab sessions and retains legacy state compatibility', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'parmar-aether-session-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const statePath = path.join(directory, 'aether-state.json');
+  fs.writeFileSync(statePath, JSON.stringify({
+    version: 1,
+    bookmarks: [],
+    history: [],
+    session: { tabs: ['http://example.com/'], activeIndex: 0 },
+  }));
+  assert.throws(() => new AetherStore(directory), /session state is invalid/);
+
+  fs.writeFileSync(statePath, JSON.stringify({ version: 1, bookmarks: [], history: [] }));
+  assert.deepEqual(new AetherStore(directory).sessionSnapshot(), { tabs: [], activeIndex: 0 });
 });
 
 test('failed AETHER persistence does not report or expose an uncommitted in-memory mutation', (context) => {

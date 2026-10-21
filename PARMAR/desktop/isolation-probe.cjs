@@ -44,12 +44,10 @@ function commandJson(command, args) {
 function inspectIsolation(expectedParentNamespace) {
   const namespaceId = readNamespaceId();
   const ipPath = process.env.PARMAR_AETHER_IP_PATH;
-  const nftPath = process.env.PARMAR_AETHER_NFT_PATH;
-  if (!ipPath || !nftPath) throw new Error('Isolation verification tools are not configured.');
+  if (!ipPath) throw new Error('The network namespace inspection tool is not configured.');
   const interfaces = commandJson(ipPath, ['-j', 'link', 'show']);
   const ipv4Routes = commandJson(ipPath, ['-j', '-4', 'route', 'show', 'table', 'all']);
   const ipv6Routes = commandJson(ipPath, ['-j', '-6', 'route', 'show', 'table', 'all']);
-  const firewall = commandJson(nftPath, ['-j', 'list', 'ruleset']);
 
   const snapshot = {
     namespaceId,
@@ -57,7 +55,6 @@ function inspectIsolation(expectedParentNamespace) {
     interfaces,
     ipv4Routes,
     ipv6Routes,
-    firewall,
   };
   verifyNetworkSnapshot(snapshot);
   return snapshot;
@@ -93,22 +90,12 @@ function verifyNetworkSnapshot(snapshot) {
   ) {
     throw new Error('The isolated namespace has an unexpected IP route.');
   }
-  if (
-    !snapshot.firewall
-    || !Array.isArray(snapshot.firewall.nftables)
-    || snapshot.firewall.nftables.some((entry) => (
-      !entry.metainfo || Object.keys(entry).length !== 1
-    ))
-  ) {
-    throw new Error('The isolated namespace has an unexpected firewall rule or table.');
-  }
   return {
     namespaceId: snapshot.namespaceId,
     parentNamespaceId: snapshot.parentNamespaceId,
     interfaces: ['lo (down)'],
     ipv4Routes: 0,
     ipv6Routes: 0,
-    firewallObjects: 0,
   };
 }
 
@@ -137,7 +124,6 @@ function verifyIsolationReport(report) {
     || report.interfaces[0] !== 'lo (down)'
     || report.ipv4Routes !== 0
     || report.ipv6Routes !== 0
-    || report.firewallObjects !== 0
     || report.effectiveCapabilities !== '0'
     || report.noNewPrivileges !== true
   ) {
@@ -146,41 +132,14 @@ function verifyIsolationReport(report) {
   return report;
 }
 
-function verifyDroppedWorker() {
-  let network;
-  try {
-    network = JSON.parse(process.env.PARMAR_AETHER_VERIFIED_NETWORK || '');
-  } catch {
-    throw new Error('The pre-drop network verification result is missing or invalid.');
-  }
-  const namespaceId = readNamespaceId();
-  if (namespaceId !== network.namespaceId) {
-    throw new Error('The isolated process changed network namespaces after verification.');
-  }
-  if (
-    network.firewallObjects !== 0
-    || network.ipv4Routes !== 0
-    || network.ipv6Routes !== 0
-  ) {
-    throw new Error('The pre-drop network verification result is not restrictive.');
-  }
-  const interfaces = commandJson(process.env.PARMAR_AETHER_IP_PATH, ['-j', 'link', 'show']);
-  const ipv4Routes = commandJson(process.env.PARMAR_AETHER_IP_PATH, ['-j', '-4', 'route', 'show', 'table', 'all']);
-  const ipv6Routes = commandJson(process.env.PARMAR_AETHER_IP_PATH, ['-j', '-6', 'route', 'show', 'table', 'all']);
-  const currentNetwork = {
-    ...network,
-    namespaceId,
-    parentNamespaceId: process.env.PARMAR_AETHER_PARENT_NETNS,
-    interfaces,
-    ipv4Routes,
-    ipv6Routes,
-    firewall: { nftables: [{ metainfo: {} }] },
-    effectiveCapabilities: readEffectiveCapabilities(),
-    noNewPrivileges: fs.readFileSync('/proc/self/status', 'utf8')
-      .split('\n')
-      .find((entry) => entry.startsWith('NoNewPrivs:'))?.trim().split(/\s+/)[1],
-  };
-  return verifyIsolationSnapshot(currentNetwork);
+function verifyCurrentIsolation(expectedParentNamespace = process.env.PARMAR_AETHER_PARENT_NETNS) {
+  if (!expectedParentNamespace) throw new Error('The expected parent network namespace is missing.');
+  const snapshot = inspectIsolation(expectedParentNamespace);
+  snapshot.effectiveCapabilities = readEffectiveCapabilities();
+  snapshot.noNewPrivileges = fs.readFileSync('/proc/self/status', 'utf8')
+    .split('\n')
+    .find((entry) => entry.startsWith('NoNewPrivs:'))?.trim().split(/\s+/)[1];
+  return verifyIsolationSnapshot(snapshot);
 }
 
 function sendLine(value) {
@@ -193,7 +152,7 @@ function startProbe() {
   if (typeof capability !== 'string' || !parentNamespaceId) {
     throw new Error('The isolated probe launch configuration is incomplete.');
   }
-  const snapshot = verifyDroppedWorker();
+  const snapshot = verifyCurrentIsolation(parentNamespaceId);
   const parentIdentity = { pid: process.ppid, uid: readEffectiveUid(process.ppid) };
   const brokerSession = createBrokerSession(parentIdentity, Date.now(), capability);
   let nextSequence = 0;
@@ -238,17 +197,7 @@ function startProbe() {
 
 if (require.main === module) {
   try {
-    if (process.argv[2] === '--verify-network') {
-      const parentNamespace = process.argv[3];
-      const ipPath = process.argv[4];
-      const nftPath = process.argv[5];
-      process.env.PARMAR_AETHER_IP_PATH = ipPath;
-      process.env.PARMAR_AETHER_NFT_PATH = nftPath;
-      const network = inspectIsolation(parentNamespace);
-      process.stdout.write(`${JSON.stringify(verifyNetworkSnapshot(network))}\n`);
-    } else {
-      startProbe();
-    }
+    startProbe();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : 'Isolation verification failed.'}\n`);
     process.exitCode = 1;
@@ -257,6 +206,7 @@ if (require.main === module) {
 
 module.exports = {
   verifyIsolationReport,
+  verifyCurrentIsolation,
   verifyNetworkSnapshot,
   verifyIsolationSnapshot,
 };

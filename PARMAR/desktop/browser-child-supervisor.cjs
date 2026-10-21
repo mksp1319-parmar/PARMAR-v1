@@ -7,6 +7,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { randomBytes } = require('node:crypto');
 const { authorizeBrokerMessage, createBrokerSession } = require('./broker-protocol.cjs');
+const { buildIsolatedLaunch } = require('./isolation-launcher.cjs');
 
 const CHILD_ARGUMENT = '--aether-browser-child';
 const GUI_ENVIRONMENT_KEYS = [
@@ -15,7 +16,6 @@ const GUI_ENVIRONMENT_KEYS = [
   'HOME',
   'LANG',
   'LC_ALL',
-  'LD_LIBRARY_PATH',
   'PATH',
   'WAYLAND_DISPLAY',
   'XAUTHORITY',
@@ -35,6 +35,10 @@ function readEffectiveUid(pid) {
   return uid;
 }
 
+function readNetworkNamespace(pid = 'self') {
+  return fs.readlinkSync(`/proc/${pid}/ns/net`);
+}
+
 function terminateProcessGroup(child, signal = 'SIGKILL') {
   if (!Number.isSafeInteger(child?.pid) || child.pid < 1) return;
   try {
@@ -44,10 +48,29 @@ function terminateProcessGroup(child, signal = 'SIGKILL') {
   }
 }
 
-function childEnvironment(source, capability) {
+function childEnvironment(source, capability, executablePath) {
   const environment = {};
   for (const key of GUI_ENVIRONMENT_KEYS) {
     if (typeof source[key] === 'string') environment[key] = source[key];
+  }
+  if (typeof source.APPDIR === 'string' && path.isAbsolute(source.APPDIR)) {
+    const appDirectory = path.resolve(source.APPDIR);
+    const executableRelativePath = path.relative(appDirectory, executablePath);
+    if (
+      executableRelativePath !== '..'
+      && !executableRelativePath.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(executableRelativePath)
+    ) {
+      environment.APPDIR = appDirectory;
+      environment.LD_LIBRARY_PATH = path.join(appDirectory, 'usr', 'lib');
+      environment.GSETTINGS_SCHEMA_DIR = path.join(appDirectory, 'usr', 'share', 'glib-2.0', 'schemas');
+      environment.XDG_DATA_DIRS = [
+        path.join(appDirectory, 'usr', 'share'),
+        '/usr/share/gnome',
+        '/usr/local/share',
+        '/usr/share',
+      ].join(path.delimiter);
+    }
   }
   environment.PARMAR_AETHER_BROKER_CAPABILITY = capability;
   return environment;
@@ -57,16 +80,22 @@ function createBrowserChildSupervisor({
   executablePath = process.execPath,
   appPath = path.resolve(__dirname),
   environment = process.env,
+  platform = process.platform,
   parentPid = process.pid,
   parentUid = process.geteuid?.(),
   spawnProcess = spawn,
+  resolveIsolationExecutable,
+  parentNamespaceReader = readNetworkNamespace,
+  processNamespaceReader = readNetworkNamespace,
   processUidReader = readEffectiveUid,
   killProcessGroup = terminateProcessGroup,
   startupTimeoutMs = 15_000,
   shutdownGraceMs = 3_000,
+  crashRestartDelayMs = 500,
+  maxCrashRestarts = 2,
 } = {}) {
   if (
-    process.platform !== 'linux'
+    platform !== 'linux'
     || !path.isAbsolute(executablePath)
     || !path.isAbsolute(appPath)
     || !Number.isSafeInteger(parentPid)
@@ -77,6 +106,11 @@ function createBrowserChildSupervisor({
     || startupTimeoutMs < 100
     || !Number.isSafeInteger(shutdownGraceMs)
     || shutdownGraceMs < 100
+    || !Number.isSafeInteger(crashRestartDelayMs)
+    || crashRestartDelayMs < 10
+    || !Number.isSafeInteger(maxCrashRestarts)
+    || maxCrashRestarts < 0
+    || maxCrashRestarts > 5
   ) {
     throw new TypeError('The AETHER browser child launch configuration is invalid.');
   }
@@ -97,6 +131,9 @@ function createBrowserChildSupervisor({
   let startupPromise = null;
   let shutdownPromise = null;
   let cleanupError = null;
+  let parentNamespaceId = null;
+  let recoveryTimer = null;
+  let recoveryAttempts = 0;
 
   const cleanupGroup = () => {
     if (!child?.pid) return;
@@ -157,6 +194,9 @@ function createBrowserChildSupervisor({
     }
     if (state === 'starting') {
       try {
+        if (processNamespaceReader(child.pid) === parentNamespaceId) {
+          throw new Error('The AETHER browser child shares the host network namespace.');
+        }
         send('browser.ready');
       } catch (error) {
         failStartup(error);
@@ -183,10 +223,20 @@ function createBrowserChildSupervisor({
     resolveStartup = null;
     let spawnError = null;
     try {
-      child = spawnProcess(executablePath, [appPath, CHILD_ARGUMENT], {
+      parentNamespaceId = parentNamespaceReader();
+      const launch = buildIsolatedLaunch({
+        targetExecutable: executablePath,
+        targetArguments: [appPath, CHILD_ARGUMENT],
+        parentNamespaceId,
+        capability,
+        environment: childEnvironment(environment, capability, executablePath),
+        ...(resolveIsolationExecutable ? { resolveExecutable: resolveIsolationExecutable } : {}),
+        platform,
+      });
+      child = spawnProcess(launch.executable, launch.arguments, {
         cwd: path.dirname(appPath),
         detached: true,
-        env: childEnvironment(environment, capability),
+        env: launch.environment,
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -263,6 +313,14 @@ function createBrowserChildSupervisor({
       }
       resolveClosed(closeResult);
       events.emit('exit', { ...closeResult, priorState });
+      if (priorState === 'ready' && recoveryAttempts < maxCrashRestarts) {
+        recoveryAttempts += 1;
+        recoveryTimer = setTimeout(() => {
+          recoveryTimer = null;
+          start().catch((error) => events.emit('recovery-error', error));
+        }, crashRestartDelayMs);
+        recoveryTimer.unref?.();
+      }
     });
     startupTimer = setTimeout(
       () => failStartup(new Error('AETHER browser child startup timed out.')),
@@ -279,6 +337,10 @@ function createBrowserChildSupervisor({
 
   const stop = () => {
     if (shutdownPromise) return shutdownPromise;
+    if (recoveryTimer) {
+      clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+    }
     if (!child || state === 'stopped') return Promise.resolve(closeResult);
     shutdownPromise = (async () => {
       if (state === 'starting') {

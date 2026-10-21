@@ -15,16 +15,6 @@ const DESKTOP_DIRECTORY = __dirname;
 const PROBE_PATH = path.join(DESKTOP_DIRECTORY, 'isolation-probe.cjs');
 const DEFAULT_STARTUP_TIMEOUT_MS = 5000;
 const COMMAND_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
-const NAMESPACE_BOOTSTRAP = [
-  'node="$1"; probe="$2"; parent_ns="$3"; ip_path="$4"; nft_path="$5"; setpriv="$6"; capability="$PARMAR_AETHER_BROKER_CAPABILITY"',
-  'network="$("$node" "$probe" --verify-network "$parent_ns" "$ip_path" "$nft_path")" || exit 1',
-  'export PARMAR_AETHER_VERIFIED_NETWORK="$network"',
-  'export PARMAR_AETHER_BROKER_CAPABILITY="$capability"',
-  'export PARMAR_AETHER_PARENT_NETNS="$parent_ns"',
-  'export PARMAR_AETHER_IP_PATH="$ip_path"',
-  'export PARMAR_AETHER_NFT_PATH="$nft_path"',
-  'exec "$setpriv" --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- "$node" "$probe"',
-].join('; ');
 
 function executablePath(command, pathValue = COMMAND_PATH) {
   for (const directory of pathValue.split(path.delimiter)) {
@@ -60,6 +50,55 @@ function readNamespaceId(pid = 'self') {
   return fs.readlinkSync(`/proc/${pid}/ns/net`);
 }
 
+function buildIsolatedLaunch({
+  targetExecutable,
+  targetArguments = [],
+  parentNamespaceId,
+  capability,
+  environment = {},
+  resolveExecutable = executablePath,
+  platform = process.platform,
+}) {
+  if (platform !== 'linux') {
+    throw new Error('The AETHER isolation launcher supports Linux only.');
+  }
+  if (!path.isAbsolute(targetExecutable) || !Array.isArray(targetArguments)
+    || targetArguments.some((argument) => typeof argument !== 'string')
+    || !/^net:\[\d+\]$/.test(parentNamespaceId || '')
+    || typeof capability !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(capability)) {
+    throw new TypeError('The AETHER isolated launch configuration is invalid.');
+  }
+
+  const unsharePath = resolveExecutable('unshare');
+  const setprivPath = resolveExecutable('setpriv');
+  const ipPath = resolveExecutable('ip');
+  return {
+    executable: unsharePath,
+    arguments: [
+      '--user',
+      '--map-current-user',
+      '--net',
+      '--fork',
+      '--kill-child=SIGKILL',
+      '--',
+      setprivPath,
+      '--inh-caps=-all',
+      '--ambient-caps=-all',
+      '--no-new-privs',
+      '--',
+      targetExecutable,
+      ...targetArguments,
+    ],
+    environment: {
+      ...environment,
+      PATH: COMMAND_PATH,
+      PARMAR_AETHER_BROKER_CAPABILITY: capability,
+      PARMAR_AETHER_PARENT_NETNS: parentNamespaceId,
+      PARMAR_AETHER_IP_PATH: ipPath,
+    },
+  };
+}
+
 function readEffectiveUid(pid) {
   const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
   const line = status.split('\n').find((entry) => entry.startsWith('Uid:'));
@@ -92,35 +131,20 @@ function createLauncher({
     if (!Number.isSafeInteger(brokerPeerUid) || brokerPeerUid < 0) {
       throw new Error('The AETHER broker requires a valid parent process UID.');
     }
-    const unsharePath = resolveExecutable('unshare');
-    const setprivPath = resolveExecutable('setpriv');
-    const ipPath = resolveExecutable('ip');
-    const nftPath = resolveExecutable('nft');
-    const shellPath = resolveExecutable('sh');
     const parentNamespaceId = parentNamespace();
     const capability = randomBytes(32).toString('base64url');
-    const child = spawnProcess(unsharePath, [
-      '--user',
-      '--map-root-user',
-      '--net',
-      '--',
-      shellPath,
-      '-c',
-      NAMESPACE_BOOTSTRAP,
-      'aether-isolation-bootstrap',
-      process.execPath,
-      PROBE_PATH,
+    const launch = buildIsolatedLaunch({
+      targetExecutable: process.execPath,
+      targetArguments: [PROBE_PATH],
       parentNamespaceId,
-      ipPath,
-      nftPath,
-      setprivPath,
-    ], {
+      capability,
+      resolveExecutable,
+    });
+    const child = spawnProcess(launch.executable, launch.arguments, {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        PATH: COMMAND_PATH,
-        PARMAR_AETHER_BROKER_CAPABILITY: capability,
-      },
+      shell: false,
+      env: launch.environment,
     });
     child.on('error', () => {});
     let childUid;
@@ -328,6 +352,7 @@ function createLauncher({
 const { launch } = createLauncher();
 
 module.exports = {
+  buildIsolatedLaunch,
   createLauncher,
   launchOfflineProbe: (options) => launch({ mode: 'offline', ...options }),
   terminateProcessGroup,

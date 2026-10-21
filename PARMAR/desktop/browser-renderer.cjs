@@ -4,6 +4,7 @@ const api = window.aetherDesktop;
 const elements = {
   tabs: document.querySelector('#tabs'),
   address: document.querySelector('#address'),
+  brandEmblem: document.querySelector('#brand-emblem'),
   form: document.querySelector('#address-form'),
   securityState: document.querySelector('#security-state'),
   tabState: document.querySelector('#tab-state'),
@@ -38,39 +39,49 @@ function element(tag, className, text) {
   return node;
 }
 
+function createIcon(name) {
+  const paths = {
+    close: 'M5 5l10 10M15 5 5 15',
+  };
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', paths[name]);
+  svg.append(path);
+  return svg;
+}
+
 function updateAddress(tab) {
   if (document.activeElement !== elements.address) {
-    elements.address.value = tab?.url || '';
+    elements.address.value = tab?.url || tab?.restoreUrl || '';
   }
 }
 
 function renderTabs() {
   elements.tabs.replaceChildren();
   for (const tab of state.tabs) {
-    const button = element('div', 'tab');
+    const item = element('div', tab.active ? 'tab tab-active' : 'tab');
+    item.setAttribute('role', 'presentation');
+    const button = element('button', 'tab-select');
+    button.type = 'button';
     button.setAttribute('role', 'tab');
-    button.tabIndex = 0;
     button.setAttribute('aria-selected', String(tab.active));
+    button.setAttribute('aria-controls', 'viewport');
     button.setAttribute('aria-label', `${tab.title}${tab.active ? ', active tab' : ''}`);
     const title = element('span', 'tab-title', tab.title || 'New Tab');
-    const close = element('button', 'tab-close', '×');
+    const close = element('button', 'tab-close');
     close.type = 'button';
     close.setAttribute('aria-label', `Close ${tab.title || 'tab'}`);
-    button.append(title, close);
-    button.addEventListener('click', (event) => {
-      if (event.target !== close) api.activateTab(tab.id);
-    });
-    button.addEventListener('keydown', (event) => {
-      if (event.target === button && ['Enter', ' '].includes(event.key)) {
-        event.preventDefault();
-        api.activateTab(tab.id);
-      }
-    });
+    button.append(title);
+    close.append(createIcon('close'));
+    button.addEventListener('click', () => api.activateTab(tab.id));
     close.addEventListener('click', (event) => {
       event.stopPropagation();
       api.closeTab(tab.id);
     });
-    elements.tabs.append(button);
+    item.append(button, close);
+    elements.tabs.append(item);
   }
   const tab = activeTab();
   updateAddress(tab);
@@ -81,12 +92,17 @@ function renderTabs() {
   document.querySelector('[data-action="reload"]').disabled = !tab;
   document.querySelector('[data-action="bookmark"]').disabled = !state.remoteBrowsing || !tab?.url;
   elements.tabState.textContent = tab
-    ? (tab.error || (tab.isLoading ? 'Loading…' : (tab.url || 'New tab · remote browsing restricted')))
+    ? (tab.error || (tab.isLoading
+      ? 'Loading…'
+      : (tab.url || (tab.restoreUrl
+        ? 'Session page paused · submit its address to retry'
+        : 'New tab · remote browsing restricted'))))
     : 'No browser tab selected';
   elements.tabState.style.color = tab?.error ? '#e49b83' : '';
 }
 
 function renderStatus() {
+  if (state.brandEmblemUrl) elements.brandEmblem.src = state.brandEmblemUrl;
   const text = state.remoteBrowsing
     ? 'Network boundary verified'
     : 'Restricted · remote browsing unavailable';
@@ -97,7 +113,7 @@ function renderStatus() {
   elements.securityState.title = state.reason || 'The browser shell is running with remote access disabled.';
 }
 
-function renderRecords(records, { removable = false } = {}) {
+function renderRecords(records, { removable = false, recordType = 'bookmark' } = {}) {
   elements.panelContent.replaceChildren();
   if (!records.length) {
     elements.panelContent.append(element('p', 'panel-empty', 'No saved browser records yet.'));
@@ -125,17 +141,22 @@ function renderRecords(records, { removable = false } = {}) {
     });
     card.append(open);
     if (removable) {
-      const remove = element('button', 'panel-action', 'Remove bookmark');
+      const remove = element('button', 'panel-action', `Remove ${recordType}`);
       remove.type = 'button';
       remove.addEventListener('click', async () => {
-        const result = await api.removeBookmark(record.url);
+        const collection = recordType === 'history' ? 'history' : 'bookmarks';
+        const removeRecord = recordType === 'history' ? api.removeHistory : api.removeBookmark;
+        const result = await removeRecord(record.url);
         if (result.ok) {
-          state.stored.bookmarks = result.data;
-          if (activePanel === 'bookmarks') {
-            renderRecords(state.stored.bookmarks, { removable: true });
+          state.stored[collection] = result.data;
+          if (activePanel === recordType || (recordType === 'bookmark' && activePanel === 'bookmarks')) {
+            if (activePanel === 'history') renderHistoryPanel();
+            else renderRecords(state.stored.bookmarks, { removable: true });
           }
         } else {
-          if (activePanel === 'bookmarks') setMessage(result.error, true);
+          if (activePanel === recordType || (recordType === 'bookmark' && activePanel === 'bookmarks')) {
+            setMessage(result.error, true);
+          }
         }
       });
       card.append(remove);
@@ -146,7 +167,7 @@ function renderRecords(records, { removable = false } = {}) {
 }
 
 function renderHistoryPanel() {
-  renderRecords(state.stored.history);
+  renderRecords(state.stored.history, { removable: true, recordType: 'history' });
   const clear = element('button', 'panel-action', 'Clear browsing history');
   clear.type = 'button';
   clear.addEventListener('click', async () => {
@@ -247,6 +268,9 @@ document.querySelectorAll('[data-action]').forEach((button) => {
     if (action === 'new-tab') {
       const result = await api.createTab();
       if (!result?.ok) setMessage(result?.error || 'A new tab could not be created.', true);
+    } else if (action === 'focus-address') {
+      elements.address.focus();
+      elements.address.select();
     } else if (action === 'back') {
       await traverseHistory('back');
     } else if (action === 'forward') {

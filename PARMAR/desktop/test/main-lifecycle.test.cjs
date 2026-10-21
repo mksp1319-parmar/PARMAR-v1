@@ -10,6 +10,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 class MockWebContents extends EventEmitter {
+  static instances = [];
+
   constructor() {
     super();
     this.sent = [];
@@ -18,6 +20,7 @@ class MockWebContents extends EventEmitter {
     this.windowOpenHandler = null;
     this.canGoBackValue = true;
     this.canGoForwardValue = true;
+    MockWebContents.instances.push(this);
   }
 
   setWindowOpenHandler(handler) {
@@ -184,6 +187,7 @@ function createElectronMock(userDataPath, { hasSingleInstanceLock = true } = {})
   };
   app.whenReady = () => Promise.resolve();
   app.getPath = () => userDataPath;
+  app.getAppPath = () => path.resolve(__dirname, '..');
   app.quit = () => { app.quitCount += 1; };
 
   const browserSession = new EventEmitter();
@@ -226,12 +230,22 @@ async function launchMainForTest({
   backendUnavailable = false,
   hasSingleInstanceLock = true,
   browserLoadFailure = false,
+  initialSession,
 } = {}) {
   MockBrowserWindow.windows = [];
+  MockWebContents.instances = [];
   MockBrowserWindow.failControlLoad = backendUnavailable;
   MockBrowserWindow.failBrowserLoad = browserLoadFailure;
   MockBrowserWindow.browserLoadGate = null;
   const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'parmar-aether-main-'));
+  if (initialSession) {
+    fs.writeFileSync(path.join(userDataPath, 'aether-state.json'), JSON.stringify({
+      version: 1,
+      bookmarks: [],
+      history: [],
+      session: initialSession,
+    }));
+  }
   const {
     electron,
     handlers,
@@ -279,7 +293,7 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.equal(browserSession.listenerCount('will-download'), 0);
   const controlEvent = {
     sender: controlWindow.webContents,
-    senderFrame: { isMainFrame: true, url: 'http://127.0.0.1:8080/' },
+    senderFrame: { parent: null, url: 'http://127.0.0.1:8080/' },
   };
   const rejectedRedirect = { prevented: false, preventDefault() { this.prevented = true; } };
   controlWindow.webContents.emit('will-redirect', rejectedRedirect, 'https://untrusted.example/');
@@ -290,7 +304,7 @@ test('tab lifecycle detaches only the active view and routes navigation controls
 
   const untrustedFrameStatus = await handlers.get('parmar-aether:status')({
     ...controlEvent,
-    senderFrame: { isMainFrame: false, url: 'http://127.0.0.1:8080/' },
+    senderFrame: { parent: {}, url: 'http://127.0.0.1:8080/' },
   });
   assert.equal(untrustedFrameStatus.shell, 'unavailable');
   const opened = await handlers.get('parmar-aether:open')(controlEvent);
@@ -305,7 +319,7 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   const browserEvent = {
     sender: browserWindow.webContents,
     senderFrame: {
-      isMainFrame: true,
+      parent: null,
       url: pathToFileURL(path.join(__dirname, '..', 'browser.html')).href,
     },
   };
@@ -318,6 +332,12 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.equal(controlWindow.options.webPreferences.sandbox, true);
   assert.equal(controlWindow.options.webPreferences.webSecurity, true);
   assert.deepEqual(browserSession.permissionCheckHandler('https://example.com', 'media'), false);
+  const removedHistory = await handlers.get('aether:remove-history')(
+    browserEvent,
+    'https://example.com/',
+  );
+  assert.equal(removedHistory.ok, true);
+  assert.deepEqual([...removedHistory.data], []);
   let permissionGranted = true;
   browserSession.permissionRequestHandler({}, 'media', (granted) => { permissionGranted = granted; });
   assert.equal(permissionGranted, false);
@@ -358,7 +378,7 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.equal(initialView.options.webPreferences.preload, undefined);
   await assert.rejects(handlers.get('aether:create-tab')({
     sender: initialView.webContents,
-    senderFrame: { isMainFrame: true, url: 'https://untrusted.example/' },
+    senderFrame: { parent: null, url: 'https://untrusted.example/' },
   }), /untrusted renderer/);
   assert.equal(
     initialView.webContents.windowOpenHandler({ url: 'https://example.com/' }).action,
@@ -644,6 +664,45 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.equal(browserSession.requestPolicyRegistrations, 1);
 });
 
+test('restored session tabs stay on the local new-tab page until the user retries an address', async (context) => {
+  const { cleanup, handlers } = await launchMainForTest({
+    initialSession: {
+      tabs: ['https://paused.example/path', null],
+      activeIndex: 0,
+    },
+  });
+  context.after(cleanup);
+
+  const controlWindow = MockBrowserWindow.windows[0];
+  const controlEvent = {
+    sender: controlWindow.webContents,
+    senderFrame: { parent: null, url: 'http://127.0.0.1:8080/' },
+  };
+  assert.equal((await handlers.get('parmar-aether:open')(controlEvent)).ok, true);
+
+  const browserWindow = MockBrowserWindow.windows[1];
+  const state = browserWindow.webContents.sent
+    .filter(({ channel }) => channel === 'aether:state')
+    .at(-1).payload;
+  assert.equal(state.tabs.length, 2);
+  assert.equal(state.tabs[0].restoreUrl, 'https://paused.example/path');
+  assert.equal(state.tabs[0].url, '');
+  assert.equal(state.tabs[0].active, true);
+  assert.equal(MockWebContents.instances.some((contents) => (
+    contents.calls.some(([action]) => action === 'navigate')
+  )), false);
+
+  MockWebContents.instances.at(-1).emit(
+    'did-navigate',
+    {},
+    pathToFileURL(path.join(__dirname, '..', 'newtab.html')).href,
+  );
+  const afterLocalLoad = browserWindow.webContents.sent
+    .filter(({ channel }) => channel === 'aether:state')
+    .at(-1).payload;
+  assert.equal(afterLocalLoad.tabs[0].restoreUrl, 'https://paused.example/path');
+});
+
 test('concurrent AETHER open requests wait for the same browser startup', async (context) => {
   const { cleanup, handlers } = await launchMainForTest();
   context.after(cleanup);
@@ -651,7 +710,7 @@ test('concurrent AETHER open requests wait for the same browser startup', async 
   const controlWindow = MockBrowserWindow.windows[0];
   const controlEvent = {
     sender: controlWindow.webContents,
-    senderFrame: { isMainFrame: true, url: 'http://127.0.0.1:8080/' },
+    senderFrame: { parent: null, url: 'http://127.0.0.1:8080/' },
   };
   let finishBrowserLoad;
   MockBrowserWindow.browserLoadGate = new Promise((resolve) => {
@@ -710,7 +769,7 @@ test('browser chrome renderer crash closes the browser window without enabling r
   const controlWindow = MockBrowserWindow.windows[0];
   const controlEvent = {
     sender: controlWindow.webContents,
-    senderFrame: { isMainFrame: true, url: 'http://127.0.0.1:8080/' },
+    senderFrame: { parent: null, url: 'http://127.0.0.1:8080/' },
   };
   assert.equal((await handlers.get('parmar-aether:open')(controlEvent)).ok, true);
   const browserWindow = MockBrowserWindow.windows[1];
@@ -729,7 +788,7 @@ test('browser shell startup failure is reported, cleaned up, and can only retry 
   const controlWindow = MockBrowserWindow.windows[0];
   const controlEvent = {
     sender: controlWindow.webContents,
-    senderFrame: { isMainFrame: true, url: 'http://127.0.0.1:8080/' },
+    senderFrame: { parent: null, url: 'http://127.0.0.1:8080/' },
   };
   const failed = await handlers.get('parmar-aether:open')(controlEvent);
   assert.equal(failed.ok, false);
@@ -761,7 +820,7 @@ test('backend-unavailable fallback can open only the restricted shell through it
   const fallbackUrl = pathToFileURL(path.join(__dirname, '..', 'control-unavailable.html')).href;
   const fallbackEvent = {
     sender: controlWindow.webContents,
-    senderFrame: { isMainFrame: true, url: fallbackUrl },
+    senderFrame: { parent: null, url: fallbackUrl },
   };
   const status = await handlers.get('parmar-aether:status')(fallbackEvent);
   assert.equal(status.shell, 'available');
@@ -769,7 +828,7 @@ test('backend-unavailable fallback can open only the restricted shell through it
 
   const untrustedFileStatus = await handlers.get('parmar-aether:status')({
     ...fallbackEvent,
-    senderFrame: { isMainFrame: true, url: 'file:///tmp/untrusted.html' },
+    senderFrame: { parent: null, url: 'file:///tmp/untrusted.html' },
   });
   assert.equal(untrustedFileStatus.shell, 'unavailable');
 
@@ -778,6 +837,6 @@ test('backend-unavailable fallback can open only the restricted shell through it
   const browserWindow = MockBrowserWindow.windows[1];
   await assert.rejects(handlers.get('aether:create-tab')({
     sender: browserWindow.webContents,
-    senderFrame: { isMainFrame: true, url: 'file:///tmp/untrusted.html' },
+    senderFrame: { parent: null, url: 'file:///tmp/untrusted.html' },
   }), /untrusted renderer/);
 });

@@ -3,16 +3,20 @@
   "version": "1.0.0",
   "private": true,
   "description": "Restricted Electron desktop shell for PARMAR AETHER",
+  "desktopName": "com.parmar.aether",
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/*.test.cjs",
-    "test:electron-isolation": "node --test test/electron-isolation-integration.test.cjs"
+    "test": "node --test --test-concurrency=1 test/*.test.cjs",
+    "test:electron-isolation": "node --test test/electron-isolation-integration.test.cjs",
+    "package:dir": "electron-builder --dir --config electron-builder.config.cjs",
+    "package:linux": "electron-builder --linux AppImage --config electron-builder.config.cjs"
   },
   "engines": {
     "node": ">=22.12.0 <25"
   },
   "devDependencies": {
-    "electron": "44.7.0"
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
   }
 }

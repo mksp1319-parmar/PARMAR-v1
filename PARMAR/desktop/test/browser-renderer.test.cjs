@@ -37,6 +37,14 @@ class MockElement {
     this.attributes[name] = value;
   }
 
+  focus() {
+    this.focused = true;
+  }
+
+  select() {
+    this.selected = true;
+  }
+
   async click() {
     await this.listeners.get('click')?.({
       preventDefault() {},
@@ -50,6 +58,7 @@ function createRenderer() {
   const selectors = [
     '#tabs',
     '#address',
+    '#brand-emblem',
     '#address-form',
     '#security-state',
     '#tab-state',
@@ -64,7 +73,7 @@ function createRenderer() {
     '[data-action="bookmark"]',
   ];
   const elements = new Map(selectors.map((selector) => [selector, new MockElement()]));
-  const actions = ['back', 'forward', 'reload', 'stop', 'history', 'bookmarks', 'downloads', 'settings', 'close-panel']
+  const actions = ['back', 'forward', 'reload', 'stop', 'history', 'bookmarks', 'downloads', 'settings', 'focus-address', 'close-panel']
     .map((action) => {
       const button = new MockElement('button');
       button.dataset.action = action;
@@ -74,6 +83,7 @@ function createRenderer() {
   const historyCalls = [];
   const controlCalls = [];
   let removeBookmarkResult = { ok: true, data: [] };
+  let removeHistoryResult = { ok: true, data: [] };
   let clearHistoryResult = { ok: true, data: [] };
   let stateListener;
   const api = {
@@ -108,6 +118,7 @@ function createRenderer() {
     },
     clearHistory: () => Promise.resolve(clearHistoryResult),
     removeBookmark: () => Promise.resolve(removeBookmarkResult),
+    removeHistory: () => Promise.resolve(removeHistoryResult),
     onState(callback) {
       stateListener = callback;
     },
@@ -118,6 +129,7 @@ function createRenderer() {
   const document = {
     activeElement: null,
     createElement: (tagName) => new MockElement(tagName),
+    createElementNS: (_namespace, tagName) => new MockElement(tagName),
     querySelector: (selector) => elements.get(selector) || new MockElement(),
     querySelectorAll: () => actions,
   };
@@ -143,12 +155,24 @@ function createRenderer() {
     setRemoveBookmarkResult(result) {
       removeBookmarkResult = result;
     },
+    setRemoveHistoryResult(result) {
+      removeHistoryResult = result;
+    },
     setClearHistoryResult(result) {
       clearHistoryResult = result;
     },
     setState: (...args) => stateListener(...args),
   };
 }
+
+test('search shortcut focuses and selects the existing address field', async () => {
+  const renderer = createRenderer();
+
+  await renderer.actions.find((button) => button.dataset.action === 'focus-address').click();
+
+  assert.equal(renderer.elements.get('#address').focused, true);
+  assert.equal(renderer.elements.get('#address').selected, true);
+});
 
 test('history controls surface traversal denials when tab state changes before the action', async () => {
   const renderer = createRenderer();
@@ -164,6 +188,40 @@ test('history controls surface traversal denials when tab state changes before t
       isLoading: false,
     }],
     stored: { history: [], bookmarks: [] },
+  });
+
+  test('browser chrome uses the trusted PARMAR emblem URL from application state', () => {
+    const renderer = createRenderer();
+    const brandEmblemUrl = 'file:///resources/aether/parmar-emblem.png';
+    renderer.setState({
+      brandEmblemUrl,
+      remoteBrowsing: false,
+      tabs: [],
+      stored: { bookmarks: [], history: [] },
+    });
+    assert.equal(renderer.elements.get('#brand-emblem').src, brandEmblemUrl);
+  });
+
+  test('tab controls are native, labelled buttons with an active selection state', () => {
+    const renderer = createRenderer();
+    renderer.setState({
+      remoteBrowsing: false,
+      tabs: [{
+        id: '00000000-0000-0000-0000-000000000001',
+        active: true,
+        title: 'AETHER',
+      }],
+      stored: { bookmarks: [], history: [] },
+    });
+    const [tab] = renderer.elements.get('#tabs').children;
+    const [select, close] = tab.children;
+    assert.equal(tab.attributes.role, 'presentation');
+    assert.equal(select.tagName, 'button');
+    assert.equal(select.attributes.role, 'tab');
+    assert.equal(select.attributes['aria-selected'], 'true');
+    assert.equal(select.attributes['aria-controls'], 'viewport');
+    assert.equal(select.attributes['aria-label'], 'AETHER, active tab');
+    assert.equal(close.attributes['aria-label'], 'Close AETHER');
   });
 
   await renderer.actions.find((button) => button.dataset.action === 'back').click();
@@ -296,6 +354,26 @@ test('reload and stop controls use the active tab ID and ignore late results aft
   assert.equal(renderer.elements.get('#tab-state').textContent, 'This tab is not loading.');
 });
 
+test('restored session addresses are shown as paused and are not navigated automatically', () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [{
+      id: 'paused-tab',
+      title: 'New Tab',
+      url: '',
+      restoreUrl: 'https://saved.example/path',
+      active: true,
+      isLoading: false,
+    }],
+    stored: { history: [], bookmarks: [] },
+  });
+
+  assert.equal(renderer.elements.get('#address').value, 'https://saved.example/path');
+  assert.match(renderer.elements.get('#tab-state').textContent, /Session page paused/);
+  assert.deepEqual(renderer.calls, []);
+});
+
 test('history and bookmark open actions use guarded navigation while remote browsing is disabled', async () => {
   for (const [panel, records, expectedUrl] of [
     ['history', [{ title: 'Visited page', url: 'https://history.example/path' }], 'https://history.example/path'],
@@ -340,6 +418,25 @@ test('history and bookmark open actions use guarded navigation while remote brow
       assert.equal(panelContent.children[0].textContent, 'Clear browsing history');
     }
   }
+});
+
+test('history entries can be removed individually without replacing another panel', async () => {
+  const record = { title: 'Visited page', url: 'https://visited.example/path' };
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { history: [record], bookmarks: [] },
+  });
+
+  await renderer.actions.find((button) => button.dataset.action === 'history').click();
+  const historyList = renderer.elements.get('#panel-content').children
+    .find((child) => child.className === 'panel-list');
+  const removeButton = historyList.children[0].children
+    .find((child) => child.textContent === 'Remove history');
+  await removeButton.click();
+
+  assert.equal(renderer.elements.get('#panel-content').children[1].textContent, 'No saved browser records yet.');
 });
 
 test('late history and bookmark responses update storage without replacing another open panel', async () => {

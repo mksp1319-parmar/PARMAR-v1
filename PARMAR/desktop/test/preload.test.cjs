@@ -48,7 +48,7 @@ test('browser preload exposes only the fixed, validated AETHER interface', async
     'activateTab', 'addBookmark', 'back', 'clearHistory', 'closeTab',
     'createTab', 'forward', 'getBookmarks', 'getHistory', 'getStatus',
     'layout', 'navigate', 'onNavigationError', 'onState', 'reload',
-    'onFocusAddress', 'removeBookmark', 'stop', 'zoom',
+    'onFocusAddress', 'removeBookmark', 'removeHistory', 'stop', 'zoom',
   ].sort());
 
   await api.navigate('x'.repeat(2049), '123e4567-e89b-12d3-a456-426614174000');
@@ -76,6 +76,12 @@ test('browser preload exposes only the fixed, validated AETHER interface', async
     { channel: 'aether:stop', args: [tabId] },
     { channel: 'aether:zoom', args: [1.2, tabId] },
   ]);
+
+  await api.removeHistory('https://example.com/');
+  assert.deepEqual(calls.at(-1), {
+    channel: 'aether:remove-history',
+    args: ['https://example.com/'],
+  });
 });
 
 test('preload event subscriptions can be removed and have no generic IPC method', () => {

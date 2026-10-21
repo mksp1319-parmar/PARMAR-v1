@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
-const { createHash } = require('node:crypto');
+const { createHash, randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -10,19 +10,21 @@ const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const test = require('node:test');
+const { buildIsolatedLaunch } = require('../isolation-launcher.cjs');
 
 const desktopDirectory = path.resolve(__dirname, '..');
 const wrapperPath = path.join(__dirname, 'electron-isolation-wrapper.cjs');
 const electronPath = path.join(desktopDirectory, 'node_modules/electron/dist/electron');
-const unsharePath = '/usr/bin/unshare';
 const xvfbPath = '/usr/bin/Xvfb';
 const runtimeLibraryDirectory = process.env.PARMAR_ELECTRON_RUNTIME_LIB_DIR;
+const runtimeRequired = process.env.PARMAR_ELECTRON_RUNTIME_REQUIRED === '1';
 const hasRuntime = Boolean(
   runtimeLibraryDirectory
   && fs.existsSync(path.join(runtimeLibraryDirectory, 'libgtk-3.so.0')),
 );
 const hasLinuxTools = process.platform === 'linux'
-  && fs.existsSync(unsharePath)
+  && ['/usr/bin/unshare', '/usr/bin/setpriv', '/usr/sbin/ip']
+    .every((command) => fs.existsSync(command))
   && fs.existsSync(xvfbPath)
   && fs.existsSync(electronPath);
 
@@ -39,6 +41,20 @@ function listen(server, host, ipv6Only = false) {
 
 function closeServer(server) {
   return new Promise((resolve) => server.close(resolve));
+}
+
+function waitForClose(session, description, timeoutMs = 15_000) {
+  let timeout;
+  return Promise.race([
+    session.closed,
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(
+          `Timed out waiting for ${description}; received ${JSON.stringify(session.events)}. ${session.stderr}`,
+        ));
+      }, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timeout));
 }
 
 function activeIpv4Address() {
@@ -251,19 +267,12 @@ function launchIsolatedElectron({
   const inheritedEnvironment = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !/^(?:http|https|all|no)_proxy$/i.test(key)),
   );
-  const child = spawn(unsharePath, [
-    '--user',
-    '--map-current-user',
-    '--net',
-    '--fork',
-    '--kill-child=SIGKILL',
-    '--',
-    process.execPath,
-    wrapperPath,
-  ], {
-    detached: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
+  const launch = buildIsolatedLaunch({
+    targetExecutable: electronPath,
+    targetArguments: [wrapperPath],
+    parentNamespaceId: fs.readlinkSync('/proc/self/ns/net'),
+    capability: randomBytes(32).toString('base64url'),
+    environment: {
       ...inheritedEnvironment,
       DISPLAY: display,
       LD_LIBRARY_PATH: [
@@ -281,6 +290,12 @@ function launchIsolatedElectron({
       PARMAR_TEST_RENDERER_REDIRECT_TARGETS: JSON.stringify(redirectEndpoints),
       PARMAR_TEST_STARTUP_DELAY_MS: String(startupDelayMs),
     },
+  });
+  const child = spawn(launch.executable, launch.arguments, {
+    detached: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: launch.environment,
+    shell: false,
   });
   const events = [];
   let outputBuffer = '';
@@ -313,7 +328,7 @@ function launchIsolatedElectron({
   child.once('error', (error) => {
     stderr += `Isolation launcher error: ${error.message}\n`;
   });
-  child.once('close', (code, signal) => resolveClosed({ code, signal }));
+  child.once('exit', (code, signal) => resolveClosed({ code, signal }));
 
   return {
     child,
@@ -329,7 +344,9 @@ function launchIsolatedElectron({
         }
         const timer = setTimeout(() => {
           clearInterval(interval);
-          reject(new Error(`Timed out waiting for Electron event. ${stderr}`));
+          reject(new Error(
+            `Timed out waiting for Electron event; received ${JSON.stringify(events)}. ${stderr}`,
+          ));
         }, timeoutMs);
         const interval = setInterval(() => {
           const event = events.find(predicate);
@@ -384,10 +401,16 @@ async function assertCleanedUp(session, recordedPids) {
 }
 
 test('live Electron and Chromium descendants stay outside the host namespace and cannot reach controlled listeners', {
-  skip: !hasLinuxTools || !hasRuntime
+  skip: (!hasLinuxTools || !hasRuntime) && !runtimeRequired
     ? 'Requires Linux namespace tools, pinned Electron, Xvfb, and PARMAR_ELECTRON_RUNTIME_LIB_DIR pointing to the user-local GTK libraries.'
     : false,
+  timeout: 180_000,
 }, async (context) => {
+  assert.ok(hasLinuxTools, 'Required Linux namespace tools, pinned Electron, and Xvfb are unavailable.');
+  assert.ok(
+    hasRuntime,
+    'PARMAR_ELECTRON_RUNTIME_LIB_DIR must point to a directory containing libgtk-3.so.0.',
+  );
   const listeners = [];
   const sessions = [];
   let rendererFixture;
@@ -401,8 +424,27 @@ test('live Electron and Chromium descendants stay outside the host namespace and
     await Promise.all(listeners.map(closeServer));
     if (rendererFixture) fs.rmSync(rendererFixture.directory, { recursive: true, force: true });
     if (xvfb?.server.exitCode === null && xvfb?.server.signalCode === null) {
+      const xvfbClosed = new Promise((resolve) => xvfb.server.once('close', resolve));
       xvfb.server.kill('SIGTERM');
-      await new Promise((resolve) => xvfb.server.once('exit', resolve));
+      const closedGracefully = await Promise.race([
+        xvfbClosed.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), 3000)),
+      ]);
+      if (
+        !closedGracefully
+        && xvfb.server.exitCode === null
+        && xvfb.server.signalCode === null
+      ) {
+        xvfb.server.kill('SIGKILL');
+        await Promise.race([
+          xvfbClosed,
+          new Promise((resolve) => setTimeout(resolve, 3000)),
+        ]);
+      }
+      assert.ok(
+        xvfb.server.exitCode !== null || xvfb.server.signalCode !== null,
+        'Xvfb did not exit during integration-test cleanup.',
+      );
     }
   });
 
@@ -630,7 +672,13 @@ test('live Electron and Chromium descendants stay outside the host namespace and
   })}`);
 
   normal.send('shutdown');
-  assert.equal((await normal.closed).code, 0, normal.stderr);
+  await normal.waitFor((event) => event.event === 'shutdown-command-received', 5000);
+  await normal.waitFor((event) => event.event === 'graceful-shutdown-requested', 5000);
+  await normal.waitFor((event) => event.event === 'before-quit', 5000);
+  await normal.waitFor((event) => event.event === 'window-closed', 5000);
+  const electronExit = await normal.waitFor((event) => event.event === 'electron-exit', 5000);
+  assert.equal(electronExit.code, 0, JSON.stringify(electronExit));
+  assert.equal((await waitForClose(normal, 'graceful Electron fixture shutdown')).code, 0, normal.stderr);
   await assertCleanedUp(normal, [...recordedPids]);
 
   const unexpected = launchIsolatedElectron(launchOptions);
@@ -648,7 +696,8 @@ test('live Electron and Chromium descendants stay outside the host namespace and
     ...processTree(unexpectedWrapper.pid).map((info) => info.pid),
   ]);
   unexpected.send('crash');
-  assert.equal((await unexpected.closed).code, 23, unexpected.stderr);
+  await unexpected.waitFor((event) => event.event === 'crash-command-received', 5000);
+  assert.equal((await waitForClose(unexpected, 'controlled Electron fixture crash')).code, 23, unexpected.stderr);
   await assertCleanedUp(unexpected, [...unexpectedPids]);
 
   const timedOut = launchIsolatedElectron({
@@ -667,7 +716,7 @@ test('live Electron and Chromium descendants stay outside the host namespace and
     ...processTree(timeoutWrapper.pid).map((info) => info.pid),
   ]);
   timedOut.killGroup('SIGKILL');
-  await timedOut.closed;
+  await waitForClose(timedOut, 'timed-out Electron fixture cleanup');
   await assertCleanedUp(timedOut, [...timeoutPids]);
 
   const forced = launchIsolatedElectron(launchOptions);
@@ -682,6 +731,6 @@ test('live Electron and Chromium descendants stay outside the host namespace and
     ...processTree(forcedWrapper.pid).map((info) => info.pid),
   ]);
   forced.killGroup('SIGKILL');
-  await forced.closed;
+  await waitForClose(forced, 'forced Electron fixture cleanup');
   await assertCleanedUp(forced, [...forcedPids]);
 });
