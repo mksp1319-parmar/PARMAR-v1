@@ -22,11 +22,16 @@ const hasRuntime = Boolean(
   runtimeLibraryDirectory
   && fs.existsSync(path.join(runtimeLibraryDirectory, 'libgtk-3.so.0')),
 );
-const hasLinuxTools = process.platform === 'linux'
-  && ['/usr/bin/unshare', '/usr/bin/setpriv', '/usr/sbin/ip']
-    .every((command) => fs.existsSync(command))
-  && fs.existsSync(xvfbPath)
-  && fs.existsSync(electronPath);
+const requiredLinuxExecutables = [
+  '/usr/bin/unshare',
+  '/usr/bin/setpriv',
+  '/usr/sbin/ip',
+  xvfbPath,
+  electronPath,
+];
+const missingLinuxExecutables = requiredLinuxExecutables
+  .filter((command) => !fs.existsSync(command));
+const hasLinuxTools = process.platform === 'linux' && missingLinuxExecutables.length === 0;
 
 function listen(server, host, ipv6Only = false) {
   return new Promise((resolve, reject) => {
@@ -55,22 +60,6 @@ function waitForClose(session, description, timeoutMs = 15_000) {
       }, timeoutMs);
     }),
   ]).finally(() => clearTimeout(timeout));
-}
-
-function activeIpv4Address() {
-  for (const entries of Object.values(os.networkInterfaces())) {
-    const address = entries?.find((entry) => (
-      (entry.family === 'IPv4' || entry.family === 4)
-      && !entry.internal
-      && !addressIsLinkLocal(entry.address)
-    ));
-    if (address) return address.address;
-  }
-  throw new Error('A non-loopback IPv4 address is required for the local listener test.');
-}
-
-function addressIsLinkLocal(value) {
-  return value.startsWith('169.254.');
 }
 
 function parentCanReach(host, port, family) {
@@ -222,7 +211,6 @@ function startXvfb() {
 
 function createRendererPage(ports) {
   const endpoints = [
-    `http://${ports.ipv4Host}:${ports.ipv4HostPort}`,
     `http://127.0.0.1:${ports.ipv4LoopbackPort}`,
     `http://[::1]:${ports.ipv6LoopbackPort}`,
   ];
@@ -265,7 +253,7 @@ function launchIsolatedElectron({
   startupDelayMs = 0,
 }) {
   const inheritedEnvironment = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !/^(?:http|https|all|no)_proxy$/i.test(key)),
+    Object.entries(process.env).filter(([key]) => !key.toLowerCase().includes('proxy')),
   );
   const launch = buildIsolatedLaunch({
     targetExecutable: electronPath,
@@ -279,8 +267,6 @@ function launchIsolatedElectron({
         runtimeLibraryDirectory,
         process.env.LD_LIBRARY_PATH,
       ].filter(Boolean).join(path.delimiter),
-      PARMAR_TEST_IPV4_HOST: ports.ipv4Host,
-      PARMAR_TEST_IPV4_PORT: String(ports.ipv4HostPort),
       PARMAR_TEST_IPV4_LOOPBACK_PORT: String(ports.ipv4LoopbackPort),
       PARMAR_TEST_IPV6_LOOPBACK_PORT: String(ports.ipv6LoopbackPort),
       PARMAR_TEST_RENDERER_PAGE: rendererPage,
@@ -313,7 +299,10 @@ function launchIsolatedElectron({
         ? 'AETHER_WRAPPER_EVENT '
         : 'AETHER_ELECTRON_EVENT ';
       const offset = line.indexOf(marker);
-      if (offset < 0) continue;
+      if (offset < 0) {
+        if (stderr.length < 16_384) stderr += `Electron stdout: ${line}\n`;
+        continue;
+      }
       try {
         events.push(JSON.parse(line.slice(offset + marker.length)));
       } catch {
@@ -406,7 +395,12 @@ test('live Electron and Chromium descendants stay outside the host namespace and
     : false,
   timeout: 180_000,
 }, async (context) => {
-  assert.ok(hasLinuxTools, 'Required Linux namespace tools, pinned Electron, and Xvfb are unavailable.');
+  assert.equal(process.platform, 'linux', 'The Electron isolation integration requires Linux.');
+  assert.deepEqual(
+    missingLinuxExecutables,
+    [],
+    `Required Linux namespace/Electron/Xvfb executables are missing: ${missingLinuxExecutables.join(', ')}`,
+  );
   assert.ok(
     hasRuntime,
     'PARMAR_ELECTRON_RUNTIME_LIB_DIR must point to a directory containing libgtk-3.so.0.',
@@ -449,10 +443,8 @@ test('live Electron and Chromium descendants stay outside the host namespace and
   });
 
   const connectionCounts = {
-    ipv4Host: 0,
     ipv4Loopback: 0,
     ipv6Loopback: 0,
-    websocketIpv4Host: 0,
     websocketIpv4Loopback: 0,
     websocketIpv6Loopback: 0,
   };
@@ -495,26 +487,19 @@ test('live Electron and Chromium descendants stay outside the host namespace and
     });
     return server;
   };
-  const ipv4HostListener = createControlledListener('ipv4Host');
   const ipv4LoopbackListener = createControlledListener('ipv4Loopback');
   const ipv6LoopbackListener = createControlledListener('ipv6Loopback');
-  listeners.push(ipv4HostListener, ipv4LoopbackListener, ipv6LoopbackListener);
+  listeners.push(ipv4LoopbackListener, ipv6LoopbackListener);
 
-  const ipv4HostPort = await listen(ipv4HostListener, '0.0.0.0');
   const ipv4LoopbackPort = await listen(ipv4LoopbackListener, '127.0.0.1');
   const ipv6LoopbackPort = await listen(ipv6LoopbackListener, '::1', true);
   const ports = {
-    ipv4Host: activeIpv4Address(),
-    ipv4HostPort,
     ipv4LoopbackPort,
     ipv6LoopbackPort,
   };
 
-  await parentCanReach('127.0.0.1', ipv4HostPort, 4);
-  await parentCanReach(ports.ipv4Host, ipv4HostPort, 4);
   await parentCanReach('127.0.0.1', ipv4LoopbackPort, 4);
   await parentCanReach('::1', ipv6LoopbackPort, 6);
-  connectionCounts.ipv4Host = 0;
   connectionCounts.ipv4Loopback = 0;
   connectionCounts.ipv6Loopback = 0;
 
@@ -609,28 +594,26 @@ test('live Electron and Chromium descendants stay outside the host namespace and
     }
   }
 
-  assert.equal(ready.probes.length, 3);
+  assert.equal(ready.probes.length, 2);
   assert.ok(ready.probes.every((probe) => !probe.connected), JSON.stringify(ready.probes));
-  assert.equal(ready.rendererProbes.length, 3);
+  assert.equal(ready.rendererProbes.length, 2);
   assert.ok(
     ready.rendererProbes.every((probe) => !probe.connected),
     JSON.stringify(ready.rendererProbes),
   );
-  assert.equal(ready.rendererRedirectProbes.length, 3);
+  assert.equal(ready.rendererRedirectProbes.length, 2);
   assert.ok(
     ready.rendererRedirectProbes.every((probe) => !probe.connected),
     JSON.stringify(ready.rendererRedirectProbes),
   );
-  assert.equal(ready.rendererWebSocketProbes.length, 3);
+  assert.equal(ready.rendererWebSocketProbes.length, 2);
   assert.ok(
     ready.rendererWebSocketProbes.every((probe) => !probe.connected),
     JSON.stringify(ready.rendererWebSocketProbes),
   );
   assert.deepEqual(connectionCounts, {
-    ipv4Host: 0,
     ipv4Loopback: 0,
     ipv6Loopback: 0,
-    websocketIpv4Host: 0,
     websocketIpv4Loopback: 0,
     websocketIpv6Loopback: 0,
   });

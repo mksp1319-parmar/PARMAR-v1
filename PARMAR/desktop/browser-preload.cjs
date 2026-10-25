@@ -2,11 +2,28 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const TAB_ID_PATTERN = /^[0-9a-f-]{36}$/i;
+const TAB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_ADDRESS_LENGTH = 2048;
 
 function validTabId(id) {
   return typeof id === 'string' && TAB_ID_PATTERN.test(id);
+}
+
+function validHttpsUrl(url) {
+  if (typeof url !== 'string' || url.length > MAX_ADDRESS_LENGTH) return false;
+  try {
+    const target = new URL(url);
+    return target.protocol === 'https:' && !target.username && !target.password;
+  } catch {
+    return false;
+  }
+}
+
+function validBookmark(url, title) {
+  return validHttpsUrl(url)
+    && typeof title === 'string'
+    && Boolean(title.trim())
+    && title.length <= 300;
 }
 
 function invoke(channel, ...args) {
@@ -57,19 +74,16 @@ contextBridge.exposeInMainWorld('aetherDesktop', Object.freeze({
       height: bounds.height,
     });
   },
-  addBookmark: (record) => {
-    if (!record || typeof record !== 'object') {
-      return Promise.resolve({ ok: false, error: 'Invalid bookmark.' });
-    }
-    return invoke('aether:add-bookmark', {
-      title: typeof record.title === 'string' ? record.title.slice(0, 300) : '',
-      url: typeof record.url === 'string' ? record.url.slice(0, MAX_ADDRESS_LENGTH) : '',
-    });
-  },
-  removeBookmark: (url) => typeof url === 'string' && url.length <= MAX_ADDRESS_LENGTH
+  addBookmark: (id) => validTabId(id)
+    ? invoke('aether:add-bookmark', id)
+    : Promise.resolve({ ok: false, error: 'Invalid tab.' }),
+  updateBookmark: (url, title) => validBookmark(url, title)
+    ? invoke('aether:update-bookmark', url, title)
+    : Promise.resolve({ ok: false, error: 'Invalid bookmark.' }),
+  removeBookmark: (url) => validHttpsUrl(url)
     ? invoke('aether:remove-bookmark', url)
     : Promise.resolve({ ok: false, error: 'Invalid bookmark.' }),
-  removeHistory: (url) => typeof url === 'string' && url.length <= MAX_ADDRESS_LENGTH
+  removeHistory: (url) => validHttpsUrl(url)
     ? invoke('aether:remove-history', url)
     : Promise.resolve({ ok: false, error: 'Invalid history entry.' }),
   clearHistory: () => invoke('aether:clear-history'),

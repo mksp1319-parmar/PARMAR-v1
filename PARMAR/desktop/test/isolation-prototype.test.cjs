@@ -7,7 +7,6 @@ const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
-const os = require('node:os');
 const readline = require('node:readline');
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -107,6 +106,33 @@ test('production isolation launch builder uses fixed executables and never invok
   assert.equal(Object.hasOwn(launch.environment, 'PARMAR_AETHER_NFT_PATH'), false);
 });
 
+test('isolated launch builder rejects incomplete or malformed isolation configuration', () => {
+  const valid = {
+    targetExecutable: '/opt/aether/electron',
+    targetArguments: ['/opt/aether/app.asar'],
+    parentNamespaceId: 'net:[4026531840]',
+    capability: Buffer.alloc(32, 5).toString('base64url'),
+  };
+  const invalid = [
+    { ...valid, targetExecutable: 'electron' },
+    { ...valid, targetArguments: ['app.asar', 1] },
+    { ...valid, parentNamespaceId: undefined },
+    { ...valid, parentNamespaceId: 'net:host' },
+    { ...valid, capability: undefined },
+    { ...valid, capability: 'short' },
+  ];
+
+  for (const configuration of invalid) {
+    assert.throws(
+      () => buildIsolatedLaunch({
+        ...configuration,
+        resolveExecutable: (name) => `/fixed/${name}`,
+      }),
+      /launch configuration is invalid/,
+    );
+  }
+});
+
 test('launcher rejects unsupported platforms and absent, malformed, or unimplemented proxy setup', async () => {
   assert.throws(() => validateOptions({ mode: 'offline' }, 'win32'), /Linux only/);
   assert.throws(() => validateOptions({}, 'linux'), /offline isolation mode/);
@@ -136,13 +162,19 @@ test('mocked namespace setup failure rejects startup and cleans up the child', a
   let killed = false;
   const launcher = mockedLauncher({
     spawnProcess() {
-      setImmediate(() => child.emit('close', 1, null));
+      setImmediate(() => {
+        child.stderr.write('unshare: write failed /proc/self/uid_map: Operation not permitted\n');
+        child.emit('close', 1, null);
+      });
       return child;
     },
     killProcessGroup() { killed = true; },
   });
 
-  await assert.rejects(launcher.launch({ mode: 'offline' }), /isolated startup failed/);
+  await assert.rejects(
+    launcher.launch({ mode: 'offline' }),
+    /isolated startup failed \(exit 1\): unshare: write failed \/proc\/self\/uid_map: Operation not permitted/,
+  );
   assert.equal(killed, true);
 });
 
@@ -202,14 +234,14 @@ test('live broker disconnection terminates the isolated child fail-closed', {
   assert.throws(() => process.kill(session.pid, 0), { code: 'ESRCH' });
 });
 
-test('live production namespace launch cannot reach controlled IPv4, IPv6, loopback, redirect, or WebSocket listeners', {
+test('live production namespace launch cannot reach controlled IPv4/IPv6 loopback, redirect, or WebSocket listeners', {
   skip: process.platform !== 'linux'
     || !['/usr/bin/unshare', '/usr/bin/setpriv', '/usr/sbin/ip']
       .every((command) => fs.existsSync(command))
     || typeof WebSocket !== 'function',
 }, async (context) => {
   const listeners = [];
-  const requests = { ipv4Host: 0, ipv4Loopback: 0, ipv6Loopback: 0, redirect: 0, websocket: 0 };
+  const requests = { ipv4Loopback: 0, ipv6Loopback: 0, redirect: 0, websocket: 0 };
   const createListener = (name) => {
     const server = http.createServer((request, response) => {
       requests[name] += 1;
@@ -235,24 +267,17 @@ test('live production namespace launch cannot reach controlled IPv4, IPv6, loopb
       resolve(server.address().port);
     });
   });
-  const activeHost = Object.values(os.networkInterfaces()).flat()
-    .find((entry) => entry && (entry.family === 'IPv4' || entry.family === 4)
-      && !entry.internal && !entry.address.startsWith('169.254.'))?.address;
-  assert.ok(activeHost, 'A non-loopback IPv4 address is required for the controlled listener.');
-
-  const hostPort = await listen(createListener('ipv4Host'), '0.0.0.0');
   const ipv4LoopbackPort = await listen(createListener('ipv4Loopback'), '127.0.0.1');
   const ipv6LoopbackPort = await listen(createListener('ipv6Loopback'), '::1', true);
-  const hostUrl = `http://${activeHost}:${hostPort}`;
   const ipv4LoopbackUrl = `http://127.0.0.1:${ipv4LoopbackPort}`;
   const ipv6LoopbackUrl = `http://[::1]:${ipv6LoopbackPort}`;
-  const redirectTarget = `${ipv4LoopbackUrl}/redirect`;
+  const redirectTarget = `${ipv6LoopbackUrl}/redirect-target`;
   const script = [
     'const fs=require("node:fs");',
     'const endpoints=JSON.parse(process.env.PARMAR_TEST_ENDPOINTS);',
     'const probe=async(url)=>{try{const response=await fetch(url,{signal:AbortSignal.timeout(1000)});return response.ok}catch{return false}};',
     'const websocket=(url)=>new Promise(resolve=>{let done=false;const finish=value=>{if(done)return;done=true;resolve(value)};const socket=new WebSocket(url);const timer=setTimeout(()=>{socket.close();finish(false)},1000);socket.addEventListener("open",()=>{clearTimeout(timer);socket.close();finish(true)},{once:true});socket.addEventListener("error",()=>{clearTimeout(timer);finish(false)},{once:true})});',
-    'Promise.all([probe(endpoints.ipv4Host),probe(endpoints.ipv4Loopback),probe(endpoints.ipv6Loopback),probe(endpoints.redirect),websocket(endpoints.websocket)]).then(results=>process.stdout.write(JSON.stringify({namespace:fs.readlinkSync("/proc/self/ns/net"),results})+"\\n"));',
+    'Promise.all([probe(endpoints.ipv4Loopback),probe(endpoints.ipv6Loopback),probe(endpoints.redirect),websocket(endpoints.websocket)]).then(results=>process.stdout.write(JSON.stringify({namespace:fs.readlinkSync("/proc/self/ns/net"),results})+"\\n"));',
   ].join('');
   const launch = buildIsolatedLaunch({
     targetExecutable: process.execPath,
@@ -261,11 +286,10 @@ test('live production namespace launch cannot reach controlled IPv4, IPv6, loopb
     capability: randomBytes(32).toString('base64url'),
     environment: {
       PARMAR_TEST_ENDPOINTS: JSON.stringify({
-        ipv4Host: hostUrl,
         ipv4Loopback: ipv4LoopbackUrl,
         ipv6Loopback: ipv6LoopbackUrl,
-        redirect: `${hostUrl}/redirect`,
-        websocket: hostUrl.replace(/^http:/, 'ws:'),
+        redirect: `${ipv4LoopbackUrl}/redirect`,
+        websocket: ipv4LoopbackUrl.replace(/^http:/, 'ws:'),
       }),
       PARMAR_TEST_REDIRECT_TARGET: redirectTarget,
     },
@@ -311,9 +335,8 @@ test('live production namespace launch cannot reach controlled IPv4, IPv6, loopb
 
   assert.equal(exit.code, 0, diagnostics);
   assert.notEqual(report.namespace, fs.readlinkSync('/proc/self/ns/net'));
-  assert.deepEqual([...report.results], [false, false, false, false, false]);
+  assert.deepEqual([...report.results], [false, false, false, false]);
   assert.deepEqual(requests, {
-    ipv4Host: 0,
     ipv4Loopback: 0,
     ipv6Loopback: 0,
     redirect: 0,

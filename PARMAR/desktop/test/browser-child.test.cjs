@@ -261,8 +261,12 @@ test('browser supervisor rejects malformed or unauthorized child IPC and cleans 
 test('browser supervisor reports startup failure and cleans up an early child exit', async () => {
   const { supervisor, child, calls } = createSupervisor();
   const startup = supervisor.start();
+  child.stderr.write('unshare: write failed /proc/self/uid_map: Operation not permitted\n');
   child.emit('close', 19, null);
-  await assert.rejects(startup, /exited before readiness/);
+  await assert.rejects(
+    startup,
+    /exited before readiness \(exit 19\): unshare: write failed \/proc\/self\/uid_map: Operation not permitted/,
+  );
   assert.equal(supervisor.state, 'stopped');
   assert.ok(calls.some((call) => call[0] === 'kill'));
 });
@@ -306,6 +310,41 @@ test('browser supervisor observes a browser crash after readiness and cleans des
   const exit = new Promise((resolve) => supervisor.on('exit', resolve));
   child.emit('close', 23, null);
   assert.deepEqual(await exit, { code: 23, signal: null, priorState: 'ready' });
+  assert.equal(supervisor.state, 'stopped');
+  assert.ok(calls.some((call) => call[0] === 'kill' && call[1] === child.pid));
+});
+
+test('browser supervisor does not recover after the child exits cleanly', async () => {
+  const { supervisor, child, calls } = createSupervisor(undefined, {
+    crashRestartDelayMs: 10,
+    maxCrashRestarts: 1,
+  });
+  const startup = supervisor.start();
+  child.stdout.write(childMessage(calls[0][2].env.PARMAR_AETHER_BROKER_CAPABILITY));
+  await startup;
+
+  const exit = new Promise((resolve) => supervisor.on('exit', resolve));
+  child.emit('close', 0, null);
+  assert.deepEqual(await exit, { code: 0, signal: null, priorState: 'ready' });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(calls.filter((call) => call[0] === '/tools/unshare').length, 1);
+  assert.equal(supervisor.state, 'stopped');
+});
+
+test('browser supervisor rejects duplicate readiness and cleans up the child process group', async () => {
+  const { supervisor, child, calls } = createSupervisor();
+  const startup = supervisor.start();
+  const capability = calls[0][2].env.PARMAR_AETHER_BROKER_CAPABILITY;
+  const protocolError = new Promise((resolve) => supervisor.on('protocol-error', resolve));
+  const exited = new Promise((resolve) => supervisor.on('exit', resolve));
+
+  child.stdout.write(childMessage(capability));
+  await startup;
+  child.stdout.write(childMessage(capability, 'browser.status', 1));
+
+  assert.match((await protocolError).message, /duplicate readiness/);
+  await exited;
   assert.equal(supervisor.state, 'stopped');
   assert.ok(calls.some((call) => call[0] === 'kill' && call[1] === child.pid));
 });

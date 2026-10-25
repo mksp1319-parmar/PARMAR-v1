@@ -134,6 +134,7 @@ function createBrowserChildSupervisor({
   let parentNamespaceId = null;
   let recoveryTimer = null;
   let recoveryAttempts = 0;
+  let startupDiagnostics = '';
 
   const cleanupGroup = () => {
     if (!child?.pid) return;
@@ -206,6 +207,8 @@ function createBrowserChildSupervisor({
       clearTimeout(startupTimer);
       resolveStartup({ pid: child.pid, state });
       events.emit('ready', { pid: child.pid });
+    } else if (state === 'ready') {
+      failChild(new Error('The AETHER browser child sent duplicate readiness.'));
     }
   };
 
@@ -219,6 +222,7 @@ function createBrowserChildSupervisor({
     sequence = 0;
     closeResult = null;
     cleanupError = null;
+    startupDiagnostics = '';
     rejectStartup = null;
     resolveStartup = null;
     let spawnError = null;
@@ -295,7 +299,11 @@ function createBrowserChildSupervisor({
       }
     });
     child.stderr.on('data', (chunk) => {
-      events.emit('stderr', String(chunk).slice(0, 4096));
+      const message = String(chunk);
+      if (startupDiagnostics.length < 4096) {
+        startupDiagnostics += message.slice(0, 4096 - startupDiagnostics.length);
+      }
+      events.emit('stderr', message.slice(0, 4096));
     });
     child.on('close', (code, signal) => {
       clearTimeout(startupTimer);
@@ -307,13 +315,18 @@ function createBrowserChildSupervisor({
       const priorState = state;
       state = 'stopped';
       if (priorState === 'starting') {
+        const exitDescription = Number.isInteger(code)
+          ? `exit ${code}`
+          : `signal ${signal || 'unknown'}`;
+        const diagnostic = startupDiagnostics.trim();
         rejectStartup(spawnError || new Error(
-          `AETHER browser child exited before readiness (exit ${code ?? signal}).`,
+          `AETHER browser child exited before readiness (${exitDescription})${diagnostic ? `: ${diagnostic}` : '.'}`,
         ));
       }
       resolveClosed(closeResult);
       events.emit('exit', { ...closeResult, priorState });
-      if (priorState === 'ready' && recoveryAttempts < maxCrashRestarts) {
+      const unexpectedExit = code !== 0 || signal !== null;
+      if (priorState === 'ready' && unexpectedExit && recoveryAttempts < maxCrashRestarts) {
         recoveryAttempts += 1;
         recoveryTimer = setTimeout(() => {
           recoveryTimer = null;

@@ -562,6 +562,22 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   assert.equal(getState().activeTabId, secondTabId);
 
   shortcutPrevented = false;
+  browserWindow.webContents.emit('before-input-event', {
+    preventDefault() { shortcutPrevented = true; },
+  }, { type: 'keyDown', key: 't', control: true });
+  assert.equal(shortcutPrevented, true);
+  const chromeOpenedTabId = getState().activeTabId;
+  assert.notEqual(chromeOpenedTabId, secondTabId);
+  assert.equal(browserWindow.contentView.children.size, 1);
+
+  shortcutPrevented = false;
+  browserWindow.webContents.emit('before-input-event', {
+    preventDefault() { shortcutPrevented = true; },
+  }, { type: 'keyDown', key: 'w', control: true });
+  assert.equal(shortcutPrevented, true);
+  assert.equal(getState().activeTabId, secondTabId);
+
+  shortcutPrevented = false;
   secondView.webContents.emit('before-input-event', {
     preventDefault() { shortcutPrevented = true; },
   }, { type: 'keyDown', key: 'Tab', control: true, shift: true });
@@ -691,6 +707,45 @@ test('restored session tabs stay on the local new-tab page until the user retrie
   assert.equal(MockWebContents.instances.some((contents) => (
     contents.calls.some(([action]) => action === 'navigate')
   )), false);
+  const browserEvent = {
+    sender: browserWindow.webContents,
+    senderFrame: {
+      parent: null,
+      url: pathToFileURL(path.join(__dirname, '..', 'browser.html')).href,
+    },
+  };
+  const bookmarked = await handlers.get('aether:add-bookmark')(browserEvent, state.tabs[0].id);
+  assert.equal(bookmarked.ok, true);
+  assert.equal(bookmarked.data.length, 1);
+  assert.equal(bookmarked.data[0].title, 'paused.example');
+  assert.equal(bookmarked.data[0].url, 'https://paused.example/path');
+  assert.equal(MockWebContents.instances.some((contents) => (
+    contents.calls.some(([action]) => action === 'navigate')
+  )), false);
+  const staleBookmark = await handlers.get('aether:add-bookmark')(browserEvent, 'closed-tab');
+  assert.equal(staleBookmark.ok, false);
+  assert.equal(staleBookmark.error, 'The active tab changed. Try again.');
+  const renamedBookmark = await handlers.get('aether:update-bookmark')(
+    browserEvent,
+    'https://paused.example/path',
+    'Research notes',
+  );
+  assert.equal(renamedBookmark.ok, true);
+  assert.equal(renamedBookmark.data[0].title, 'Research notes');
+  const invalidRename = await handlers.get('aether:update-bookmark')(
+    browserEvent,
+    'javascript:alert(1)',
+    'Unsafe',
+  );
+  assert.equal(invalidRename.ok, false);
+  assert.match(invalidRename.error, /valid HTTPS bookmarks/);
+  const invalidTitle = await handlers.get('aether:update-bookmark')(
+    browserEvent,
+    'https://paused.example/path',
+    '  ',
+  );
+  assert.equal(invalidTitle.ok, false);
+  assert.match(invalidTitle.error, /bookmark title/);
 
   MockWebContents.instances.at(-1).emit(
     'did-navigate',

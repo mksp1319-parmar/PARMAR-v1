@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 
 const STORE_VERSION = 1;
 const MAX_BOOKMARKS = 500;
@@ -144,9 +145,31 @@ class AetherStore {
     return this.snapshot();
   }
 
+  updateBookmark(url, title) {
+    if (
+      typeof title !== 'string'
+      || !title.trim()
+      || title.trim().length > MAX_TITLE_LENGTH
+    ) {
+      throw new TypeError(`A bookmark title must contain 1 to ${MAX_TITLE_LENGTH} characters.`);
+    }
+    const safeRecord = safeWebRecord({ url, title });
+    if (!safeRecord) throw new TypeError('Only valid HTTPS bookmarks can be updated.');
+    const existing = this.data.bookmarks.find((item) => item.url === safeRecord.url);
+    if (!existing) throw new Error('The bookmark no longer exists.');
+    const bookmarks = this.data.bookmarks.map((item) => (
+      item.url === safeRecord.url
+        ? { ...item, title: safeRecord.title }
+        : item
+    ));
+    this.save({ ...this.data, bookmarks });
+    return this.snapshot();
+  }
+
   removeBookmark(url) {
-    if (typeof url !== 'string') throw new TypeError('A bookmark URL is required.');
-    const bookmarks = this.data.bookmarks.filter((item) => item.url !== url);
+    const safeRecord = safeWebRecord({ url });
+    if (!safeRecord) throw new TypeError('Only valid HTTPS bookmarks can be removed.');
+    const bookmarks = this.data.bookmarks.filter((item) => item.url !== safeRecord.url);
     this.save({ ...this.data, bookmarks });
     return this.snapshot();
   }
@@ -188,15 +211,30 @@ class AetherStore {
   save(nextData) {
     const parent = path.dirname(this.filePath);
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-    const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
+    const temporaryPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
+    let temporaryCreated = false;
+    let temporaryDescriptor = null;
     try {
-      fs.writeFileSync(temporaryPath, JSON.stringify(nextData), { mode: 0o600 });
+      temporaryDescriptor = fs.openSync(temporaryPath, 'wx', 0o600);
+      temporaryCreated = true;
+      fs.writeFileSync(temporaryDescriptor, JSON.stringify(nextData));
+      fs.closeSync(temporaryDescriptor);
+      temporaryDescriptor = null;
       fs.renameSync(temporaryPath, this.filePath);
     } catch (error) {
-      try {
-        fs.rmSync(temporaryPath, { force: true });
-      } catch {
-        // Preserve the original persistence error.
+      if (temporaryDescriptor !== null) {
+        try {
+          fs.closeSync(temporaryDescriptor);
+        } catch {
+          // Preserve the original persistence error.
+        }
+      }
+      if (temporaryCreated) {
+        try {
+          fs.rmSync(temporaryPath, { force: true });
+        } catch {
+          // Preserve the original persistence error.
+        }
       }
       throw new Error('AETHER browser data could not be saved.', { cause: error });
     }

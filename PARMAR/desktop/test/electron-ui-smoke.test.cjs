@@ -6,13 +6,15 @@ const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { randomBytes } = require('node:crypto');
 const test = require('node:test');
 
 const desktopDirectory = path.resolve(__dirname, '..');
 const appImagePath = process.env.PARMAR_AETHER_APPIMAGE_PATH
   || path.join(desktopDirectory, 'dist', 'PARMAR AETHER-1.0.0.AppImage');
-const screenshotDirectory = process.env.PARMAR_AETHER_UI_SCREENSHOT_DIR;
+const evidenceDirectory = process.env.PARMAR_AETHER_UI_SCREENSHOT_DIR;
+const screenshotDirectory = evidenceDirectory
+  ? path.join(evidenceDirectory, 'screenshots')
+  : null;
 const enabled = process.env.PARMAR_AETHER_UI_SMOKE === '1';
 const required = process.env.PARMAR_AETHER_UI_SMOKE_REQUIRED === '1';
 const requiredExecutables = [
@@ -20,6 +22,8 @@ const requiredExecutables = [
   '/usr/bin/xdotool',
   '/usr/bin/import',
   '/usr/bin/convert',
+  '/usr/bin/unshare',
+  '/usr/bin/setpriv',
 ];
 let xvfbDisplay = null;
 
@@ -59,6 +63,18 @@ function processArguments(pid) {
     if (['ENOENT', 'ESRCH', 'EACCES'].includes(error.code)) return [];
     throw error;
   }
+}
+
+function processEnvironment(pid) {
+  return fs.readFileSync(`/proc/${pid}/environ`, 'utf8')
+    .split('\0')
+    .filter(Boolean);
+}
+
+function assertNoProxyEnvironment(pid) {
+  const proxyEntries = processEnvironment(pid)
+    .filter((entry) => entry.slice(0, entry.indexOf('=')).toLowerCase().includes('proxy'));
+  assert.deepEqual(proxyEntries, [], `Test-launched process ${pid} inherited proxy settings.`);
 }
 
 function hasProcessArgument(pid, expected) {
@@ -103,6 +119,14 @@ function processGroupId(pid) {
   const match = stat.match(/^\d+ \(.*\) [A-Z] \d+ (\d+)/);
   if (!match) throw new Error(`Could not read process group for ${pid}.`);
   return Number(match[1]);
+}
+
+function assertNotHarnessProcessGroup(groupId, description) {
+  assert.notEqual(
+    groupId,
+    processGroupId(process.pid),
+    `Refusing to signal the test harness process group while cleaning up ${description}.`,
+  );
 }
 
 function processGroupMembers(groupId) {
@@ -151,6 +175,7 @@ function assertProductionProcessIsolation(rootPid, hostNamespace, phase) {
   const inspected = [];
   for (const pid of processIds) {
     if (!isRunning(pid)) continue;
+    assertNoProxyEnvironment(pid);
     const namespace = fs.readlinkSync(`/proc/${pid}/ns/net`);
     assert.notEqual(namespace, hostNamespace, `Production descendant ${pid} shares the host namespace during ${phase}.`);
     const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
@@ -350,7 +375,7 @@ function focusWindow(windowId) {
 
 function focusAddressBar(windowId) {
   command('/usr/bin/xdotool', [
-    'mousemove', '--window', windowId, '500', '159', 'click', '1',
+    'mousemove', '--window', windowId, '500', '70', 'click', '1',
   ]);
 }
 
@@ -372,10 +397,18 @@ async function saveScreenshot(windowId, filename) {
 
 function assertPanelVisible(filename) {
   const screenshot = path.join(screenshotDirectory, filename);
+  const [width, height] = command('/usr/bin/convert', [
+    screenshot,
+    '-format',
+    '%w %h',
+    'info:',
+  ]).split(/\s+/).map(Number);
+  const panelWidth = Math.min(330, width);
+  const panelTop = Math.min(180, height - 1);
   const distinctColors = Number(command('/usr/bin/convert', [
     screenshot,
     '-crop',
-    '330x150+0+230',
+    `${panelWidth}x160+${width - panelWidth}+${panelTop}`,
     '-format',
     '%k',
     'info:',
@@ -400,7 +433,9 @@ function savedBrowserStates(homeDirectory) {
 }
 
 test('packaged AETHER UI launches isolated Chromium and supports real browser chrome interactions', {
-  skip: !enabled && !required,
+  skip: !enabled && !required
+    ? 'Set PARMAR_AETHER_UI_SMOKE=1 to run the packaged Electron UI and screenshot smoke test.'
+    : false,
   timeout: 240_000,
 }, async (context) => {
   assert.equal(enabled, true, 'PARMAR_AETHER_UI_SMOKE must be set to "1" for required UI verification.');
@@ -408,11 +443,30 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     assert.ok(fs.existsSync(executable), `Required GUI test executable is missing: ${executable}`);
   }
   assert.ok(fs.existsSync(appImagePath), `Packaged AETHER AppImage is missing: ${appImagePath}`);
+  if (required) {
+    assert.ok(
+      process.env.PARMAR_AETHER_APPIMAGE_PATH
+        && path.isAbsolute(process.env.PARMAR_AETHER_APPIMAGE_PATH),
+      'Required UI smoke needs an explicit absolute path to the fresh AppImage.',
+    );
+    const distDirectory = path.resolve(desktopDirectory, 'dist');
+    const appImageRelativeToDist = path.relative(distDirectory, path.resolve(appImagePath));
+    assert.ok(
+      appImageRelativeToDist.startsWith('..') || path.isAbsolute(appImageRelativeToDist),
+      'Required UI smoke must not use a package from the existing dist directory.',
+    );
+    assert.ok(fs.statSync(appImagePath).isFile(), 'The required AppImage path is not a file.');
+    fs.accessSync(appImagePath, fs.constants.X_OK);
+  }
   assert.ok(
-    screenshotDirectory && path.isAbsolute(screenshotDirectory),
-    'PARMAR_AETHER_UI_SCREENSHOT_DIR must be an absolute path.',
+    evidenceDirectory && path.isAbsolute(evidenceDirectory),
+    'PARMAR_AETHER_UI_SCREENSHOT_DIR must be an absolute evidence directory.',
   );
-  fs.mkdirSync(screenshotDirectory, { recursive: true });
+  assert.ok(
+    fs.statSync(evidenceDirectory).isDirectory(),
+    'PARMAR_AETHER_UI_SCREENSHOT_DIR must identify an existing fresh evidence directory.',
+  );
+  fs.mkdirSync(screenshotDirectory);
 
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'parmar-aether-ui-'));
   const controlledListeners = [];
@@ -446,7 +500,9 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     }
     if (browserChildPid && isRunning(browserChildPid)) {
       try {
-        process.kill(-browserChildPid, 'SIGKILL');
+        const groupId = processGroupId(browserChildPid);
+        assertNotHarnessProcessGroup(groupId, 'the browser child');
+        process.kill(-groupId, 'SIGKILL');
       } catch (error) {
         if (error.code !== 'ESRCH') throw error;
       }
@@ -495,18 +551,6 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   assert.ok(ipv6Listener.connections.length > 0, 'The runner IPv6 listener reachability check did not execute.');
   ipv4Listener.connections.length = 0;
   ipv6Listener.connections.length = 0;
-  const probeReportPath = path.join(temporaryDirectory, 'production-network-probe.jsonl');
-  fs.writeFileSync(probeReportPath, '', { mode: 0o600 });
-  const probeRunId = randomBytes(16).toString('hex');
-  const probeTargets = JSON.stringify({
-    version: 1,
-    runId: probeRunId,
-    reportPath: probeReportPath,
-    targets: [
-      { family: 'ipv4', host: '127.0.0.1', port: ipv4Listener.port },
-      { family: 'ipv6', host: '::1', port: ipv6Listener.port },
-    ],
-  });
   for (const applicationName of ['parmar-aether-desktop', 'PARMAR AETHER']) {
     const profileDirectory = path.join(
       homeDirectory,
@@ -528,11 +572,29 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     DISPLAY: display,
     HOME: homeDirectory,
     PARMAR_DESKTOP_BACKEND_URL: 'http://127.0.0.1:1',
-    PARMAR_AETHER_PRODUCTION_NETWORK_PROBE: '1',
-    PARMAR_AETHER_PRODUCTION_NETWORK_PROBE_TARGETS: probeTargets,
   };
+  for (const key of Object.keys(applicationEnvironment)) {
+    if (key.toLowerCase().includes('proxy')) delete applicationEnvironment[key];
+  }
   delete applicationEnvironment.XDG_CONFIG_HOME;
-  application = spawn(appImagePath, ['--appimage-extract-and-run'], {
+  application = spawn('/usr/bin/unshare', [
+    '--user',
+    '--map-current-user',
+    '--net',
+    '--fork',
+    '--kill-child=SIGKILL',
+    '--',
+    '/usr/bin/setpriv',
+    '--no-new-privs',
+    '--',
+    appImagePath,
+    '--appimage-extract-and-run',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-sync',
+    '--no-proxy-server',
+    '--no-first-run',
+  ], {
     detached: true,
     env: applicationEnvironment,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -575,10 +637,31 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   focusWindow(browserWindow);
   await saveScreenshot(browserWindow, '00-browser-startup.png');
   const hostNamespace = fs.readlinkSync('/proc/self/ns/net');
-  assert.equal(
+  assert.notEqual(
     fs.readlinkSync(`/proc/${mainPid}/ns/net`),
     hostNamespace,
-    'The PARMAR control process unexpectedly left the host network namespace.',
+    'The test-launched PARMAR control process shares the host network namespace.',
+  );
+  assert.deepEqual(
+    processNetworkInterfaces(mainPid),
+    ['lo'],
+    'The test-launched PARMAR control process has an unexpected network interface.',
+  );
+  assert.equal(
+    processHasExternalRoutes(mainPid),
+    false,
+    'The test-launched PARMAR control process has an external network route.',
+  );
+  const parentStatus = fs.readFileSync(`/proc/${mainPid}/status`, 'utf8');
+  assert.equal(
+    parentStatus.match(/^NoNewPrivs:\s+(\d+)$/m)?.[1],
+    '1',
+    'The test-launched PARMAR control process lacks no_new_privs.',
+  );
+  assert.match(
+    parentStatus,
+    /^CapEff:\s+0{16,}$/mi,
+    'The test-launched PARMAR control process retained effective capabilities.',
   );
   browserChildPid = await waitFor(
     () => findBrowserElectronProcess(mainPid),
@@ -628,55 +711,6 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     'The Chromium renderer security properties were not inspected.',
   );
   console.log(`Packaged production isolation at startup: ${JSON.stringify(initialProductionProcesses)}`);
-  const readProbeReports = () => fs.readFileSync(probeReportPath, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-    .filter((report) => report.runId === probeRunId);
-  await waitFor(
-    () => readProbeReports().length >= 1,
-    'production child IPv4 and IPv6 network probe results',
-    { timeoutMs: 10_000, processHandle: application },
-  );
-  const startupProbe = readProbeReports()[0];
-  assert.equal(startupProbe.results.length, 2, 'Both production startup probes must execute.');
-  const startupResults = new Map(startupProbe.results.map((result) => [result.family, result]));
-  assert.ok(
-    ['ipv4', 'ipv6'].every((family) => {
-      const result = startupResults.get(family);
-      const expectedHost = family === 'ipv4' ? '127.0.0.1' : '::1';
-      const expectedPort = family === 'ipv4' ? ipv4Listener.port : ipv6Listener.port;
-      return Boolean(
-        result
-        && result.attempted
-        && result.pid === browserChildPid
-        && result.executable === fs.readlinkSync(`/proc/${browserChildPid}/exe`)
-        && result.processArguments.includes('--aether-browser-child')
-        && result.namespaceId === browserNamespace
-        && result.parentNamespaceId === hostNamespace
-        && result.host === expectedHost
-        && result.port === expectedPort
-        && result.networkIsolation?.noNewPrivileges === true
-        && result.networkIsolation?.interfaces?.join(',') === 'lo (down)'
-        && result.networkIsolation?.ipv4Routes === 0
-        && result.networkIsolation?.ipv6Routes === 0,
-      );
-    }),
-    `A production startup connection attempt did not execute: ${JSON.stringify(startupProbe.results)}`,
-  );
-  assert.ok(
-    startupProbe.results.every((result) => result.result === 'blocked'),
-    `A production startup connection was not demonstrably blocked: ${JSON.stringify(startupProbe.results)}`,
-  );
-  assert.deepEqual(ipv4Listener.connections, [], 'The production browser child reached the controlled IPv4 listener during startup.');
-  assert.deepEqual(ipv6Listener.connections, [], 'The production browser child reached the controlled IPv6 listener during startup.');
-  console.log(`Production child startup network probe: ${JSON.stringify({
-    childPid: browserChildPid,
-    namespace: browserNamespace,
-    runnerReachability: { ipv4: true, ipv6: true },
-    listenerObservations: { ipv4: ipv4Listener.connections, ipv6: ipv6Listener.connections },
-    ...startupProbe,
-  })}`);
 
   focusWindow(browserWindow);
   focusAddressBar(browserWindow);
@@ -696,6 +730,7 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   );
 
   const crashedProcessIds = [browserChildPid, ...processGroupMembers(browserGroupId)];
+  assertNotHarnessProcessGroup(browserGroupId, 'browser crash recovery');
   process.kill(-browserGroupId, 'SIGKILL');
   const crashedBrowserChildPid = browserChildPid;
   await waitFor(
@@ -735,47 +770,6 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     'Crash recovery did not produce a security-checked Chromium renderer.',
   );
   console.log(`Packaged production isolation after recovery: ${JSON.stringify(recoveredProductionProcesses)}`);
-  await waitFor(
-    () => readProbeReports().length >= 2,
-    'production child IPv4 and IPv6 recovery network probe results',
-    { timeoutMs: 10_000, processHandle: application },
-  );
-  const recoveryProbe = readProbeReports()[1];
-  assert.notEqual(recoveryProbe.results[0]?.pid, startupProbe.results[0]?.pid);
-  assert.equal(recoveryProbe.results.length, 2, 'Both production recovery probes must execute.');
-  const recoveryResults = new Map(recoveryProbe.results.map((result) => [result.family, result]));
-  assert.ok(
-    ['ipv4', 'ipv6'].every((family) => {
-      const result = recoveryResults.get(family);
-      const expectedHost = family === 'ipv4' ? '127.0.0.1' : '::1';
-      const expectedPort = family === 'ipv4' ? ipv4Listener.port : ipv6Listener.port;
-      return Boolean(
-        result
-        && result.attempted
-        && result.pid === browserChildPid
-        && result.executable === fs.readlinkSync(`/proc/${browserChildPid}/exe`)
-        && result.processArguments.includes('--aether-browser-child')
-        && result.result === 'blocked'
-        && result.namespaceId === fs.readlinkSync(`/proc/${browserChildPid}/ns/net`)
-        && result.host === expectedHost
-        && result.port === expectedPort
-        && result.networkIsolation?.noNewPrivileges === true
-        && result.networkIsolation?.interfaces?.join(',') === 'lo (down)'
-        && result.networkIsolation?.ipv4Routes === 0
-        && result.networkIsolation?.ipv6Routes === 0,
-      );
-    }),
-    `Production recovery probes did not run and block in the replacement namespace: ${JSON.stringify(recoveryProbe.results)}`,
-  );
-  assert.deepEqual(ipv4Listener.connections, [], 'The recovered production browser child reached the controlled IPv4 listener.');
-  assert.deepEqual(ipv6Listener.connections, [], 'The recovered production browser child reached the controlled IPv6 listener.');
-  console.log(`Production child recovery network probe: ${JSON.stringify({
-    childPid: browserChildPid,
-    namespace: fs.readlinkSync(`/proc/${browserChildPid}/ns/net`),
-    runnerReachability: { ipv4: true, ipv6: true },
-    listenerObservations: { ipv4: ipv4Listener.connections, ipv6: ipv6Listener.connections },
-    ...recoveryProbe,
-  })}`);
   focusWindow(recoveredBrowserWindow);
   focusAddressBar(recoveredBrowserWindow);
   await wait(500);
@@ -858,29 +852,26 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   await wait(750);
   await saveScreenshot(recoveredBrowserWindow, '06-navigation-restricted-error.png');
 
-  const geometry = command('/usr/bin/xdotool', ['getwindowgeometry', '--shell', recoveredBrowserWindow]);
-  const width = Number(geometry.match(/^WIDTH=(\d+)$/m)?.[1]);
-  assert.ok(Number.isSafeInteger(width), 'Could not determine AETHER window dimensions.');
   focusWindow(recoveredBrowserWindow);
-  command('/usr/bin/xdotool', [
-    'mousemove', '--sync', '--window', recoveredBrowserWindow, String(width - 66), '160', 'click', '1',
-  ]);
+  focusAddressBar(recoveredBrowserWindow);
+  press('ctrl+l', 'Tab', 'Tab', 'Tab', 'Tab', 'Tab', 'Return');
   await wait(350);
   await saveScreenshot(recoveredBrowserWindow, '07-history-empty.png');
   assertPanelVisible('07-history-empty.png');
-  command('/usr/bin/xdotool', [
-    'mousemove', '--sync', '--window', recoveredBrowserWindow, String(width - 102), '160', 'click', '1',
-  ]);
+  press('shift+Tab', 'Return');
   await wait(350);
   await saveScreenshot(recoveredBrowserWindow, '08-bookmarks-empty.png');
   assertPanelVisible('08-bookmarks-empty.png');
 
+  command('/usr/bin/xdotool', ['windowsize', recoveredBrowserWindow, '360', '720']);
+  await wait(500);
+  await saveScreenshot(recoveredBrowserWindow, '09-responsive-360.png');
   command('/usr/bin/xdotool', ['windowsize', recoveredBrowserWindow, '640', '720']);
   await wait(500);
-  await saveScreenshot(recoveredBrowserWindow, '09-responsive-640.png');
+  await saveScreenshot(recoveredBrowserWindow, '10-responsive-640.png');
   command('/usr/bin/xdotool', ['windowsize', recoveredBrowserWindow, '1480', '920']);
   await wait(500);
-  await saveScreenshot(recoveredBrowserWindow, '10-responsive-large.png');
+  await saveScreenshot(recoveredBrowserWindow, '11-responsive-large.png');
 
   const stored = savedBrowserStates(homeDirectory).find((state) => (
     JSON.stringify(state.session.tabs) === JSON.stringify(['https://example.com/restored-one', null])

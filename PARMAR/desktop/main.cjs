@@ -51,7 +51,7 @@ const browserChildSupervisor = process.platform === 'linux' && !IS_BROWSER_CHILD
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function errorMessage(error) {
-  return error instanceof Error ? error.message : 'The AETHER operation failed.';
+  return typeof error?.message === 'string' ? error.message : 'The AETHER operation failed.';
 }
 
 function controlPageUrl() {
@@ -538,9 +538,22 @@ function registerBrowserHandlers() {
     ok: true,
     data: aetherStore.snapshot().bookmarks,
   }));
-  registerHandler('aether:add-bookmark', async (record) => ({
+  registerHandler('aether:add-bookmark', async (id) => {
+    const tab = tabs.get(id);
+    if (!tab || id !== activeTabId) {
+      return { ok: false, error: 'The active tab changed. Try again.' };
+    }
+    const url = tab.url || tab.restoreUrl;
+    if (!url) return { ok: false, error: 'This tab does not have an HTTPS address to bookmark.' };
+    const title = tab.title === 'New Tab' ? new URL(url).hostname : tab.title;
+    return {
+      ok: true,
+      data: aetherStore.addBookmark({ title, url }).bookmarks,
+    };
+  });
+  registerHandler('aether:update-bookmark', async (url, title) => ({
     ok: true,
-    data: aetherStore.addBookmark(record).bookmarks,
+    data: aetherStore.updateBookmark(url, title).bookmarks,
   }));
   registerHandler('aether:remove-bookmark', async (url) => ({
     ok: true,
@@ -632,6 +645,10 @@ async function createBrowserWindow({ newTab = false } = {}) {
   });
   browserWindow = createdWindow;
   createdWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  createdWindow.webContents.on('before-input-event', (event, input) => {
+    const tab = tabs.get(activeTabId);
+    if (tab) handleBrowserKeyInput(event, input, tab);
+  });
   createdWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error(`AETHER browser chrome renderer stopped (${details.reason}).`);
     if (!createdWindow.isDestroyed()) createdWindow.close();

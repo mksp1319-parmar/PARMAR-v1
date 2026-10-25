@@ -211,8 +211,12 @@ function createLauncher({
         : { code, signal };
       clearTimeout(startupTimer);
       if (!statusReceived) {
+        const exitDescription = Number.isInteger(code)
+          ? `exit ${code}`
+          : `signal ${signal || 'unknown'}`;
+        const diagnostic = childError.trim();
         rejectReady(new Error(
-          `AETHER isolated startup failed${childError ? `: ${childError.trim()}` : ` (exit ${code ?? signal})`}.`,
+          `AETHER isolated startup failed (${exitDescription})${diagnostic ? `: ${diagnostic}` : '.'}`,
         ));
       }
       resolveClosed(closeResult);

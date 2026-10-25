@@ -9,6 +9,7 @@
     "start": "electron .",
     "test": "node --test --test-concurrency=1 test/*.test.cjs",
     "test:electron-isolation": "node --test test/electron-isolation-integration.test.cjs",
+    "test:production-child-network-probe": "node --test test/production-child-network-probe.test.cjs",
     "package:dir": "electron-builder --dir --config electron-builder.config.cjs",
     "package:linux": "electron-builder --linux AppImage --config electron-builder.config.cjs"
   },

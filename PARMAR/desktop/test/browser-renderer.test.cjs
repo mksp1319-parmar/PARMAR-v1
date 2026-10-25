@@ -73,7 +73,7 @@ function createRenderer() {
     '[data-action="bookmark"]',
   ];
   const elements = new Map(selectors.map((selector) => [selector, new MockElement()]));
-  const actions = ['back', 'forward', 'reload', 'stop', 'history', 'bookmarks', 'downloads', 'settings', 'focus-address', 'close-panel']
+  const actions = ['back', 'forward', 'reload', 'stop', 'bookmark', 'history', 'bookmarks', 'downloads', 'settings', 'focus-address', 'close-panel']
     .map((action) => {
       const button = new MockElement('button');
       button.dataset.action = action;
@@ -82,9 +82,15 @@ function createRenderer() {
   const calls = [];
   const historyCalls = [];
   const controlCalls = [];
+  const bookmarkCalls = [];
+  let addBookmarkResult = { ok: true, data: [] };
+  let updateBookmarkResult = { ok: true, data: [] };
   let removeBookmarkResult = { ok: true, data: [] };
   let removeHistoryResult = { ok: true, data: [] };
   let clearHistoryResult = { ok: true, data: [] };
+  const clearHistoryCalls = [];
+  const confirmCalls = [];
+  let confirmResult = true;
   let stateListener;
   const api = {
     navigate(value, id) {
@@ -116,7 +122,18 @@ function createRenderer() {
       controlCalls.push(['zoom', factor, id]);
       return Promise.resolve({ ok: true });
     },
-    clearHistory: () => Promise.resolve(clearHistoryResult),
+    addBookmark(id) {
+      bookmarkCalls.push(id);
+      return Promise.resolve(addBookmarkResult);
+    },
+    updateBookmark(url, title) {
+      bookmarkCalls.push([url, title]);
+      return Promise.resolve(updateBookmarkResult);
+    },
+    clearHistory() {
+      clearHistoryCalls.push(true);
+      return Promise.resolve(clearHistoryResult);
+    },
     removeBookmark: () => Promise.resolve(removeBookmarkResult),
     removeHistory: () => Promise.resolve(removeHistoryResult),
     onState(callback) {
@@ -133,7 +150,14 @@ function createRenderer() {
     querySelector: (selector) => elements.get(selector) || new MockElement(),
     querySelectorAll: () => actions,
   };
-  const window = { aetherDesktop: api, addEventListener() {} };
+  const window = {
+    aetherDesktop: api,
+    addEventListener() {},
+    confirm(message) {
+      confirmCalls.push(message);
+      return confirmResult;
+    },
+  };
   const source = fs.readFileSync(
     path.join(__dirname, '..', 'browser-renderer.cjs'),
     'utf8',
@@ -152,6 +176,18 @@ function createRenderer() {
     elements,
     historyCalls,
     controlCalls,
+    bookmarkCalls,
+    clearHistoryCalls,
+    confirmCalls,
+    setConfirmResult(result) {
+      confirmResult = result;
+    },
+    setAddBookmarkResult(result) {
+      addBookmarkResult = result;
+    },
+    setUpdateBookmarkResult(result) {
+      updateBookmarkResult = result;
+    },
     setRemoveBookmarkResult(result) {
       removeBookmarkResult = result;
     },
@@ -374,6 +410,114 @@ test('restored session addresses are shown as paused and are not navigated autom
   assert.deepEqual(renderer.calls, []);
 });
 
+test('a paused restored HTTPS address can be bookmarked without enabling navigation', async () => {
+  const renderer = createRenderer();
+  const tab = {
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    title: 'New Tab',
+    url: '',
+    restoreUrl: 'https://saved.example/research',
+    active: true,
+    isLoading: false,
+  };
+  const record = { title: 'saved.example', url: tab.restoreUrl };
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [tab],
+    stored: { history: [], bookmarks: [] },
+  });
+  assert.equal(renderer.elements.get('[data-action="bookmark"]').disabled, false);
+  renderer.setAddBookmarkResult({ ok: true, data: [record] });
+
+  await renderer.actions.find((button) => button.dataset.action === 'bookmark').click();
+
+  assert.deepEqual(renderer.bookmarkCalls, [tab.id]);
+  assert.deepEqual(renderer.calls, []);
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'Paused address saved as a bookmark.');
+
+  await renderer.actions.find((button) => button.dataset.action === 'bookmarks').click();
+  const cards = renderer.elements.get('#panel-content').children[0].children;
+  assert.equal(cards[0].children[0].textContent, record.title);
+  assert.equal(cards[0].children[1].textContent, record.url);
+});
+
+test('empty bookmark and history panels explain the offline state', async () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { history: [], bookmarks: [] },
+  });
+
+  await renderer.actions.find((button) => button.dataset.action === 'bookmarks').click();
+  assert.match(
+    renderer.elements.get('#panel-content').children[0].textContent,
+    /Save a paused HTTPS address/,
+  );
+
+  await renderer.actions.find((button) => button.dataset.action === 'history').click();
+  assert.match(
+    renderer.elements.get('#panel-content').children[1].textContent,
+    /Restricted browsing does not load remote pages/,
+  );
+  assert.equal(renderer.elements.get('#panel-content').children[0].disabled, true);
+});
+
+test('bookmark titles can be renamed by keyboard-submittable form and failures remain visible', async () => {
+  const original = { title: 'Original title', url: 'https://saved.example/path' };
+  const renamed = { title: 'Research notes', url: original.url };
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { history: [], bookmarks: [original] },
+  });
+
+  await renderer.actions.find((button) => button.dataset.action === 'bookmarks').click();
+  const card = renderer.elements.get('#panel-content').children[0].children[0];
+  await card.children.find((child) => child.textContent === 'Rename bookmark').click();
+  const editingCard = renderer.elements.get('#panel-content').children[0].children[0];
+  const editor = editingCard.children.find((child) => child.className === 'bookmark-editor');
+  const [titleInput] = editor.children;
+  assert.equal(titleInput.focused, true);
+  assert.equal(titleInput.value, original.title);
+  titleInput.value = renamed.title;
+  renderer.setUpdateBookmarkResult({ ok: true, data: [renamed] });
+  await editor.listeners.get('submit')({ preventDefault() {} });
+
+  assert.deepEqual(renderer.bookmarkCalls, [[original.url, renamed.title]]);
+  const updatedCard = renderer.elements.get('#panel-content').children[0].children[0];
+  assert.equal(updatedCard.children[0].textContent, renamed.title);
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'Bookmark title updated.');
+
+  await updatedCard.children.find((child) => child.textContent === 'Rename bookmark').click();
+  const failedCard = renderer.elements.get('#panel-content').children[0].children[0];
+  const failedEditor = failedCard.children.find((child) => child.className === 'bookmark-editor');
+  renderer.setUpdateBookmarkResult({ ok: false, error: 'AETHER browser data could not be saved.' });
+  await failedEditor.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'AETHER browser data could not be saved.');
+  assert.equal(
+    renderer.elements.get('#panel-content').children[0].children[0].children
+      .some((child) => child.className === 'bookmark-editor'),
+    true,
+  );
+
+  const rejectingRenderer = createRenderer();
+  rejectingRenderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { history: [], bookmarks: [original] },
+  });
+  await rejectingRenderer.actions.find((button) => button.dataset.action === 'bookmarks').click();
+  await rejectingRenderer.elements.get('#panel-content').children[0].children[0]
+    .children.find((child) => child.textContent === 'Rename bookmark').click();
+  const rejectingEditor = rejectingRenderer.elements.get('#panel-content').children[0].children[0]
+    .children.find((child) => child.className === 'bookmark-editor');
+  rejectingRenderer.api.updateBookmark = () => Promise.reject(new Error('Storage unavailable.'));
+  await rejectingEditor.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(rejectingRenderer.elements.get('#tab-state').textContent, 'Storage unavailable.');
+});
+
 test('history and bookmark open actions use guarded navigation while remote browsing is disabled', async () => {
   for (const [panel, records, expectedUrl] of [
     ['history', [{ title: 'Visited page', url: 'https://history.example/path' }], 'https://history.example/path'],
@@ -421,7 +565,11 @@ test('history and bookmark open actions use guarded navigation while remote brow
 });
 
 test('history entries can be removed individually without replacing another panel', async () => {
-  const record = { title: 'Visited page', url: 'https://visited.example/path' };
+  const record = {
+    title: 'Visited page',
+    url: 'https://visited.example/path',
+    visitedAt: 1700000000000,
+  };
   const renderer = createRenderer();
   renderer.setState({
     remoteBrowsing: false,
@@ -430,13 +578,105 @@ test('history entries can be removed individually without replacing another pane
   });
 
   await renderer.actions.find((button) => button.dataset.action === 'history').click();
+  const time = renderer.elements.get('#panel-content').children
+    .find((child) => child.className === 'panel-list').children[0].children[2];
+  assert.equal(time.tagName, 'time');
+  assert.equal(time.attributes.datetime, new Date(record.visitedAt).toISOString());
+  assert.equal(time.textContent, new Date(record.visitedAt).toLocaleString());
   const historyList = renderer.elements.get('#panel-content').children
     .find((child) => child.className === 'panel-list');
   const removeButton = historyList.children[0].children
     .find((child) => child.textContent === 'Remove history');
   await removeButton.click();
 
-  assert.equal(renderer.elements.get('#panel-content').children[1].textContent, 'No saved browser records yet.');
+  assert.match(renderer.elements.get('#panel-content').children[1].textContent, /No history is saved/);
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'History entry removed.');
+});
+
+test('bookmark deletion updates the visible list only after persistence succeeds', async () => {
+  const record = { title: 'Saved page', url: 'https://saved.example/' };
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { history: [], bookmarks: [record] },
+  });
+  await renderer.actions.find((button) => button.dataset.action === 'bookmarks').click();
+  const remove = renderer.elements.get('#panel-content').children
+    .find((child) => child.className === 'panel-list').children[0].children
+    .find((child) => child.textContent === 'Remove bookmark');
+
+  renderer.setRemoveBookmarkResult({ ok: false, error: 'AETHER browser data could not be saved.' });
+  await remove.click();
+  assert.equal(
+    renderer.elements.get('#panel-content').children
+      .find((child) => child.className === 'panel-list').children.length,
+    1,
+  );
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'AETHER browser data could not be saved.');
+
+  renderer.setRemoveBookmarkResult({ ok: true, data: [] });
+  const retryRemove = renderer.elements.get('#panel-content').children
+    .find((child) => child.className === 'panel-list').children[0].children
+    .find((child) => child.textContent === 'Remove bookmark');
+  await retryRemove.click();
+  assert.match(renderer.elements.get('#panel-content').children[0].textContent, /No bookmarks saved/);
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'Bookmark removed.');
+});
+
+test('clearing history requires confirmation and reports persistence success or failure', async () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { history: [{ title: 'Visited', url: 'https://visited.example/' }], bookmarks: [] },
+  });
+  await renderer.actions.find((button) => button.dataset.action === 'history').click();
+  const clear = renderer.elements.get('#panel-content').children[0];
+
+  renderer.setConfirmResult(false);
+  await clear.click();
+  assert.deepEqual(renderer.clearHistoryCalls, []);
+  assert.match(renderer.confirmCalls[0], /cannot be undone/);
+
+  renderer.setConfirmResult(true);
+  renderer.setClearHistoryResult({ ok: true, data: [] });
+  await clear.click();
+  assert.deepEqual(renderer.clearHistoryCalls, [true]);
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'Browsing history cleared.');
+
+  const failingRenderer = createRenderer();
+  failingRenderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { history: [{ title: 'Visited', url: 'https://visited.example/' }], bookmarks: [] },
+  });
+  await failingRenderer.actions.find((button) => button.dataset.action === 'history').click();
+  failingRenderer.setClearHistoryResult({ ok: false, error: 'AETHER browser data could not be saved.' });
+  await failingRenderer.elements.get('#panel-content').children[0].click();
+  assert.equal(
+    failingRenderer.elements.get('#tab-state').textContent,
+    'AETHER browser data could not be saved.',
+  );
+});
+
+test('IPC rejections are surfaced instead of becoming unhandled renderer failures', async () => {
+  const renderer = createRenderer();
+  const tab = {
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    title: 'New Tab',
+    active: true,
+  };
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [tab],
+    stored: { history: [], bookmarks: [] },
+  });
+  renderer.api.navigate = () => Promise.reject(new Error('IPC connection closed.'));
+  renderer.elements.get('#address').value = 'https://example.com/';
+  await renderer.elements.get('#address-form').listeners.get('submit')({ preventDefault() {} });
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'IPC connection closed.');
+  assert.equal(renderer.elements.get('#tab-state').style.color, '#e49b83');
 });
 
 test('late history and bookmark responses update storage without replacing another open panel', async () => {

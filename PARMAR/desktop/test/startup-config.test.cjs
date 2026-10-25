@@ -39,6 +39,10 @@ test('Electron start and test scripts resolve from the desktop package directory
     manifest.scripts['test:electron-isolation'],
     'node --test test/electron-isolation-integration.test.cjs',
   );
+  assert.equal(
+    manifest.scripts['test:production-child-network-probe'],
+    'node --test test/production-child-network-probe.test.cjs',
+  );
   assert.equal(manifest.scripts['package:dir'], 'electron-builder --dir --config electron-builder.config.cjs');
   assert.equal(manifest.scripts['package:linux'], 'electron-builder --linux AppImage --config electron-builder.config.cjs');
   assert.equal(manifest.engines.node, '>=22.12.0 <25');
@@ -93,6 +97,8 @@ test('Linux packaging includes the asar application and all production browser i
   for (const forbidden of [
     'electron-builder.config.cjs',
     'production-network-probe.cjs',
+    'test/production-child-network-probe.test.cjs',
+    'test/production-child-network-probe-bootstrap.cjs',
     'test',
     'poc',
     'strace',
@@ -130,6 +136,8 @@ test('all privileged UI assets exist and webpage renderers have no preload bridg
     'test/electron-isolation-fixture.html',
     'test/electron-isolation-renderer.js',
     'test/electron-isolation-integration.test.cjs',
+    'test/production-child-network-probe.test.cjs',
+    'test/production-child-network-probe-bootstrap.cjs',
     'test/browser-child.test.cjs',
     'newtab.html',
     'security.cjs',
@@ -162,6 +170,7 @@ test('all privileged UI assets exist and webpage renderers have no preload bridg
   assert.match(main, /app\.getAppPath\(\)/);
   assert.match(main, /process\.argv\.includes\('--aether-browser-child'\)/);
   assert.match(main, /createBrowserChildSupervisor/);
+  assert.match(main, /createdWindow\.webContents\.on\('before-input-event'/);
   assert.doesNotMatch(
     main,
     /production-network-probe|runProductionNetworkProbe|PARMAR_AETHER_PRODUCTION_NETWORK_PROBE/,
@@ -174,6 +183,13 @@ test('all privileged UI assets exist and webpage renderers have no preload bridg
     browserSupervisor,
     /production-network-probe|PARMAR_AETHER_PRODUCTION_NETWORK_PROBE/,
   );
+  const uiSmoke = fs.readFileSync(
+    path.join(desktopDirectory, 'test/electron-ui-smoke.test.cjs'),
+    'utf8',
+  );
+  assert.doesNotMatch(uiSmoke, /PARMAR_AETHER_PRODUCTION_NETWORK_PROBE|production-network-probe/);
+  assert.match(uiSmoke, /attemptedDestinations\s*=\s*\[/);
+  assert.match(uiSmoke, /The packaged browser process reached the controlled IPv[46] loopback listener/);
   assert.match(browserSupervisor, /buildIsolatedLaunch/);
   assert.match(browserSupervisor, /targetArguments:\s*\[appPath,\s*CHILD_ARGUMENT\]/);
   assert.match(browserSupervisor, /shell:\s*false/);
@@ -211,6 +227,24 @@ test('browser chrome has a restrictive CSP and an explicit restricted-mode messa
   assert.match(renderer, /createIcon\('close'\)/);
 });
 
+test('Linux runtime workflow requires namespace, Electron UI, isolation, and screenshot checks', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(desktopDirectory, '../../.github/workflows/aether-linux-runtime.yml'),
+    'utf8',
+  );
+  assert.match(workflow, /unshare --user --map-current-user --net true/);
+  assert.match(workflow, /Namespace creation failed \(exit status %s\)/);
+  assert.match(workflow, /Verify Electron GUI runtime prerequisites/);
+  assert.doesNotMatch(workflow, /sysctl\s+-w|kernel\.apparmor_restrict_unprivileged_userns=0/);
+  assert.doesNotMatch(workflow, /steps\.enable-userns/);
+  assert.match(workflow, /PARMAR_ELECTRON_RUNTIME_REQUIRED:\s*"1"/);
+  assert.match(workflow, /PARMAR_AETHER_UI_SMOKE:\s*"1"/);
+  assert.match(workflow, /PARMAR_AETHER_UI_SMOKE_REQUIRED:\s*"1"/);
+  assert.match(workflow, /PARMAR_AETHER_UI_SCREENSHOT_DIR:/);
+  assert.match(workflow, /npm run test:electron-isolation/);
+  assert.match(workflow, /uses:\s*actions\/upload-artifact@v4/);
+});
+
 test('AETHER browser chrome adapts to narrow window widths', () => {
   const css = fs.readFileSync(path.join(desktopDirectory, 'browser.css'), 'utf8');
   const main = fs.readFileSync(path.join(desktopDirectory, 'main.cjs'), 'utf8');
@@ -220,5 +254,8 @@ test('AETHER browser chrome adapts to narrow window widths', () => {
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
   assert.match(css, /grid-template-columns:\s*repeat\(5,\s*minmax\(32px,\s*1fr\)\)/);
   assert.match(css, /@media\s*\(max-width:\s*900px\)/);
+  assert.doesNotMatch(css, /\.sidebar-action span\s*\{\s*display:\s*none/);
+  assert.match(css, /\.sidebar\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /@media\s*\(pointer:\s*coarse\)/);
   assert.match(main, /width:\s*1320,[\s\S]*?minWidth:\s*360,[\s\S]*?minHeight:\s*480/);
 });

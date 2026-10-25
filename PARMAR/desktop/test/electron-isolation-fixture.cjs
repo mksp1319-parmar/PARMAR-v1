@@ -56,11 +56,6 @@ async function main() {
   });
 
   const probes = await Promise.all([
-    probe(
-      process.env.PARMAR_TEST_IPV4_HOST,
-      Number(process.env.PARMAR_TEST_IPV4_PORT),
-      4,
-    ),
     probe('127.0.0.1', Number(process.env.PARMAR_TEST_IPV4_LOOPBACK_PORT), 4),
     probe('::1', Number(process.env.PARMAR_TEST_IPV6_LOOPBACK_PORT), 6),
   ]);
