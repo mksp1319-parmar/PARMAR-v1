@@ -20,6 +20,7 @@ class MockWebContents extends EventEmitter {
     this.windowOpenHandler = null;
     this.canGoBackValue = true;
     this.canGoForwardValue = true;
+    this.zoomFactor = 1;
     MockWebContents.instances.push(this);
   }
 
@@ -52,10 +53,11 @@ class MockWebContents extends EventEmitter {
   }
 
   getZoomFactor() {
-    return 1;
+    return this.zoomFactor;
   }
 
   setZoomFactor(factor) {
+    this.zoomFactor = factor;
     this.calls.push(['zoom', factor]);
   }
 
@@ -178,6 +180,7 @@ class MockBrowserWindow extends EventEmitter {
 
 function createElectronMock(userDataPath, { hasSingleInstanceLock = true } = {}) {
   const handlers = new Map();
+  let applicationMenu = null;
   const app = new EventEmitter();
   app.quitCount = 0;
   app.singleInstanceLockRequests = 0;
@@ -219,10 +222,13 @@ function createElectronMock(userDataPath, { hasSingleInstanceLock = true } = {})
       },
       Menu: {
         buildFromTemplate: (template) => template,
-        setApplicationMenu() {},
+        setApplicationMenu(menu) {
+          applicationMenu = menu;
+        },
       },
       session: { fromPartition: () => browserSession },
     },
+    getApplicationMenu: () => applicationMenu,
   };
 }
 
@@ -231,6 +237,8 @@ async function launchMainForTest({
   hasSingleInstanceLock = true,
   browserLoadFailure = false,
   initialSession,
+  platform = 'darwin',
+  browserSupervisor = null,
 } = {}) {
   MockBrowserWindow.windows = [];
   MockWebContents.instances = [];
@@ -250,6 +258,7 @@ async function launchMainForTest({
     electron,
     handlers,
     browserSession,
+    getApplicationMenu,
   } = createElectronMock(userDataPath, { hasSingleInstanceLock });
   const app = electron.app;
   const mainPath = path.join(__dirname, '..', 'main.cjs');
@@ -259,14 +268,18 @@ async function launchMainForTest({
     console,
     require: (name) => {
       if (name === 'electron') return electron;
+      if (name === './browser-child-supervisor.cjs' && browserSupervisor) {
+        return { createBrowserChildSupervisor: () => browserSupervisor };
+      }
       if (name.startsWith('.')) return require(path.resolve(path.dirname(mainPath), name));
       return require(name);
     },
     process: {
-      platform: 'darwin',
+      platform,
       argv: [],
       execPath: process.execPath,
       env: process.env,
+      on() {},
     },
     setImmediate,
     URL,
@@ -275,6 +288,8 @@ async function launchMainForTest({
   await new Promise((resolve) => setImmediate(resolve));
   return {
     app,
+    browserSupervisor,
+    getApplicationMenu,
     browserSession,
     cleanup: () => {
       MockBrowserWindow.failBrowserLoad = false;
@@ -620,6 +635,11 @@ test('tab lifecycle detaches only the active view and routes navigation controls
   [...browserWindow.contentView.children][0].webContents.emit('before-input-event', {
     preventDefault() {},
   }, { type: 'keyDown', key: '+', control: true });
+  assert.equal(
+    getState().tabs.find((tab) => tab.id === secondTabId).zoomFactor,
+    1.1,
+    'Page-level zoom shortcuts must publish the updated zoom to browser chrome.',
+  );
   const closeInactive = await handlers.get('aether:close-tab')(browserEvent, originalTabId);
   assert.deepEqual({ ok: closeInactive.ok }, { ok: true });
   assert.deepEqual(Array.from(getState().tabs, (tab) => tab.id), [secondTabId]);
@@ -894,4 +914,114 @@ test('backend-unavailable fallback can open only the restricted shell through it
     sender: browserWindow.webContents,
     senderFrame: { parent: null, url: 'file:///tmp/untrusted.html' },
   }), /untrusted renderer/);
+});
+
+test('tab creation routes enforce the same limit and report expected failures without crashing', async (context) => {
+  const { cleanup, handlers, getApplicationMenu } = await launchMainForTest();
+  context.after(cleanup);
+
+  const controlWindow = MockBrowserWindow.windows[0];
+  const controlEvent = {
+    sender: controlWindow.webContents,
+    senderFrame: { parent: null, url: 'http://127.0.0.1:8080/' },
+  };
+  await handlers.get('parmar-aether:open')(controlEvent);
+  const browserWindow = MockBrowserWindow.windows[1];
+  const browserEvent = {
+    sender: browserWindow.webContents,
+    senderFrame: {
+      parent: null,
+      url: pathToFileURL(path.join(__dirname, '..', 'browser.html')).href,
+    },
+  };
+  const getState = () => browserWindow.webContents.sent
+    .filter((entry) => entry.channel === 'aether:state')
+    .at(-1).payload;
+
+  for (let index = 1; index < 16; index += 1) {
+    assert.equal((await handlers.get('aether:create-tab')(browserEvent)).ok, true);
+  }
+  const activeTabId = getState().activeTabId;
+  assert.equal(getState().tabs.length, 16);
+
+  const ipcFailure = await handlers.get('aether:create-tab')(browserEvent);
+  assert.equal(ipcFailure.ok, false);
+  assert.match(ipcFailure.error, /at most 16 tabs/);
+  assert.equal(getState().tabs.length, 16);
+
+  const activeView = [...browserWindow.contentView.children][0];
+  let shortcutPrevented = false;
+  activeView.webContents.emit('before-input-event', {
+    preventDefault() { shortcutPrevented = true; },
+  }, { type: 'keyDown', key: 't', control: true });
+  assert.equal(shortcutPrevented, true);
+  assert.equal(getState().activeTabId, activeTabId);
+  assert.equal(getState().tabs.length, 16);
+  assert.match(
+    browserWindow.webContents.sent.at(-1).payload,
+    /at most 16 tabs/,
+  );
+  assert.equal(browserWindow.webContents.sent.at(-1).channel, 'aether:navigation-error');
+
+  const [applicationMenu] = getApplicationMenu();
+  await applicationMenu.submenu[0].click();
+  assert.equal(getState().activeTabId, activeTabId);
+  assert.equal(getState().tabs.length, 16);
+  assert.equal(browserWindow.webContents.sent.at(-1).channel, 'aether:navigation-error');
+  assert.match(browserWindow.webContents.sent.at(-1).payload, /at most 16 tabs/);
+});
+
+test('new-tab menu startup avoids a duplicate tab and preserves concurrent requests', async (context) => {
+  const createSupervisor = () => {
+    const supervisor = new EventEmitter();
+    supervisor.state = 'stopped';
+    supervisor.newTabCalls = 0;
+    supervisor.start = async () => {
+      supervisor.state = 'ready';
+    };
+    supervisor.stop = async () => ({});
+    supervisor.focus = () => {};
+    supervisor.newTab = () => { supervisor.newTabCalls += 1; };
+    supervisor.closeTab = () => {};
+    return supervisor;
+  };
+
+  const firstSupervisor = createSupervisor();
+  const firstLaunch = await launchMainForTest({
+    platform: 'linux',
+    browserSupervisor: firstSupervisor,
+  });
+  context.after(firstLaunch.cleanup);
+  const [firstMenu] = firstLaunch.getApplicationMenu();
+  await firstMenu.submenu[0].click();
+  await new Promise(setImmediate);
+  assert.equal(firstSupervisor.state, 'ready');
+  assert.equal(firstSupervisor.newTabCalls, 0);
+
+  const concurrentSupervisor = createSupervisor();
+  let resolveStartup;
+  const startup = new Promise((resolve) => { resolveStartup = resolve; });
+  concurrentSupervisor.start = () => {
+    concurrentSupervisor.state = 'starting';
+    return startup;
+  };
+  const concurrentLaunch = await launchMainForTest({
+    platform: 'linux',
+    browserSupervisor: concurrentSupervisor,
+  });
+  context.after(concurrentLaunch.cleanup);
+  const controlWindow = MockBrowserWindow.windows[0];
+  const controlEvent = {
+    sender: controlWindow.webContents,
+    senderFrame: { parent: null, url: 'http://127.0.0.1:8080/' },
+  };
+  const opening = concurrentLaunch.handlers.get('parmar-aether:open')(controlEvent);
+  assert.equal(concurrentSupervisor.state, 'starting');
+  const [concurrentMenu] = concurrentLaunch.getApplicationMenu();
+  concurrentMenu.submenu[0].click();
+  concurrentSupervisor.state = 'ready';
+  resolveStartup();
+  assert.equal((await opening).ok, true);
+  await new Promise(setImmediate);
+  assert.equal(concurrentSupervisor.newTabCalls, 1);
 });

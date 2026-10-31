@@ -178,6 +178,42 @@ live namespace and controlled-listener tests in the local suite use the
 prototype or fixture launcher, not the production packaged AppImage child.
 The production UI test that checks the real child, its Chromium descendants,
 crash recovery, and shutdown cleanup could not run without the GUI runtime.
+
+## Code-only readiness update (2026-10-31)
+
+The page-level Ctrl/Meta zoom shortcuts now publish browser state after
+changing the active tab's zoom factor, so the browser chrome does not retain
+stale zoom state. A lifecycle regression test verifies the updated factor is
+sent to the renderer.
+
+The browser renderer now forces the address field to follow active-tab
+changes even while that field remains focused, while preserving in-progress
+text edits during ordinary updates to the same tab. A regression test drives
+the renderer's Ctrl+Tab action and verifies both behaviors. Another regression
+test covers the settings-panel zoom buttons and Ctrl-minus/Ctrl-zero shortcuts.
+
+The UI smoke-test adapter keeps Xvfb as its default and supports Weston with
+its real Xwayland backend as an opt-in alternative. Readiness requires both
+Weston's Xwayland display announcement and a Wayland Unix socket; shutdown
+signals and verifies the Weston process group, including Xwayland, and
+escalates to SIGKILL if graceful cleanup fails. ImageMagick 7 uses its genuine
+`magick import` and `magick` commands. Focused adapter tests cover startup
+failure, early exit, readiness timeout, normal shutdown, process-group
+cleanup/escalation, and command mapping. Isolation tools remain fixed at
+`/usr/bin/unshare` and `/usr/bin/setpriv`; the existing network-isolation,
+namespace, `no_new_privs`, screenshot, and cleanup assertions were not
+weakened.
+
+Code-level verification: `cd PARMAR/desktop && npm test` completed with 118
+tests, 114 passed, 0 failed, and 4 skipped. JavaScript syntax checks for the
+changed/new test and application files and `git diff --check` passed. This
+suite does not establish that Weston/Xwayland or the Electron UI ran here:
+the live Electron isolation and packaged UI screenshot tests were skipped
+because their runtime prerequisites/explicit opt-in were absent. No new
+package build, real Electron launch, screenshot capture or image inspection,
+or hosted workflow run was performed for this code-only update. These runtime
+checks remain pending; keep `REMOTE_BROWSING_ENABLED=false` until the required
+production isolation evidence is collected and reviewed.
 Keep `REMOTE_BROWSING_ENABLED = false`.
 
 Before remote browsing can be considered, all of the following are required:
@@ -1888,3 +1924,399 @@ The final JSON is
 The failed intermediate assertion run is not counted as a pass. Cleanup was
 verified for the app parent, production child group, Xvfb, and listeners.
 `REMOTE_BROWSING_ENABLED` remains `false`.
+
+## AETHER renderer and tab-limit follow-up (2026-10-29)
+
+The browser renderer now handles rejected initial-status and viewport-layout
+IPC requests with visible errors. A late initial-status response cannot replace
+state already delivered by the main process; only the newest viewport-layout
+request may report an error. Renderer subscriptions and its resize observer are
+released on unload. At narrow widths, the security-state label stays available
+to assistive technology while the visual status indicator no longer competes
+with the horizontally scrollable tab strip.
+
+All user-triggered tab creation paths use the shared 16-tab guard. Keyboard,
+application-menu, and browser-child new-tab actions report creation errors to
+the browser instead of allowing an expected tab-limit error to be treated as
+an unexpected child-protocol failure. Opening AETHER via the application
+menu starts with the initial tab rather than immediately opening a duplicate;
+concurrent new-tab requests during an existing startup are still forwarded.
+
+From `PARMAR/desktop`, the focused command
+`node --test --test-concurrency=1 test/browser-renderer.test.cjs test/main-lifecycle.test.cjs test/browser-child.test.cjs test/preload.test.cjs`
+reported **51 tests, 50 passed, 0 failed, 1 skipped**. The skipped
+packaged-artifact assertion requires a built artifact; no package was rebuilt
+and no production browser was launched during this follow-up. JavaScript
+syntax checks (`node --check` for the main, renderer, preload, and regression
+test files), YAML parsing, `bash -n` for all 11 workflow `run` blocks, and
+`git diff --check` passed. No package was rebuilt, no screenshot or live UI
+inspection was performed, no production browser was launched, and no hosted
+workflow was dispatched.
+
+These changes do not verify Chromium's request-to-kernel attribution,
+production WebSocket handshake behavior, redirect source/target attempts,
+hosted-runner namespace prerequisites, packaged UI screenshots, or the
+runner's cleanup behavior. They do not enable remote browsing or alter the
+isolation design. `REMOTE_BROWSING_ENABLED` remains `false`; production release
+still requires the external verification listed above.
+
+## Production security evidence gate (2026-10-29)
+
+The following matrix separates source-level controls and test-harness
+observations from a completed production security run. “PASS” applies only to
+the specified code/configuration invariant; it is not approval to enable
+remote browsing. No production browser, package build, or hosted workflow was
+run for this gate.
+
+| Requirement | Existing implementation and test | Evidence currently available | Status |
+|---|---|---|---|
+| Child starts in a separate network namespace with no active interfaces/routes | `isolation-launcher.cjs` builds the fixed `unshare --user --map-current-user --net` launch; `isolation-probe.cjs` checks namespace IDs, loopback-down, interface list, routes, capabilities, and `NoNewPrivs`; `browser-child-supervisor.cjs` independently compares child and parent namespace IDs. Unit/prototype coverage: `test/isolation-prototype.test.cjs`, `test/browser-child.test.cjs`. Packaged checks: `test/electron-ui-smoke.test.cjs`, `test/production-child-network-probe.test.cjs`. | Code and deterministic mocked/unit coverage exist. The production `/proc`/`ip` assertions require launching the packaged app and have not been executed for this gate. Historic prototype evidence is not packaged Chromium evidence. | **PASS** launcher/verifier configuration; **BLOCKED** packaged runtime proof |
+| Effective capabilities are dropped and `no_new_privs` holds across Chromium descendants | `isolation-launcher.cjs` applies `setpriv --inh-caps=-all --ambient-caps=-all --no-new-privs`; packaged process-tree checks in `test/electron-ui-smoke.test.cjs` and `test/production-child-network-probe.test.cjs` read `/proc/<pid>/status` for each live process. | These are executable checks, not a result for the current package/run. | **BLOCKED** |
+| Chromium NetworkService connection attempt and kernel outcome are attributed to the request | `test/production-child-network-probe.test.cjs` records renderer CDP request IDs and same-Electron-instance NetworkService PID candidates. Its evidence explicitly sets request attribution and kernel socket observation to unavailable. `test/electron-ui-smoke.test.cjs` only verifies restricted navigation and listener counters. | No safe validated observer correlates the exact request, NetworkService PID, destination `connect()` attempt, and kernel return/errno. `strace` presence alone is not evidence; prior readiness notes record ptrace/BPF/perf constraints and no tracer run. | **BLOCKED** |
+| A real Chromium WebSocket handshake is observed | The test wrapper records CDP `webSocketWillSendHandshakeRequest`, `webSocketHandshakeResponseReceived`, `webSocketFrameError`, and close events; the controlled listener can return HTTP 101. The production-child assertions expect a correlated frame error and no handshake response because the production session policy cancels first. | No request reaches the listener, no 101 is returned to Chromium, and no successful/failed real handshake response is attributed. | **BLOCKED** |
+| Chromium follows a real redirect and the destination attempt is observed | `verifyControlledRedirectFixture` in `test/production-child-network-probe.test.cjs` verifies an actual 302 and target request using a Node HTTP client. The Chromium probe separately verifies source policy cancellation and asserts there is no target-follow request. | The Node fixture proves only Node’s redirect behavior. Chromium does not receive the 302 because the production session policy cancels before the source listener. | **BLOCKED** |
+| Browser-child/Chromium descendants and test resources are cleaned up | `browser-child-supervisor.cjs` kills the detached child process group; packaged cleanup assertions exist in `test/electron-ui-smoke.test.cjs` and `test/production-child-network-probe.test.cjs`. This gate adds machine-readable cleanup evidence including app/child group members, Xvfb, and listener state, and a deterministic unit test of the cleanup verdict. | The checks have not been run against the packaged browser in this gate. A passing unit test validates summary logic only; it is not runtime cleanup evidence. | **PASS** cleanup-evidence contract; **BLOCKED** packaged runtime cleanup |
+| Hosted Linux namespace/GUI prerequisites and full workflow succeed | `.github/workflows/aether-linux-runtime.yml` diagnoses required commands/settings, checks unprivileged user/network namespace creation, builds both packages, runs focused packaged probes and full serial tests, then uploads evidence. | Workflow structure is present; there is no successful hosted run for the current worktree. | **BLOCKED** |
+| Remote browsing remains fail-closed | `security.cjs` sets `REMOTE_BROWSING_ENABLED = false`; `test/security.test.cjs`, `test/startup-config.test.cjs`, and the production probe’s archive assertion cover the invariant. | Source and local unit checks; no security transition was made. | **PASS** policy configuration |
+
+### Remaining authorized verification
+
+On a dedicated Linux runner with the documented GUI libraries, Xvfb, and
+namespace prerequisites, use the existing workflow after the exact revision
+has been published and CI execution is authorized. It runs the package builds,
+the required production-child test, the packaged AppImage smoke, isolation
+fixture, and serial desktop suite, and uploads reports/screenshots. Do not
+count the locally skipped packaged test or prior test-fixture results as
+production evidence.
+
+Given an already-built `linux-unpacked` artifact and an approved isolated
+Linux runtime, the focused commands from `PARMAR/desktop` are:
+
+```sh
+PARMAR_AETHER_PRODUCTION_CHILD_PROBE_REQUIRED=1 \
+PARMAR_AETHER_LINUX_DIR_PATH=/absolute/path/to/linux-unpacked \
+PARMAR_AETHER_UI_SCREENSHOT_DIR=/absolute/path/to/evidence/probe \
+  npm run test:production-child-network-probe
+
+PARMAR_AETHER_APPIMAGE_PATH="/absolute/path/to/PARMAR AETHER-1.0.0.AppImage" \
+PARMAR_AETHER_UI_SMOKE=1 \
+PARMAR_AETHER_UI_SMOKE_REQUIRED=1 \
+PARMAR_AETHER_UI_SCREENSHOT_DIR=/absolute/path/to/evidence/ui \
+  node --test test/electron-ui-smoke.test.cjs
+
+PARMAR_ELECTRON_RUNTIME_LIB_DIR=/absolute/path/to/gtk-libraries \
+PARMAR_ELECTRON_RUNTIME_REQUIRED=1 \
+  npm run test:electron-isolation
+```
+
+These commands launch test-instrumented or fixture browser processes; they
+were not run during this gate. They can verify runtime namespace, capability,
+`no_new_privs`, listener, and cleanup assertions but still do **not** close the
+NetworkService syscall-attribution gap. Before any test-only topology can
+exercise redirect targets or a successful WebSocket handshake, a dedicated
+disposable runner must provide the previously documented fixture-only
+network topology without host/public forwarding. The NetworkService request
+must then be correlated with a validated, sandbox-preserving observer that
+records PID, destination, syscall attempt, and kernel outcome. There is no
+safe exact tracing command to give until that observer and runner are
+provisioned and independently validated; do not infer this evidence from CDP,
+application policy, or zero listener counts.
+
+**Single release blocker:** production network-boundary evidence is incomplete:
+the actual Chromium NetworkService syscall/outcome is unobserved, and the
+hosted packaged process-isolation/cleanup run has not passed. Keep
+`REMOTE_BROWSING_ENABLED=false` until that evidence is obtained and reviewed.
+
+## Final release gate audit (2026-10-31)
+
+The current package manifest pins Electron 44.7.0 and electron-builder
+26.15.3. The Linux scripts target an unpacked directory or an AppImage; the
+builder configuration uses app ID `com.parmar.aether`, product name
+`PARMAR AETHER`, ASAR packaging, and the original PARMAR emblem for both the
+Linux icon and an explicit resource at `aether/parmar-emblem.png`. All 17
+configured ASAR file entries, the emblem resource, and icon path exist. The
+emblem is a 552x548 PNG. This is static configuration verification, not a
+fresh package build or an inspection of built archive contents.
+
+The application runtime uses Electron and Node built-ins; the lockfile has
+the exact Electron and electron-builder versions and no additional app
+dependencies. Electron's Linux GTK/ATK/CUPS/X11/GBM/XKB/ALSA/AT-SPI shared
+libraries are host runtime prerequisites rather than npm package entries.
+The installed Electron binary's `ldd` output reports these 12 libraries
+missing in this environment: `libatk-1.0.so.0`,
+`libatk-bridge-2.0.so.0`, `libcups.so.2`, `libgtk-3.so.0`,
+`libXcomposite.so.1`, `libXdamage.so.1`, `libXfixes.so.3`,
+`libXrandr.so.2`, `libgbm.so.1`, `libxkbcommon.so.0`, `libasound.so.2`,
+and `libatspi.so.0`. `/usr/bin/unshare`, `/usr/bin/setpriv`, and
+`/usr/sbin/ip` exist; Xvfb, xdotool, and the legacy ImageMagick `import` and
+`convert` commands do not. No dependency was installed.
+
+The release gates are therefore: **PASS** source-level policy and fail-closed
+navigation configuration (`REMOTE_BROWSING_ENABLED=false`); **PASS** static
+packaging metadata and source/resource path checks; **NOT VERIFIED** fresh
+package build and built-archive completeness; **FAIL in this environment**
+Electron GUI runtime prerequisites (the libraries and tools above are
+missing); **NOT VERIFIED** packaged runtime launch, visual screenshots and
+inspection, and production Electron/Chromium network-isolation and cleanup
+evidence. The full desktop suite completed with 118 tests: 114 passed, 0
+failed, and 4 skipped. JavaScript syntax checks across desktop CJS files and
+`git diff --check` passed. No package was built and no application was
+launched for this audit. Continue to keep `REMOTE_BROWSING_ENABLED=false`.
+
+## Linux CI runtime verification workflow (2026-10-31)
+
+The Linux workflow now records the hosted runner's namespace prerequisites and
+checks the installed GUI packages, Electron's resolved shared libraries, and
+the additional libraries Electron may load dynamically. Before its
+network-disabled package builds, it asks the lockfile-pinned electron-builder
+toolset downloader to provision the AppImage tools; that downloader validates
+the tool archive against electron-builder's pinned checksum. The builds remain
+inside the existing unprivileged user/network namespace with
+`no_new_privs`.
+
+After packaging, the workflow inspects both the unpacked package and the
+extracted AppImage for the required ASAR entries and byte-identical original
+PARMAR emblem resources. It supplies the fresh unpacked path to the artifact
+test, requires the packaged AppImage UI smoke and production-child probe, and
+uploads their logs and screenshots even when a later step fails. These are
+workflow guarantees only: this workflow was not dispatched or run here, so
+package creation, actual Electron launch, screenshot inspection, process
+cleanup, and production isolation remain **NOT VERIFIED**. Keep
+`REMOTE_BROWSING_ENABLED=false` pending successful hosted-runner evidence and
+review.
+
+## A14 pending-task verification (2026-10-31)
+
+This is the current evidence register for the pending items below. Older
+dated sections remain historical run records; do not treat them as evidence
+for the current worktree. No package was built or launched and no workflow
+was run during this verification.
+
+| Task or requirement | Status | Evidence available now | Remaining work and local availability |
+|---|---|---|---|
+| `built Linux artifact contains launchable app.asar paths and required browser isolation assets` | BLOCKED | Skipped by `test/browser-child.test.cjs` because `PARMAR/desktop/dist/linux-unpacked/resources/app.asar` is absent and `PARMAR_AETHER_LINUX_DIR_PATH` is unset. | Run after a fresh package exists. Cannot complete here without a prohibited package build. CI package inspection also checks the executable and archive. |
+| `live Electron and Chromium descendants stay outside the host namespace and cannot reach controlled listeners` | BLOCKED | Skipped because `/usr/bin/Xvfb` is missing, `PARMAR_ELECTRON_RUNTIME_LIB_DIR` is unset, and required GTK libraries are absent. Required mode was checked and failed explicitly on missing Xvfb before launching Electron. | Requires a Linux GUI runtime with Xvfb, pinned Electron and GTK libraries; run `npm run test:electron-isolation` with `PARMAR_ELECTRON_RUNTIME_REQUIRED=1`. Not runnable here. |
+| `packaged AETHER UI launches isolated Chromium and supports real browser chrome interactions` | BLOCKED | Skipped because `PARMAR_AETHER_UI_SMOKE=1` is unset. The AppImage is absent and GUI tools/runtime are missing. Required mode was checked and failed explicitly on missing Xvfb before package launch. | Requires a fresh executable AppImage and GUI runtime; CI runs the smoke with both `PARMAR_AETHER_UI_SMOKE=1` and `PARMAR_AETHER_UI_SMOKE_REQUIRED=1`. Not runnable here. |
+| `test-only harness records packaged Chromium renderer requests in the isolated network namespace` | BLOCKED | Skipped because `PARMAR_AETHER_PRODUCTION_CHILD_PROBE_REQUIRED=1` is unset. No unpacked package exists. Required mode was checked and failed explicitly on missing Xvfb before app launch. | Requires a fresh `linux-unpacked` package, Xvfb/xdotool, and an evidence directory; CI runs it with required mode. Not runnable here. |
+| Fresh package build and actual packaged application launch | NOT VERIFIED | No AppImage or `linux-unpacked` archive is present in the expected workspace output. Build and launch were prohibited for this verification. | Run the existing workflow on an authorized published revision; inspect package logs and both package archives. |
+| Genuine mobile, tablet, and desktop screenshots | NOT VERIFIED | The smoke now requests 360x720, 640x720, 768x1024, and 1480x920 windows. It captures the actual packaged AETHER window, not a fixture. No screenshot was generated here. | Run the required packaged smoke, retain the PNGs, and inspect them. The 768x1024 capture covers the tablet-width CSS range. |
+| Screenshot pixel dimensions and nonblank content | NOT VERIFIED | `assertScreenshotDimensions` decodes width, height, and distinct-color count from each PNG; it checks 360x720, 640x720, 768x1024, and 1480x920 and rejects captures with 20 or fewer colors. The startup-config regression test checks all four assertions and the content guard. These checks passed as source-level tests only. | Execute the packaged smoke and confirm the assertions pass against actual saved images. Missing/malformed images fail through the ImageMagick command; incorrect dimensions or blank/near-blank captures fail explicit assertions. |
+| Visual screenshot inspection and design comparison | BLOCKED | No genuine current-worktree screenshots exist. The design-reference section records no AETHER browser-specific design board. | Human inspection of the workflow artifact is required; a design comparison additionally needs an approved AETHER reference. |
+| Electron/Chromium process isolation and cleanup | BLOCKED | Launcher configuration and unit tests preserve `unshare --user --map-current-user --net`, capability dropping, and `no_new_privs`. The Node namespace prototype passes in the suite, but the live Electron test and packaged smoke were skipped. | Required hosted run must inspect the production child and Chromium descendants at startup/recovery and verify process-group cleanup at shutdown. Prototype results are not production proof. |
+| App-level navigation rejection | PASS (source/unit scope only) | `REMOTE_BROWSING_ENABLED=false`; security tests and production-probe assertions check policy cancellation. Current suite passed. | Keep remote browsing disabled. A packaged UI/policy interaction remains unverified until the smoke runs. |
+| Main-process direct socket restrictions | NOT VERIFIED | The opt-in production-child probe contains direct IPv4/IPv6 socket assertions for the test-instrumented packaged Electron child. It was skipped here. | Run that required probe and retain PID, namespace, errno, and listener evidence. This proves only those main-process socket attempts. |
+| Renderer network attempts | NOT VERIFIED | The probe injects controlled fetch/WebSocket requests in a real tab renderer and records CDP request events in the test-instrumented package. It was skipped here. | Run the probe and inspect renderer request/failure events. CDP evidence does not attribute a kernel connect to Chromium NetworkService. |
+| Chromium NetworkService syscall attribution | BLOCKED | Probe code explicitly records syscall/errno attribution as unavailable; CDP request IDs and candidate NetworkService PIDs are not a process/request correlation. `/usr/bin/strace` 6.8 is installed; a harmless trace of `unshare --user --map-current-user --net /usr/bin/true` succeeded. `ptrace_scope=1`, `perf_event_paranoid=4`, and tracefs event listings are unavailable. This validates only tracing a simple child and namespace setup, not Chromium or preservation of its sandbox under tracing. | On an approved disposable isolated Linux runner, test a `strace -f -ff -ttt -yy -e trace=connect` observer against one controlled request and verify PID, destination, connect result, and request correlation while independently confirming Chromium sandbox, namespace, capabilities, and `no_new_privs` remain intact. Do not treat this candidate as evidence until that experiment passes. |
+| Real WebSocket and redirect behavior at the OS boundary | BLOCKED | Production policy currently cancels requests before a listener handshake or redirect response; the test-only Node fixture does not establish Chromium production behavior. | Requires a reviewed, isolated test topology plus the validated NetworkService observer. Do not infer this from policy cancellation, CDP alone, or zero listener connections. |
+| Original PARMAR emblem and packaging configuration | PASS (source/config scope) | Source emblem exists as a 552x548 PNG; package configuration uses it as Linux icon and `aether/parmar-emblem.png`; config tests pass. | Built-package byte identity is not verified locally. The CI package step uses `cmp` against the original source for both unpacked and extracted AppImage resources. |
+| Responsive CSS and browser controls | PASS (source/unit scope) | Responsive 640/400 CSS breakpoints and browser renderer/control regression tests pass. The smoke includes size assertions for mobile, tablet, and desktop. | Live visual behavior and the four screenshot dimensions remain unverified until the packaged smoke runs. |
+| Required smoke/probe gates and evidence collection | PASS (configuration only) | Required-mode checks were exercised and failed rather than skipped when prerequisites were missing. Workflow sets required flags for package probes, Electron isolation, and UI smoke; upload uses `always()` when the evidence directory exists. | No hosted workflow was run. Verify its tests have no runtime skips and review the uploaded logs/screenshots on the exact authorized revision. |
+| Independent production security review | BLOCKED | The readiness record identifies this as outstanding; no independent review result is present for the current worktree. | Requires authorized review of the production process boundary, Chromium sandbox, network evidence, and cleanup. |
+
+The complete desktop command `cd PARMAR/desktop && npm test` reported **118
+tests, 114 passed, 0 failed, and 4 skipped**. The four skips are the first four
+rows above. `test/startup-config.test.cjs` passed all 7 tests, including the
+four viewport dimension-gate checks. Project JavaScript syntax checks
+excluding `node_modules` and `git diff --check` passed. A required-mode
+diagnostic for each live Electron/probe test reached its prerequisite
+assertion and failed on the missing `/usr/bin/Xvfb`; these expected diagnostic
+failures are not counted as suite failures or runtime passes.
+
+The workflow is configured to create fresh packages, inspect the original
+emblem bytes and ASAR contents, run package probes and the full serial suite
+with runtime checks required, and upload evidence under
+`aether-linux-runtime-evidence`. Configuration is not execution evidence.
+Current production blockers remain the hosted package/runtime result, actual
+screenshot inspection, NetworkService syscall attribution, production
+redirect/WebSocket OS-boundary evidence, process cleanup evidence from the
+packaged run, and independent security review. Keep
+`REMOTE_BROWSING_ENABLED=false`.
+
+## A15 regression verification (2026-10-31)
+
+The 768x1024 screenshot follows the same recovered packaged Electron window
+path as the 360x720, 640x720, and 1480x920 captures. Each uses ImageMagick
+`import -window <window-id>` to capture the actual window; no generated image
+or UI fixture is used. The shared validator decodes `%w %h %k` from the saved
+image, asserts exact pixel dimensions, and requires more than 20 distinct
+colors. A missing or malformed image fails the conversion command; a blank
+capture fails the color assertion. The startup-config regression checks all
+four sizes and the content guard. These runtime assertions were not executed
+against real screenshots in this environment.
+
+The smoke retains its existing `context.after` cleanup for the parent,
+browser-child process group, display, controlled listeners, and temporary
+profile directory. Cleanup code was inspected, but no packaged test ran here,
+so successful and failure-path runtime cleanup remains unverified. Evidence
+screenshots are intentionally outside the temporary profile directory and
+are retained by the workflow artifact upload.
+
+Required-mode diagnostics for the UI smoke, live Electron integration, and
+production-child probe reached their prerequisite assertions and failed on
+missing `/usr/bin/Xvfb`, before launching Electron. In the full desktop suite,
+the artifact test is skipped when `resources/app.asar` is absent; the workflow
+first asserts the fresh unpacked executable and ASAR exist and separately
+inspects both package targets. Required runtime flags are set for the live
+integration, AppImage smoke, and production-child probe in the CI steps.
+`actions/upload-artifact` runs with `always()` when the evidence directory was
+created and uses `if-no-files-found: error`; an upload failure therefore
+fails the workflow rather than being ignored. No workflow was run here.
+
+The host has `/usr/bin/strace` 6.8. It successfully traced a harmless
+`unshare --user --map-current-user --net /usr/bin/true` child, which confirms
+basic ptrace/namespace tracing is available. This is not a Chromium observer:
+no packaged application was launched, and tracing may alter Chromium's
+sandbox behavior. No renderer request, NetworkService syscall, WebSocket
+handshake, redirect target, or kernel socket outcome was observed. The
+smallest next experiment is on a disposable isolated Linux runner with an
+already-built package: make exactly one controlled renderer request, trace
+connect calls with PID and decoded destination, correlate it to the request,
+and independently verify sandbox, namespace, capabilities, and `no_new_privs`
+are unchanged. If tracing prevents any of those checks, reject it as an
+observer. A reviewed test-only network topology is still needed to allow a
+controlled redirect/WebSocket attempt to reach OS enforcement without public
+forwarding. No evidence category substitutes for another: policy cancellation
+is not a main-process socket result; a main-process result is not renderer or
+NetworkService evidence; CDP events are not kernel syscall outcomes; and
+Node/fixture behavior is not packaged Chromium behavior.
+
+The A15 focused package/policy/workflow and display-adapter tests passed
+**18/18** after the pixel-content assertion was added. The final serial desktop
+suite passed **114 of 118 tests, with 0 failures and 4 environment/artifact
+skips**. JavaScript syntax checks excluding `node_modules` and
+`git diff --check` passed. No package was built or launched and no GitHub
+Actions run occurred.
+
+## A16 hosted user-namespace prerequisite (2026-10-31)
+
+The reported hosted-runner diagnostics show
+`apparmor_restrict_unprivileged_userns=1`,
+`unprivileged_userns_clone=1`, and
+`unshare --user --map-current-user --net true` failing while writing
+`/proc/self/uid_map` with `Operation not permitted`. The enabled AppArmor
+restriction is the leading explanation for the denial; the `uid_map` error
+identifies the mapping stage that failed. The clone sysctl only says that
+unprivileged user-namespace cloning is not globally disabled; it does not
+grant AppArmor authorization or prove UID/GID map writes are permitted.
+Without that runner's kernel/AppArmor audit denial, the screenshot alone does
+not conclusively exclude an additional hosted-runner security policy.
+
+The workflow still fails closed, but its namespace preflight now exercises
+the production-relevant `unshare --user --map-current-user --net` operation
+and verifies that both user and network namespace IDs differ from the parent.
+It prints and validates the one-entry UID/GID maps against the invoking
+runner's numeric IDs and checks the same IDs from inside the new namespace.
+If `uid_map` fails while the AppArmor restriction is `1`, the log labels
+AppArmor as the likely cause without changing policy or treating the failure
+as success. The regression test checks these requirements and rejects a
+workflow sysctl/AppArmor bypass.
+
+Safe resolution options considered:
+
+1. Disabling `apparmor_restrict_unprivileged_userns` globally on the runner
+   would grant unprivileged user-namespace creation to all processes in that
+   job VM, not just AETHER. It is not justified for this workflow and was
+   rejected.
+2. A dedicated AppArmor profile with narrowly granted `userns` permission
+   may be possible on a runner whose administrator supports profile loading.
+   It would require explicit review and runtime proof that the permission
+   covers the exact `unshare` and Chromium nested-namespace lifecycle without
+   weakening Electron's own sandbox. This environment has no AppArmor profile
+   administration tooling, and no such profile was tested; none was added.
+3. Use a dedicated ephemeral Linux runner image whose administrator has
+   preconfigured and reviewed an appropriate scoped AppArmor policy, or an
+   approved runner environment where unprivileged UID/GID mapping is
+   permitted. Keep the unprivileged production launch unchanged. The existing
+   preflight must pass with distinct namespaces and exact UID/GID maps before
+   package or runtime gates may proceed. Do not assume another hosted Ubuntu
+   label works without running this check.
+
+Local validation of the namespace mapping preflight succeeded on this Codespace:
+the child namespace IDs differed, and `/proc/self/uid_map` and
+`/proc/self/gid_map` each contained the expected single mapping
+`1000 1000 1`. This confirms the script's expectations in this environment
+only. Focused namespace/workflow tests passed **18/18**; the complete desktop
+suite passed **114 of 118 tests, 0 failed, 4 skipped**; JavaScript syntax
+checks excluding `node_modules`, workflow YAML parsing, `bash -n` for all
+workflow run blocks, and `git diff --check` passed. The hosted runner issue is
+**NOT RESOLVED** until the revised preflight passes on an authorized Actions
+run or the workflow uses a validated alternative runner. No Actions run was
+dispatched. Production AppImage isolation, Chromium network behavior, and
+hosted cleanup remain unverified.
+
+## A17 hosted namespace diagnostics review (2026-10-31)
+
+The workflow diagnostic step now records only numeric runner UID/GID, the
+relevant namespace sysctls, the current AppArmor profile, the runner's UID/GID
+maps, and user/network namespace IDs. It does not dump the full runner
+environment or supplementary group list. On namespace failure the preflight
+preserves the `unshare` stderr and exit status, then attempts to read `dmesg`
+and the last 500 kernel journal records. It filters those optional sources to
+AppArmor/user-namespace/UID-map/GID-map denial lines. Missing commands,
+restricted kernel-log access, or no matching records are recorded as
+diagnostic limitations; they do not replace the original failure or turn the
+preflight into success.
+
+The preflight's identity assertions match `--map-current-user`: each child map
+must contain exactly one range mapping namespace ID `AETHER_HOST_UID` to the
+same host UID, and likewise for GID; the child reports those same numeric
+IDs. It does not assume namespace UID/GID zero. User and network namespace
+IDs must both differ from the parent. The workflow tests cover these exact
+requirements, optional audit sources, and the final failure exit.
+
+The focused regression executes the actual extracted workflow preflight with
+a fake `unshare` that emits the UID-map denial and exits 73, plus fake
+`dmesg`/`journalctl` commands that deny access. It verifies the evidence log
+retains the original failure and exit code, records both optional diagnostic
+denials, and never prints the namespace-success message. This exercises the
+failure path without creating a package or launching AETHER.
+
+No evidence establishes that switching from `ubuntu-24.04` to a different
+GitHub-hosted label will permit these mappings. A dedicated ephemeral runner
+is required if the standard hosted runner continues to deny the preflight.
+Its minimum prerequisites are: unprivileged user and network namespace
+creation by the job UID; permission to write exact one-entry UID/GID maps for
+that UID/GID; a distinct user namespace and network namespace; and a reviewed
+AppArmor policy that permits the required rootless namespace setup and
+Chromium lifecycle without globally disabling AppArmor or weakening Chromium
+sandboxing. The preflight proves namespace creation and mapping, not the
+quality of the host's AppArmor policy; runner administrators must provide
+that policy review. A passing preflight on an authorized workflow run is
+required before proceeding to package/runtime tests.
+
+The exact hosted root cause remains **suspected, not proven**. The supplied
+runner output is consistent with AppArmor's unprivileged-userns restriction,
+but the runner kernel audit messages were not provided. The A17 workflow
+change is not hosted-validated; no Actions run was dispatched. Production
+isolation remains gated on a successful hosted packaged run and the separate
+NetworkService/network-boundary evidence described above.
+
+## A18 consolidated integration review (2026-10-31)
+
+The review found two fail-closed/evidence issues and corrected them:
+
+- The CI setup log used full `id` output despite the namespace diagnostics
+  contract limiting identity data to numeric UID/GID. It now logs only those
+  two values; the workflow regression test rejects the full identity form.
+- Weston cleanup could interpret an inaccessible `/proc/<pid>/stat` entry as
+  an absent process. Cleanup now propagates access errors and fails if procfs
+  itself is unavailable, rather than reporting an unverified process group
+  as clean. The display-adapter regression covers denied and unavailable
+  procfs.
+
+The focused integration run reported **73 tests, 70 passed, 0 failed, and 3
+skipped**. The skips were the built-artifact assertion, packaged UI smoke,
+and production-child probe; those require a fresh package and/or explicitly
+enabled packaged runtime. The complete desktop suite reported **120 tests,
+116 passed, 0 failed, and 4 skipped**. Its additional skip was the live
+Electron/Chromium isolation test, which requires the pinned Electron runtime,
+Xvfb, and GTK libraries. No skipped test was treated as passing evidence.
+
+JavaScript syntax checks excluding `node_modules`, workflow YAML parsing,
+`bash -n` on every workflow `run` block, and `git diff --check` passed.
+`REMOTE_BROWSING_ENABLED` remains `false`. The workflow still requires the
+namespace preflight and packaged runtime gates, but no hosted run was
+performed. AppArmor remains the suspected—not proven—cause of the reported
+hosted UID-map denial. Package launch, real screenshot inspection, packaged
+process cleanup, and Chromium NetworkService syscall/network-boundary
+evidence remain unverified and block production readiness.

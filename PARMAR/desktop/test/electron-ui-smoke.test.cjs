@@ -7,8 +7,23 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const {
+  DISPLAY_SERVER_WESTON,
+  displayConfiguration,
+  imageCommand,
+  requiredExecutables,
+  startHeadlessDisplay,
+  stopDisplay,
+} = require('./headless-display.cjs');
 
 const desktopDirectory = path.resolve(__dirname, '..');
+const uiToolDirectory = process.env.PARMAR_AETHER_UI_TOOL_DIR
+  ? path.resolve(process.env.PARMAR_AETHER_UI_TOOL_DIR)
+  : '/usr/bin';
+const uiTool = (name) => path.join(uiToolDirectory, name);
+const uiLibraryDirectory = process.env.PARMAR_AETHER_UI_LIBRARY_DIR
+  ? path.resolve(process.env.PARMAR_AETHER_UI_LIBRARY_DIR)
+  : null;
 const appImagePath = process.env.PARMAR_AETHER_APPIMAGE_PATH
   || path.join(desktopDirectory, 'dist', 'PARMAR AETHER-1.0.0.AppImage');
 const evidenceDirectory = process.env.PARMAR_AETHER_UI_SCREENSHOT_DIR;
@@ -17,21 +32,26 @@ const screenshotDirectory = evidenceDirectory
   : null;
 const enabled = process.env.PARMAR_AETHER_UI_SMOKE === '1';
 const required = process.env.PARMAR_AETHER_UI_SMOKE_REQUIRED === '1';
-const requiredExecutables = [
-  '/usr/bin/Xvfb',
-  '/usr/bin/xdotool',
-  '/usr/bin/import',
-  '/usr/bin/convert',
-  '/usr/bin/unshare',
-  '/usr/bin/setpriv',
-];
-let xvfbDisplay = null;
+const { backend: displayBackend, imageMode } = displayConfiguration();
+let activeDisplay = null;
+
+function uiToolEnvironment() {
+  const environment = { ...process.env };
+  environment.PATH = `${uiToolDirectory}${path.delimiter}${environment.PATH || ''}`;
+  if (activeDisplay) environment.DISPLAY = activeDisplay.display;
+  if (activeDisplay?.waylandDisplay) {
+    environment.WAYLAND_DISPLAY = activeDisplay.waylandDisplay;
+    environment.XDG_RUNTIME_DIR = activeDisplay.runtimeDirectory;
+  }
+  if (uiLibraryDirectory) environment.LD_LIBRARY_PATH = uiLibraryDirectory;
+  return environment;
+}
 
 function command(executable, args, options = {}) {
   const result = spawnSync(executable, args, {
     encoding: 'utf8',
     timeout: 10_000,
-    env: xvfbDisplay ? { ...process.env, DISPLAY: xvfbDisplay } : process.env,
+    env: uiToolEnvironment(),
     ...options,
   });
   if (result.error) throw result.error;
@@ -39,6 +59,14 @@ function command(executable, args, options = {}) {
     throw new Error(`${executable} ${args.join(' ')} failed: ${result.stderr || result.stdout}`);
   }
   return result.stdout.trim();
+}
+
+function imageTool(operation, args) {
+  const resolved = imageCommand(operation, args, {
+    imageMode,
+    toolDirectory: uiToolDirectory,
+  });
+  return command(resolved.executable, resolved.arguments);
 }
 
 function wait(milliseconds) {
@@ -323,46 +351,11 @@ function waitFor(check, description, { timeoutMs = 20_000, processHandle } = {})
   })();
 }
 
-async function startXvfb() {
-  const server = spawn('/usr/bin/Xvfb', [
-    '-displayfd', '1', '-screen', '0', '1600x1000x24', '-nolisten', 'tcp', '-ac',
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let diagnostic = '';
-  server.stderr.setEncoding('utf8');
-  server.stderr.on('data', (chunk) => { diagnostic += chunk; });
-  const display = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Xvfb startup timed out: ${diagnostic}`)), 5000);
-    let output = '';
-    server.stdout.setEncoding('utf8');
-    server.stdout.on('data', (chunk) => {
-      output += chunk;
-      const newline = output.indexOf('\n');
-      if (newline < 0) return;
-      clearTimeout(timeout);
-      const number = Number(output.slice(0, newline).trim());
-      if (!Number.isSafeInteger(number) || number < 0) {
-        reject(new Error(`Xvfb returned an invalid display number: ${output}`));
-      } else {
-        resolve(`:${number}`);
-      }
-    });
-    server.once('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    server.once('exit', (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`Xvfb exited before readiness (${code}): ${diagnostic}`));
-    });
-  });
-  return { server, display };
-}
-
 function windowByTitle(title) {
-  const result = spawnSync('/usr/bin/xdotool', ['search', '--onlyvisible', '--name', title], {
+  const result = spawnSync(uiTool('xdotool'), ['search', '--onlyvisible', '--name', title], {
     encoding: 'utf8',
     timeout: 2000,
-    env: xvfbDisplay ? { ...process.env, DISPLAY: xvfbDisplay } : process.env,
+    env: uiToolEnvironment(),
   });
   if (result.status !== 0) return null;
   const windows = result.stdout.trim().split('\n').filter(Boolean);
@@ -370,24 +363,24 @@ function windowByTitle(title) {
 }
 
 function focusWindow(windowId) {
-  command('/usr/bin/xdotool', ['windowfocus', '--sync', windowId]);
+  command(uiTool('xdotool'), ['windowfocus', '--sync', windowId]);
 }
 
 function focusAddressBar(windowId) {
-  command('/usr/bin/xdotool', [
+  command(uiTool('xdotool'), [
     'mousemove', '--window', windowId, '500', '70', 'click', '1',
   ]);
 }
 
 function press(...keys) {
-  command('/usr/bin/xdotool', ['key', '--clearmodifiers', ...keys]);
+  command(uiTool('xdotool'), ['key', '--clearmodifiers', ...keys]);
 }
 
 async function saveScreenshot(windowId, filename) {
   const destination = path.join(screenshotDirectory, filename);
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    command('/usr/bin/import', ['-window', windowId, destination]);
+    imageTool('import', ['-window', windowId, destination]);
     const image = fs.statSync(destination);
     if (image.size > 10_000) return destination;
     await wait(100);
@@ -395,9 +388,28 @@ async function saveScreenshot(windowId, filename) {
   throw new Error(`${filename} remained blank after waiting for the window to render.`);
 }
 
+function assertScreenshotDimensions(filename, expectedWidth, expectedHeight) {
+  const screenshot = path.join(screenshotDirectory, filename);
+  const [width, height, distinctColors] = imageTool('convert', [
+    screenshot,
+    '-format',
+    '%w %h %k',
+    'info:',
+  ]).split(/\s+/).map(Number);
+  assert.deepEqual(
+    [width, height],
+    [expectedWidth, expectedHeight],
+    `${filename} does not match the requested ${expectedWidth}x${expectedHeight} window size.`,
+  );
+  assert.ok(
+    distinctColors > 20,
+    `${filename} appears blank or lacks rendered AETHER UI content.`,
+  );
+}
+
 function assertPanelVisible(filename) {
   const screenshot = path.join(screenshotDirectory, filename);
-  const [width, height] = command('/usr/bin/convert', [
+  const [width, height] = imageTool('convert', [
     screenshot,
     '-format',
     '%w %h',
@@ -405,7 +417,7 @@ function assertPanelVisible(filename) {
   ]).split(/\s+/).map(Number);
   const panelWidth = Math.min(330, width);
   const panelTop = Math.min(180, height - 1);
-  const distinctColors = Number(command('/usr/bin/convert', [
+  const distinctColors = Number(imageTool('convert', [
     screenshot,
     '-crop',
     `${panelWidth}x160+${width - panelWidth}+${panelTop}`,
@@ -439,7 +451,11 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   timeout: 240_000,
 }, async (context) => {
   assert.equal(enabled, true, 'PARMAR_AETHER_UI_SMOKE must be set to "1" for required UI verification.');
-  for (const executable of requiredExecutables) {
+  for (const executable of requiredExecutables({
+    backend: displayBackend,
+    imageMode,
+    toolDirectory: uiToolDirectory,
+  })) {
     assert.ok(fs.existsSync(executable), `Required GUI test executable is missing: ${executable}`);
   }
   assert.ok(fs.existsSync(appImagePath), `Packaged AETHER AppImage is missing: ${appImagePath}`);
@@ -480,7 +496,7 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
       activeIndex: 1,
     },
   });
-  let xvfb = null;
+  let displaySession = null;
   let application = null;
   let mainPid = null;
   let browserChildPid = null;
@@ -515,21 +531,9 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
         }),
       ]);
     }
-    if (xvfb && xvfb.exitCode === null && xvfb.signalCode === null) {
-      const xvfbClosed = new Promise((resolve) => xvfb.once('close', resolve));
-      xvfb.kill('SIGTERM');
-      const closedGracefully = await Promise.race([
-        xvfbClosed.then(() => true),
-        wait(3000).then(() => false),
-      ]);
-      if (!closedGracefully && xvfb.exitCode === null && xvfb.signalCode === null) {
-        xvfb.kill('SIGKILL');
-        await Promise.race([xvfbClosed, wait(3000)]);
-      }
-      assert.ok(
-        xvfb.exitCode !== null || xvfb.signalCode !== null,
-        'Xvfb did not exit during smoke-test cleanup.',
-      );
+    if (displaySession) {
+      await stopDisplay(displaySession);
+      console.log(`${displaySession.backend} display process cleanup verified.`);
     }
     await Promise.all(controlledListeners.map(closeTcpListener));
     assert.ok(
@@ -538,7 +542,7 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     );
     if (controlledListeners.length) console.log('Controlled production-probe listeners closed.');
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-    xvfbDisplay = null;
+    activeDisplay = null;
   });
 
   const ipv4Listener = await startTcpListener('127.0.0.1');
@@ -562,10 +566,17 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     fs.writeFileSync(path.join(profileDirectory, 'aether-state.json'), seedState);
   }
 
-  const xvfbResult = await startXvfb();
-  xvfb = xvfbResult.server;
-  const { display } = xvfbResult;
-  xvfbDisplay = display;
+  const runtimeDirectory = path.join(temporaryDirectory, 'runtime');
+  displaySession = await startHeadlessDisplay({
+    backend: displayBackend,
+    toolDirectory: uiToolDirectory,
+    runtimeDirectory,
+    environment: uiToolEnvironment(),
+    width: 1600,
+    height: 1000,
+  });
+  activeDisplay = displaySession;
+  const { display } = displaySession;
 
   const applicationEnvironment = {
     ...process.env,
@@ -573,11 +584,18 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     HOME: homeDirectory,
     PARMAR_DESKTOP_BACKEND_URL: 'http://127.0.0.1:1',
   };
+  delete applicationEnvironment.WAYLAND_DISPLAY;
+  delete applicationEnvironment.XDG_RUNTIME_DIR;
+  if (displaySession.backend === DISPLAY_SERVER_WESTON) {
+    applicationEnvironment.WAYLAND_DISPLAY = displaySession.waylandDisplay;
+    applicationEnvironment.XDG_RUNTIME_DIR = displaySession.runtimeDirectory;
+  }
   for (const key of Object.keys(applicationEnvironment)) {
     if (key.toLowerCase().includes('proxy')) delete applicationEnvironment[key];
   }
+  delete applicationEnvironment.LD_LIBRARY_PATH;
   delete applicationEnvironment.XDG_CONFIG_HOME;
-  application = spawn('/usr/bin/unshare', [
+  const isolatedApplicationArguments = [
     '--user',
     '--map-current-user',
     '--net',
@@ -587,6 +605,14 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     '/usr/bin/setpriv',
     '--no-new-privs',
     '--',
+  ];
+  if (uiLibraryDirectory) {
+    isolatedApplicationArguments.push(
+      '/usr/bin/env',
+      `LD_LIBRARY_PATH=${uiLibraryDirectory}`,
+    );
+  }
+  isolatedApplicationArguments.push(
     appImagePath,
     '--appimage-extract-and-run',
     '--disable-background-networking',
@@ -594,7 +620,8 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
     '--disable-sync',
     '--no-proxy-server',
     '--no-first-run',
-  ], {
+  );
+  application = spawn('/usr/bin/unshare', isolatedApplicationArguments, {
     detached: true,
     env: applicationEnvironment,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -617,7 +644,7 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   ).catch((error) => {
     throw new Error(`${error.message}\n${applicationOutput}\n${applicationError}`);
   });
-  mainPid = Number(command('/usr/bin/xdotool', ['getwindowpid', controlWindow]));
+  mainPid = Number(command(uiTool('xdotool'), ['getwindowpid', controlWindow]));
   assert.ok(Number.isSafeInteger(mainPid) && mainPid > 0, 'Could not identify the Electron parent PID.');
   focusWindow(controlWindow);
   await wait(500);
@@ -789,8 +816,8 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   for (const destination of attemptedDestinations) {
     focusAddressBar(recoveredBrowserWindow);
     press('ctrl+l');
-    command('/usr/bin/xdotool', ['key', '--clearmodifiers', 'ctrl+a']);
-    command('/usr/bin/xdotool', ['type', '--clearmodifiers', '--delay', '5', destination]);
+    command(uiTool('xdotool'), ['key', '--clearmodifiers', 'ctrl+a']);
+    command(uiTool('xdotool'), ['type', '--clearmodifiers', '--delay', '5', destination]);
     await saveScreenshot(
       recoveredBrowserWindow,
       destination.includes('[::1]')
@@ -847,7 +874,7 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
 
   focusAddressBar(recoveredBrowserWindow);
   press('ctrl+l');
-  command('/usr/bin/xdotool', ['type', '--clearmodifiers', '--delay', '15', 'https://example.com/']);
+  command(uiTool('xdotool'), ['type', '--clearmodifiers', '--delay', '15', 'https://example.com/']);
   press('Return');
   await wait(750);
   await saveScreenshot(recoveredBrowserWindow, '06-navigation-restricted-error.png');
@@ -863,15 +890,22 @@ test('packaged AETHER UI launches isolated Chromium and supports real browser ch
   await saveScreenshot(recoveredBrowserWindow, '08-bookmarks-empty.png');
   assertPanelVisible('08-bookmarks-empty.png');
 
-  command('/usr/bin/xdotool', ['windowsize', recoveredBrowserWindow, '360', '720']);
+  command(uiTool('xdotool'), ['windowsize', recoveredBrowserWindow, '360', '720']);
   await wait(500);
   await saveScreenshot(recoveredBrowserWindow, '09-responsive-360.png');
-  command('/usr/bin/xdotool', ['windowsize', recoveredBrowserWindow, '640', '720']);
+  assertScreenshotDimensions('09-responsive-360.png', 360, 720);
+  command(uiTool('xdotool'), ['windowsize', recoveredBrowserWindow, '640', '720']);
   await wait(500);
   await saveScreenshot(recoveredBrowserWindow, '10-responsive-640.png');
-  command('/usr/bin/xdotool', ['windowsize', recoveredBrowserWindow, '1480', '920']);
+  assertScreenshotDimensions('10-responsive-640.png', 640, 720);
+  command(uiTool('xdotool'), ['windowsize', recoveredBrowserWindow, '768', '1024']);
   await wait(500);
-  await saveScreenshot(recoveredBrowserWindow, '11-responsive-large.png');
+  await saveScreenshot(recoveredBrowserWindow, '11-responsive-tablet-768.png');
+  assertScreenshotDimensions('11-responsive-tablet-768.png', 768, 1024);
+  command(uiTool('xdotool'), ['windowsize', recoveredBrowserWindow, '1480', '920']);
+  await wait(500);
+  await saveScreenshot(recoveredBrowserWindow, '12-responsive-desktop-1480.png');
+  assertScreenshotDimensions('12-responsive-desktop-1480.png', 1480, 920);
 
   const stored = savedBrowserStates(homeDirectory).find((state) => (
     JSON.stringify(state.session.tabs) === JSON.stringify(['https://example.com/restored-one', null])

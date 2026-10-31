@@ -11,6 +11,9 @@ const { createBrowserChildSupervisor } = require('../browser-child-supervisor.cj
 
 const parent = { pid: 321, uid: 1000 };
 const childUid = 1000;
+const packagedLinuxDirectory = process.env.PARMAR_AETHER_LINUX_DIR_PATH
+  ? path.resolve(process.env.PARMAR_AETHER_LINUX_DIR_PATH)
+  : path.resolve(__dirname, '../dist/linux-unpacked');
 
 class MockChild extends EventEmitter {
   constructor(pid = 654) {
@@ -164,15 +167,13 @@ test('AppImage child receives only builder-owned runtime library and data paths'
 
 test('built Linux artifact contains launchable app.asar paths and required browser isolation assets', {
   skip: !require('node:fs').existsSync(
-    require('node:path').resolve(__dirname, '../dist/linux-unpacked/resources/app.asar'),
+    path.join(packagedLinuxDirectory, 'resources/app.asar'),
   ),
 }, async () => {
   const fs = require('node:fs');
-  const path = require('node:path');
   const asar = require('@electron/asar');
-  const artifactDirectory = path.resolve(__dirname, '../dist/linux-unpacked');
-  const electronExecutable = path.join(artifactDirectory, 'parmar-aether-desktop');
-  const appArchive = path.join(artifactDirectory, 'resources/app.asar');
+  const electronExecutable = path.join(packagedLinuxDirectory, 'parmar-aether-desktop');
+  const appArchive = path.join(packagedLinuxDirectory, 'resources/app.asar');
   assert.equal(fs.statSync(electronExecutable).mode & 0o111 ? true : false, true);
   const files = asar.listPackage(appArchive);
   for (const required of [
@@ -188,7 +189,7 @@ test('built Linux artifact contains launchable app.asar paths and required brows
     assert.ok(files.includes(required), `Packaged app.asar omits ${required}.`);
   }
   assert.equal(
-    fs.existsSync(path.join(artifactDirectory, 'resources/aether/parmar-emblem.png')),
+    fs.existsSync(path.join(packagedLinuxDirectory, 'resources/aether/parmar-emblem.png')),
     true,
     'Packaged resources omit the original PARMAR emblem.',
   );

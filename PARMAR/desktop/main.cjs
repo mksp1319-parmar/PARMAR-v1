@@ -184,6 +184,14 @@ function notifyNavigationError(message) {
   }
 }
 
+function createTabFromUserAction(options) {
+  if (tabs.size >= MAX_TABS) {
+    notifyNavigationError(`AETHER supports at most ${MAX_TABS} tabs.`);
+    return null;
+  }
+  return createTab(options);
+}
+
 function setTabError(tab, message) {
   if (tabs.get(tab.id) !== tab) return;
   tab.error = message;
@@ -392,7 +400,7 @@ function handleBrowserKeyInput(event, input, tab) {
     browserWindow.webContents.send('aether:focus-address');
   } else if (command && key === 't') {
     event.preventDefault();
-    createTab();
+    createTabFromUserAction();
   } else if (command && key === 'w') {
     event.preventDefault();
     closeTab(tab.id);
@@ -402,12 +410,15 @@ function handleBrowserKeyInput(event, input, tab) {
   } else if (command && (key === '+' || key === '=')) {
     event.preventDefault();
     contents.setZoomFactor(Math.min(2, contents.getZoomFactor() + 0.1));
+    sendBrowserState();
   } else if (command && key === '-') {
     event.preventDefault();
     contents.setZoomFactor(Math.max(0.5, contents.getZoomFactor() - 0.1));
+    sendBrowserState();
   } else if (command && key === '0') {
     event.preventDefault();
     contents.setZoomFactor(1);
+    sendBrowserState();
   } else if (input.alt && input.key === 'ArrowLeft') {
     event.preventDefault();
     if (contents.canGoBack()) contents.goBack();
@@ -439,7 +450,7 @@ async function startBrowserChildRuntime() {
       if (browserWindow && !browserWindow.isDestroyed()) browserWindow.focus();
     },
     onNewTab: () => {
-      if (browserWindow && !browserWindow.isDestroyed()) createTab();
+      if (browserWindow && !browserWindow.isDestroyed()) createTabFromUserAction();
     },
     onCloseTab: () => {
       if (activeTabId) closeTab(activeTabId);
@@ -611,13 +622,14 @@ async function createBrowserWindow({ newTab = false } = {}) {
       else browserChildSupervisor.focus();
       return;
     }
+    const alreadyStarting = browserChildSupervisor.state === 'starting';
     await browserChildSupervisor.start();
-    if (newTab) browserChildSupervisor.newTab();
+    if (newTab && alreadyStarting) browserChildSupervisor.newTab();
     return;
   }
   if (browserWindow && !browserWindow.isDestroyed()) {
     if (newTab) {
-      createTab();
+      createTabFromUserAction();
       return;
     }
     browserWindow.focus();

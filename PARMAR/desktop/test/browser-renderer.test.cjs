@@ -45,6 +45,10 @@ class MockElement {
     this.selected = true;
   }
 
+  getBoundingClientRect() {
+    return { x: 0, y: 0, width: 800, height: 600 };
+  }
+
   async click() {
     await this.listeners.get('click')?.({
       preventDefault() {},
@@ -54,7 +58,7 @@ class MockElement {
   }
 }
 
-function createRenderer() {
+function createRenderer({ statusRequest = Promise.resolve({ remoteBrowsing: false }) } = {}) {
   const selectors = [
     '#tabs',
     '#address',
@@ -73,7 +77,7 @@ function createRenderer() {
     '[data-action="bookmark"]',
   ];
   const elements = new Map(selectors.map((selector) => [selector, new MockElement()]));
-  const actions = ['back', 'forward', 'reload', 'stop', 'bookmark', 'history', 'bookmarks', 'downloads', 'settings', 'focus-address', 'close-panel']
+  const actions = ['new-tab', 'back', 'forward', 'reload', 'stop', 'bookmark', 'history', 'bookmarks', 'downloads', 'settings', 'focus-address', 'close-panel']
     .map((action) => {
       const button = new MockElement('button');
       button.dataset.action = action;
@@ -90,8 +94,16 @@ function createRenderer() {
   let clearHistoryResult = { ok: true, data: [] };
   const clearHistoryCalls = [];
   const confirmCalls = [];
+  const tabCalls = [];
   let confirmResult = true;
   let stateListener;
+  let navigationErrorListener;
+  let focusAddressListener;
+  let resizeCallback;
+  let beforeUnloadListener;
+  let keydownListener;
+  let resizeDisconnected = false;
+  let layoutResponse = Promise.resolve({ ok: true });
   const api = {
     navigate(value, id) {
       calls.push([value, id]);
@@ -122,6 +134,9 @@ function createRenderer() {
       controlCalls.push(['zoom', factor, id]);
       return Promise.resolve({ ok: true });
     },
+    layout() {
+      return layoutResponse;
+    },
     addBookmark(id) {
       bookmarkCalls.push(id);
       return Promise.resolve(addBookmarkResult);
@@ -138,10 +153,29 @@ function createRenderer() {
     removeHistory: () => Promise.resolve(removeHistoryResult),
     onState(callback) {
       stateListener = callback;
+      return () => { stateListener = null; };
     },
-    onNavigationError() {},
-    onFocusAddress() {},
-    getStatus: () => Promise.resolve({ remoteBrowsing: false }),
+    onNavigationError(callback) {
+      navigationErrorListener = callback;
+      return () => { navigationErrorListener = null; };
+    },
+    onFocusAddress(callback) {
+      focusAddressListener = callback;
+      return () => { focusAddressListener = null; };
+    },
+    getStatus: () => statusRequest,
+    createTab() {
+      tabCalls.push(['create']);
+      return Promise.resolve({ ok: true });
+    },
+    activateTab(id) {
+      tabCalls.push(['activate', id]);
+      return Promise.resolve({ ok: true });
+    },
+    closeTab(id) {
+      tabCalls.push(['close', id]);
+      return Promise.resolve({ ok: true });
+    },
   };
   const document = {
     activeElement: null,
@@ -152,7 +186,10 @@ function createRenderer() {
   };
   const window = {
     aetherDesktop: api,
-    addEventListener() {},
+    addEventListener(type, listener) {
+      if (type === 'beforeunload') beforeUnloadListener = listener;
+      if (type === 'keydown') keydownListener = listener;
+    },
     confirm(message) {
       confirmCalls.push(message);
       return confirmResult;
@@ -166,7 +203,14 @@ function createRenderer() {
     window,
     document,
     ResizeObserver: class {
+      constructor(callback) {
+        resizeCallback = callback;
+      }
+
       observe() {}
+      disconnect() {
+        resizeDisconnected = true;
+      }
     },
   });
   return {
@@ -179,6 +223,7 @@ function createRenderer() {
     bookmarkCalls,
     clearHistoryCalls,
     confirmCalls,
+    tabCalls,
     setConfirmResult(result) {
       confirmResult = result;
     },
@@ -197,7 +242,24 @@ function createRenderer() {
     setClearHistoryResult(result) {
       clearHistoryResult = result;
     },
+    setLayoutResponse(result) {
+      layoutResponse = result;
+    },
+    resize() {
+      return resizeCallback?.();
+    },
+    unload() {
+      beforeUnloadListener?.();
+    },
+    isResizeDisconnected: () => resizeDisconnected,
+    isSubscribed: () => Boolean(stateListener || navigationErrorListener || focusAddressListener),
     setState: (...args) => stateListener(...args),
+    focusAddress() {
+      document.activeElement = elements.get('#address');
+    },
+    async keydown(event) {
+      await keydownListener?.({ preventDefault() {}, ...event });
+    },
   };
 }
 
@@ -208,6 +270,74 @@ test('search shortcut focuses and selects the existing address field', async () 
 
   assert.equal(renderer.elements.get('#address').focused, true);
   assert.equal(renderer.elements.get('#address').selected, true);
+});
+
+test('Ctrl+Tab refreshes a focused address bar without replacing edits on the same tab', async () => {
+  const renderer = createRenderer();
+  const firstTab = {
+    id: 'first-tab',
+    title: 'First',
+    url: 'https://first.example/',
+    active: true,
+  };
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [firstTab, { id: 'second-tab', title: 'Second', url: 'https://second.example/', active: false }],
+    stored: { bookmarks: [], history: [] },
+  });
+  renderer.focusAddress();
+  renderer.elements.get('#address').value = 'https://unfinished.example';
+
+  await renderer.keydown({ ctrlKey: true, key: 'Tab' });
+  assert.deepEqual(renderer.tabCalls, [['activate', 'second-tab']]);
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [
+      { ...firstTab, active: false },
+      { id: 'second-tab', title: 'Second', url: 'https://second.example/', active: true },
+    ],
+    stored: { bookmarks: [], history: [] },
+  });
+  assert.equal(renderer.elements.get('#address').value, 'https://second.example/');
+
+  renderer.elements.get('#address').value = 'https://still-editing.example';
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [
+      { ...firstTab, active: false },
+      {
+        id: 'second-tab',
+        title: 'Second updated',
+        url: 'https://second.example/updated',
+        active: true,
+      },
+    ],
+    stored: { bookmarks: [], history: [] },
+  });
+  assert.equal(renderer.elements.get('#address').value, 'https://still-editing.example');
+});
+
+test('settings zoom buttons and keyboard shortcuts update the active tab', async () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [{
+      id: 'zoom-tab',
+      title: 'New Tab',
+      active: true,
+      zoomFactor: 1,
+    }],
+    stored: { bookmarks: [], history: [] },
+  });
+  await renderer.actions.find((button) => button.dataset.action === 'settings').click();
+  const zoomButtons = renderer.elements.get('#panel-content').children[1].children;
+  await zoomButtons.find((button) => button.textContent === 'Zoom in').click();
+  assert.deepEqual(renderer.controlCalls, [['zoom', 1.1, 'zoom-tab']]);
+
+  await renderer.keydown({ ctrlKey: true, key: '-' });
+  assert.deepEqual(renderer.controlCalls.at(-1), ['zoom', 1, 'zoom-tab']);
+  await renderer.keydown({ ctrlKey: true, key: '0' });
+  assert.deepEqual(renderer.controlCalls.at(-1), ['zoom', 1, 'zoom-tab']);
 });
 
 test('history controls surface traversal denials when tab state changes before the action', async () => {
@@ -677,6 +807,42 @@ test('IPC rejections are surfaced instead of becoming unhandled renderer failure
   await renderer.elements.get('#address-form').listeners.get('submit')({ preventDefault() {} });
   assert.equal(renderer.elements.get('#tab-state').textContent, 'IPC connection closed.');
   assert.equal(renderer.elements.get('#tab-state').style.color, '#e49b83');
+});
+
+test('initial status IPC failures are visible and stale status responses do not replace newer state', async () => {
+  const failedRenderer = createRenderer({
+    statusRequest: Promise.reject(new Error('Status IPC unavailable.')),
+  });
+  await new Promise(setImmediate);
+  assert.equal(failedRenderer.elements.get('#tab-state').textContent, 'Status IPC unavailable.');
+  assert.equal(failedRenderer.elements.get('#tab-state').style.color, '#e49b83');
+
+  let resolveStatus;
+  const statusRequest = new Promise((resolve) => { resolveStatus = resolve; });
+  const renderer = createRenderer({ statusRequest });
+  renderer.setState({
+    remoteBrowsing: false,
+    reason: 'Current browser status.',
+    tabs: [],
+    stored: { bookmarks: [], history: [] },
+  });
+  resolveStatus({ remoteBrowsing: true, reason: 'Stale browser status.' });
+  await new Promise(setImmediate);
+  assert.equal(renderer.elements.get('#security-state').title, 'Current browser status.');
+  assert.match(renderer.elements.get('#security-state').children[1].textContent, /Restricted/);
+});
+
+test('viewport IPC failures are visible and renderer resources are released on unload', async () => {
+  const renderer = createRenderer();
+  renderer.api.layout = () => Promise.reject(new Error('Viewport IPC unavailable.'));
+  await renderer.resize();
+  assert.equal(renderer.elements.get('#tab-state').textContent, 'Viewport IPC unavailable.');
+  assert.equal(renderer.elements.get('#tab-state').style.color, '#e49b83');
+  assert.equal(renderer.isSubscribed(), true);
+
+  renderer.unload();
+  assert.equal(renderer.isResizeDisconnected(), true);
+  assert.equal(renderer.isSubscribed(), false);
 });
 
 test('late history and bookmark responses update storage without replacing another open panel', async () => {

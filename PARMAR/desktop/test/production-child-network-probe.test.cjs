@@ -65,6 +65,32 @@ function readJsonLines(filePath) {
     .map((line) => JSON.parse(line));
 }
 
+function summarizeCleanup({
+  applicationRunning,
+  productionChildRunning,
+  applicationProcessGroupMembers,
+  productionChildProcessGroupMembers,
+  xvfbRunning,
+  listenersClosed,
+}) {
+  const applicationGroupClean = applicationProcessGroupMembers.length === 0;
+  const productionChildGroupClean = productionChildProcessGroupMembers.length === 0;
+  return {
+    applicationRunning,
+    productionChildRunning,
+    applicationProcessGroupMembers,
+    productionChildProcessGroupMembers,
+    xvfbRunning,
+    listenersClosed,
+    verified: !applicationRunning
+      && !productionChildRunning
+      && applicationGroupClean
+      && productionChildGroupClean
+      && !xvfbRunning
+      && listenersClosed,
+  };
+}
+
 function runCommand(executable, arguments_, display, options = {}) {
   const result = spawnSync(executable, arguments_, {
     encoding: 'utf8',
@@ -78,6 +104,37 @@ function runCommand(executable, arguments_, display, options = {}) {
   }
   return result.stdout.trim();
 }
+
+test('cleanup evidence passes only when every tracked process group and listener is closed', () => {
+  const clean = summarizeCleanup({
+    applicationRunning: false,
+    productionChildRunning: false,
+    applicationProcessGroupMembers: [],
+    productionChildProcessGroupMembers: [],
+    xvfbRunning: false,
+    listenersClosed: true,
+  });
+  assert.equal(clean.verified, true);
+
+  for (const partialCleanup of [
+    { applicationRunning: true },
+    { productionChildRunning: true },
+    { applicationProcessGroupMembers: [123] },
+    { productionChildProcessGroupMembers: [456] },
+    { xvfbRunning: true },
+    { listenersClosed: false },
+  ]) {
+    assert.equal(summarizeCleanup({
+      applicationRunning: false,
+      productionChildRunning: false,
+      applicationProcessGroupMembers: [],
+      productionChildProcessGroupMembers: [],
+      xvfbRunning: false,
+      listenersClosed: true,
+      ...partialCleanup,
+    }).verified, false);
+  }
+});
 
 function isRunning(pid) {
   try {
@@ -583,6 +640,16 @@ test('test-only harness records packaged Chromium renderer requests in the isola
     }
     await Promise.all(listeners.map(closeListener));
     assert.ok(listeners.every(({ server }) => !server.listening), 'A controlled listener remained open.');
+    const cleanupEvidence = summarizeCleanup({
+      applicationRunning: Boolean(application?.pid && isRunning(application.pid)),
+      productionChildRunning: Boolean(supervisedChildPid && isRunning(supervisedChildPid)),
+      applicationProcessGroupMembers: application?.pid ? processGroupMembers(application.pid) : [],
+      productionChildProcessGroupMembers: childProcessGroupId
+        ? processGroupMembers(childProcessGroupId)
+        : [],
+      xvfbRunning: Boolean(xvfb && xvfb.exitCode === null && xvfb.signalCode === null),
+      listenersClosed: listeners.every(({ server }) => !server.listening),
+    });
     if (evidenceDirectory) {
       const mainProbeReports = readJsonLines(reportPath);
       const rendererProbeReports = readJsonLines(chromiumReportPath);
@@ -599,7 +666,7 @@ test('test-only harness records packaged Chromium renderer requests in the isola
       const evidence = {
         schemaVersion: 1,
         runId,
-        testStatus: testPassed ? 'passed' : 'failed-or-interrupted',
+        testStatus: testPassed && cleanupEvidence.verified ? 'passed' : 'failed-or-interrupted',
         productionPolicy: { remoteBrowsingEnabled: false },
         package: {
           directory: packageDirectory,
@@ -698,12 +765,7 @@ test('test-only harness records packaged Chromium renderer requests in the isola
           availability: kernelInstrumentation,
           conclusion: 'No kernel connect attempt or errno is correlated to any renderer request.',
         },
-        cleanup: {
-          applicationRunning: application?.pid ? isRunning(application.pid) : false,
-          productionChildRunning: productionChildPid ? isRunning(productionChildPid) : false,
-          xvfbRunning: Boolean(xvfb && xvfb.exitCode === null && xvfb.signalCode === null),
-          listenersClosed: listeners.every(({ server }) => !server.listening),
-        },
+        cleanup: cleanupEvidence,
       };
       fs.writeFileSync(
         path.join(evidenceDirectory, `production-child-network-probe-${runId}.json`),
@@ -722,7 +784,7 @@ test('test-only harness records packaged Chromium renderer requests in the isola
     }
     if (childProcessGroupId) {
       assert.equal(
-        processGroupMembers(childProcessGroupId).length,
+        cleanupEvidence.productionChildProcessGroupMembers.length,
         0,
         'A production child descendant remained in its process group.',
       );
@@ -732,6 +794,7 @@ test('test-only harness records packaged Chromium renderer requests in the isola
       false,
       'Xvfb remained running.',
     );
+    assert.equal(cleanupEvidence.verified, true, 'The machine-readable cleanup evidence is incomplete.');
     console.log('Production-child cleanup verified: parent, child process group, Xvfb, and listeners exited.');
     fs.rmSync(workspace, { recursive: true, force: true });
   });

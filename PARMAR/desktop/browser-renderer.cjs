@@ -16,6 +16,8 @@ const elements = {
 let state = { tabs: [], stored: { bookmarks: [], history: [] }, remoteBrowsing: false };
 let activePanel = null;
 let editingBookmarkUrl = null;
+let stateRevision = 0;
+let layoutRevision = 0;
 
 function setMessage(message, isError = false) {
   elements.tabState.textContent = message;
@@ -86,13 +88,13 @@ function createIcon(name) {
   return svg;
 }
 
-function updateAddress(tab) {
-  if (document.activeElement !== elements.address) {
+function updateAddress(tab, force = false) {
+  if (force || document.activeElement !== elements.address) {
     elements.address.value = tab?.url || tab?.restoreUrl || '';
   }
 }
 
-function renderTabs() {
+function renderTabs(forceAddressUpdate = false) {
   elements.tabs.replaceChildren();
   for (const tab of state.tabs) {
     const item = element('div', tab.active ? 'tab tab-active' : 'tab');
@@ -118,7 +120,7 @@ function renderTabs() {
     elements.tabs.append(item);
   }
   const tab = activeTab();
-  updateAddress(tab);
+  updateAddress(tab, forceAddressUpdate);
   elements.tabState.setAttribute('aria-busy', String(Boolean(tab?.isLoading)));
   document.querySelector('[data-action="back"]').disabled = !tab?.canGoBack;
   document.querySelector('[data-action="forward"]').disabled = !tab?.canGoForward;
@@ -142,7 +144,7 @@ function renderStatus() {
     : 'Restricted · remote browsing unavailable';
   elements.securityState.replaceChildren(
     element('span', 'status-dot'),
-    element('span', '', text),
+    element('span', 'security-state-label', text),
   );
   elements.securityState.title = state.reason || 'The browser shell is running with remote access disabled.';
 }
@@ -512,25 +514,53 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
-const resizeObserver = new ResizeObserver(() => {
+const resizeObserver = new ResizeObserver(async () => {
+  const revision = ++layoutRevision;
   const rect = elements.viewport.getBoundingClientRect();
-  api.layout({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+  try {
+    const result = await api.layout({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+    if (revision !== layoutRevision) return;
+    if (!result?.ok) setMessage(result?.error || 'The browser viewport could not be resized.', true);
+  } catch (error) {
+    if (revision === layoutRevision) {
+      setMessage(error?.message || 'The browser viewport could not be resized.', true);
+    }
+  }
 });
 resizeObserver.observe(elements.viewport);
 
-api.onState((next) => {
+const unsubscribeState = api.onState((next) => {
+  const previousActiveTabId = activeTab()?.id || null;
+  stateRevision += 1;
   state = next;
   renderStatus();
-  renderTabs();
+  renderTabs(previousActiveTabId !== (activeTab()?.id || null));
   if (activePanel === 'history') renderHistoryPanel();
   if (activePanel === 'bookmarks') renderBookmarksPanel();
 });
-api.onNavigationError((message) => setMessage(message, true));
-api.onFocusAddress(() => {
+const unsubscribeNavigationError = api.onNavigationError((message) => setMessage(message, true));
+const unsubscribeFocusAddress = api.onFocusAddress(() => {
   elements.address.focus();
   elements.address.select();
 });
-api.getStatus().then((status) => {
+const initialStateRevision = stateRevision;
+Promise.resolve().then(() => api.getStatus()).then((status) => {
+  if (stateRevision !== initialStateRevision) return;
+  if (!status || typeof status !== 'object') {
+    setMessage('Browser status could not be loaded.', true);
+    return;
+  }
   state = { ...state, ...status };
   renderStatus();
+}).catch((error) => {
+  if (stateRevision === initialStateRevision) {
+    setMessage(error?.message || 'Browser status could not be loaded.', true);
+  }
+});
+
+window.addEventListener('beforeunload', () => {
+  resizeObserver.disconnect();
+  unsubscribeState();
+  unsubscribeNavigationError();
+  unsubscribeFocusAddress();
 });
