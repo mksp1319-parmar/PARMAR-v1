@@ -2320,3 +2320,481 @@ performed. AppArmor remains the suspected—not proven—cause of the reported
 hosted UID-map denial. Package launch, real screenshot inspection, packaged
 process cleanup, and Chromium NetworkService syscall/network-boundary
 evidence remain unverified and block production readiness.
+
+## A27.1 current-commit hosted run results (2026-10-31)
+
+GitHub Actions run
+[41225181362](https://github.com/mksp1319-parmar/PARMAR-v1/actions/runs/41225181362)
+ran commit
+`db5654420cde1d2ab9e6358af51f93bb8916a7b8` on `ubuntu-24.04` and concluded
+**failure**. Its retained `aether-linux-runtime-evidence` artifact contains
+`ci-setup.log`, `namespace-prerequisites.log`, and
+`network-namespace-check.log`.
+
+The namespace preflight **failed**. The retained logs record
+`apparmor_restrict_unprivileged_userns=1` and
+`unprivileged_userns_clone=1`; `unshare --user --map-current-user --net` then
+failed writing `/proc/self/uid_map` with `Operation not permitted`. The kernel
+audit record explicitly reports AppArmor profile `unprivileged_userns`
+denying capability `sys_admin` for `unshare`'s `userns_create` operation.
+This confirms the immediate AppArmor denial on this runner, rather than only
+suggesting AppArmor based on the sysctl values. The enabled clone sysctl does
+not override that denial. The workflow did not change AppArmor or sysctl
+settings.
+
+**AETHER tests passed in this run: none.** Setup, diagnostics, and evidence
+artifact upload completed successfully; these are workflow steps, not passing
+application tests. Eight downstream steps were skipped after preflight
+failure:
+
+1. Verify Electron GUI runtime prerequisites.
+2. Install pinned desktop dependencies.
+3. Verify Electron runtime libraries and prepare AppImage tools.
+4. Build and inspect the unpacked and AppImage packages.
+5. Run the focused packaged production-child probe.
+6. Run the focused packaged AppImage UI smoke test.
+7. Run focused isolation and supervisor regressions, including live Electron
+   isolation.
+8. Run the complete serial desktop regression suite.
+
+Consequently, this run produced **no current-commit package, packaged launch,
+runtime probe result, or AETHER screenshot**. Package integrity and emblem
+checks, packaged Electron/Chromium isolation and cleanup, screenshot pixel
+assertions and visual inspection, renderer-to-kernel attribution, and
+production redirect/WebSocket behavior remain **unverified** for this commit.
+The readiness checks implemented in the workflow are not execution evidence.
+
+Historical results remain historical: the previously recorded local desktop
+suite result of 120 tests (116 passed, 0 failed, 4 skipped) predates this
+hosted run and does not establish that the suite passed on commit
+`db5654420cde1d2ab9e6358af51f93bb8916a7b8`. Earlier package and runtime
+results likewise apply only to their recorded revisions. Do not count those
+results as current-commit passes.
+
+Keep `REMOTE_BROWSING_ENABLED=false`. The immediate blocker is a runner that
+permits the required rootless namespace operation while retaining the
+existing exact UID/GID mapping assertions and security controls. A27.2 must
+test a supported runner candidate with the preflight before any package or
+runtime gates can execute; if no hosted candidate passes, use the reviewed
+ephemeral-runner path described above.
+
+## A27.2 hosted runner preflight candidates (2026-10-31)
+
+The manual-only workflow `.github/workflows/aether-namespace-preflight.yml`
+tests `ubuntu-22.04` and `ubuntu-24.04` independently with read-only
+repository permissions. It checks out the selected revision, runs only the
+shared `.github/scripts/aether-namespace-preflight.sh`, and uploads each
+candidate's diagnostic log even when its preflight fails. It does not install
+packages or dependencies, build or launch AETHER, or perform application
+network tests.
+
+The production runtime workflow now calls the same script, so candidate and
+production checks use identical requirements: unprivileged user and network
+namespace creation, distinct namespace IDs, exact one-entry UID/GID mappings
+for the runner's numeric UID/GID, and failure diagnostics that preserve the
+original exit status. The script does not change AppArmor or sysctls and does
+not grant capabilities. Focused local regression and syntax checks exercise
+the shared script and candidate-workflow constraints only; they do not
+establish hosted runner behavior. The shared script also passed a direct
+local preflight: this environment reported
+`apparmor_restrict_unprivileged_userns=0`, distinct parent/child user and
+network namespace IDs, and exact `1000 1000 1` UID/GID maps. This is
+local-only evidence and does not predict either hosted candidate. Neither
+Ubuntu candidate has been run by this change. An authorized
+`workflow_dispatch` is required before either candidate can be reported as
+passing.
+
+### A27.2-F fail-closed regression results
+
+The shared namespace preflight now enables `errexit` and `pipefail`, rejects
+empty parent namespace IDs before attempting child creation, and rejects empty
+child namespace IDs before comparing them with the parent IDs. A failed
+`readlink` exits with its original status; the existing `unshare` failure
+branch still preserves its status while treating denied optional kernel-log
+diagnostics as unavailable. The production workflow's pull-request and push
+path filters both include `.github/scripts/**`, so changes to the shared
+preflight invoke the production checks.
+
+The focused command `cd PARMAR/desktop && node --test
+test/startup-config.test.cjs` passed all 16 tests with zero failures and zero
+skips. Added fixture-only regressions cover parent user/network `readlink`
+failures, empty parent and child IDs, and a successful exact-map/distinct-ID
+path. The existing simulated UID-map failure and denied-diagnostic-source
+regression also passed. `bash -n` passed for the shared script, Ruby YAML
+parsing passed for both workflows, and `git diff --check` passed.
+
+These are local code and controlled-fixture results only. The fixtures do not
+create namespaces or emulate hosted runner policy. Ubuntu 22.04 and 24.04
+remain untested pending an authorized manual workflow run; no candidate is
+reported as passing, and `REMOTE_BROWSING_ENABLED` remains `false`.
+
+## A38 browser privacy and permissions
+
+The browser settings panel reports the fixed Electron session permission
+policy. Main-process request and check handlers validate HTTPS origins and
+known permission types, then deny every request; unknown permission types,
+invalid origins, and all other permission requests are denied as well.
+Permission labels indicate policy, not whether a site previously requested
+access. Remote browsing remains disabled, per-site permission controls are not
+implemented, and no renderer IPC can grant permissions.
+
+The panel describes locally persisted history, bookmarks, tab/session
+metadata, zoom and other preferences, and download metadata. Download
+destination paths are not persisted in AETHER's download records. Clearing
+history affects history only; clearing download records removes inactive
+metadata and does not delete downloaded files. Resetting preferences is a
+separate action. These actions do not clear saved tabs/session metadata,
+bookmarks as a group, or the persistent Chromium session's cookies, cache, or
+website storage. No Electron runtime or visual verification was performed for
+this update; automated desktop tests validate the policy, IPC boundaries, and
+settings content only.
+
+## A39 browser profiles and metadata separation
+
+AETHER now maintains a bounded profile registry in `aether-profiles.json`.
+The fixed `Default` profile continues using the existing user-data
+`aether-state.json`; this is a compatibility mapping, not a copy or merge, and
+the original data is not deleted. Other profiles use generated UUID directory
+names under `profile-data`; profile names are validated display names and are
+never filesystem paths. Each selected profile has its own AETHER metadata
+store for bookmarks, history, tab/session and zoom state, preferences, closed
+tabs, and download metadata. Invalid or unsupported registry data fails
+explicitly and is left unchanged.
+
+Profile creation and next-startup selection are available in Browser Settings.
+Switching requires confirmation and only changes the selected profile for the
+next startup; the current process continues using the original profile's
+metadata store, and the UI explains that a restart is required. There is no
+profile deletion control.
+
+## A40 Chromium profile partitions
+
+Each validated profile ID selects a deterministic persistent Chromium
+partition. The fixed `default` ID retains the existing
+`persist:parmar-aether-browser-v1` partition for compatibility. Other profile
+IDs must be generated-format UUIDs and map to
+`persist:parmar-aether-profile-<profile-id>`. Names do not participate in
+partition names or paths. Invalid IDs and partition initialization failures
+abort browser startup; there is no fallback to the Default partition. Existing
+Chromium data is neither migrated nor deleted.
+
+At browser startup, the selected profile is validated before its session is
+resolved with `session.fromPartition`. Permission request/check denial,
+download approval, and HTTP(S)/WebSocket request cancellation handlers are
+installed on that session before any tab view is created. Session setup is
+idempotent for a profile within the process, and a session object already
+assigned to another profile is rejected. Each `WebContentsView` is created
+with the active profile's session and a consistency check prevents tab
+creation if the active ID and initialized session do not match. Existing
+per-view navigation and popup restrictions remain in place.
+
+Profile selection remains restart-only. A running process does not move or
+reuse live `WebContents` across partitions; it continues using its original
+profile and metadata store until it exits. On the next startup, only the
+selected profile's metadata is restored, and saved remote addresses remain
+paused on the local AETHER Start Page. The Default partition preserves prior
+Chromium data; additional profiles receive distinct partition identifiers and
+do not import that data.
+
+Closing the browser window closes each tab's `WebContents` and clears the tab
+references; the initialized session remains cached for that same profile if
+the window is reopened in the still-running process. Selection in Settings
+only stages a next-startup profile and does not change the active store or
+session. A live switch would require coordinating metadata persistence,
+outstanding downloads and requests, tab event handlers, and destruction of all
+old-profile contents before creating any target-profile contents. That
+cross-profile transition is intentionally not implemented.
+
+Partition mapping and policy lifecycle are covered by Electron mocks in the
+desktop tests. These tests are not evidence of actual Chromium storage
+separation. No Electron runtime or visual verification was performed.
+Independent runtime verification is still required before claiming that
+cookies, cache, website storage, or other Chromium state are isolated in
+practice. This work does not establish network isolation; remote browsing
+remains disabled.
+
+## A41 Chromium profile isolation verification preparation
+
+### Verified implementation facts
+
+- `profilePartition()` accepts only the fixed `default` ID or a profile ID
+  matching the generated UUID format. It preserves the legacy Default
+  partition and derives every other partition name only from the ID.
+- Browser startup loads the validated registry's startup profile, resolves
+  that profile's session with `session.fromPartition()`, and installs its
+  permission request/check denial handlers, download handler, and
+  HTTP(S)/WebSocket request-cancellation hook before creating the browser
+  window's first tab.
+- `createTab()` rejects creation unless the module's active profile ID equals
+  the ID associated with the initialized session. Every tab is a newly
+  constructed `WebContentsView` with that session explicitly supplied in
+  `webPreferences.session`. The only `session.fromPartition()` call is in the
+  policy installer.
+- Tab creation contains no path that adopts or transfers an existing
+  `WebContents`. Closing a tab closes its contents; closing the browser window
+  closes every remaining tab contents and clears the tab map. A closed window
+  may be reopened with new contents on the same active profile session.
+  Selection in settings only stages the next startup; it does not change the
+  active profile or session in the current process.
+- The above lifecycle assertions are based on source inspection and
+  Electron-mock tests. They do not prove how a particular Electron/Chromium
+  build stores or separates on-disk browser data.
+
+### Storage ownership and evidence gaps
+
+The app does not directly read, write, clear, or migrate cookies, Chromium
+HTTP cache, DOM `localStorage`, IndexedDB, or service-worker registrations.
+The expected owner for those Chromium stores is the Electron `Session`
+selected by the `WebContentsView` partition. In Chromium, the web-platform
+stores are also origin-scoped within the browser context. This is the intended
+Session/partition contract, not a result demonstrated by AETHER's current
+tests.
+
+| Data | Current code evidence | Runtime evidence still needed |
+|---|---|---|
+| Cookies | No app-level cookie access; tab views receive the profile session. | Set unique cookies for the same test origin in each session; read back only the corresponding value before and after restart. |
+| HTTP cache | Session is profile-specific; the app's request hook cancels HTTP(S), so AETHER cannot fetch a cacheable HTTP response under current policy. | Confirm each session reports a distinct persistent storage path. Do not enable HTTP(S) merely to populate cache. Actual cached-response separation remains unverified unless it can be tested without relaxing the production policy. |
+| `localStorage` | No app-level access; expected to belong to the origin and selected Chromium session. | Write distinct same-origin markers from a local secure test page in each session; confirm no cross-read and persistence across process restart. |
+| IndexedDB | No app-level access; expected to belong to the origin and selected Chromium session. | Create/read distinct database records from the same local secure test origin in each session, including after restart. |
+| Service workers / Cache Storage | No app-level registration or cache access; expected to live in the session's Chromium storage partition. | Register a worker from a secure local test origin; verify per-session registration and distinct Cache Storage entries, then verify both after restart. |
+
+`Cache Storage` (the web API commonly used by service workers) is not the
+same as Chromium's HTTP cache. Testing Cache Storage does not verify HTTP
+cache partitioning. The existing HTTP(S) request cancellation must stay in
+place during AETHER verification; HTTP cache contents therefore remain an
+explicit evidence gap unless a safe, policy-preserving test is found.
+
+### Previously skipped full-suite tests
+
+The prior full desktop run reported four skips:
+
+1. `built Linux artifact contains launchable app.asar paths and required
+   browser isolation assets` — skipped because the expected packaged
+   `build/linux-unpacked/resources/app.asar` was absent. It inspects packaging
+   output, not runtime storage isolation.
+2. `live Electron and Chromium descendants stay outside the host namespace
+   and cannot reach controlled listeners` — requires Linux namespace tools,
+   pinned Electron, Xvfb, and user-local GTK libraries. It launches Electron
+   and tests process/network namespace controls; it does not test profiles'
+   storage contents.
+3. `packaged AETHER UI launches isolated Chromium and supports real browser
+   chrome interactions` — opt-in via `PARMAR_AETHER_UI_SMOKE=1`; requires a
+   packaged application and GUI tooling and launches the app. It verifies
+   UI/runtime behavior, not profile storage separation.
+4. `test-only harness records packaged Chromium renderer requests in the
+   isolated network namespace` — opt-in via
+   `PARMAR_AETHER_PRODUCTION_CHILD_PROBE_REQUIRED=1` plus a fresh Linux
+   directory package and evidence directory. It launches the packaged child
+   for a network probe, not a profile-storage comparison.
+
+None of these skipped tests currently demonstrates that cookies,
+`localStorage`, IndexedDB, service-worker state, or cache contents are
+isolated between AETHER profiles. The A40 focused-test failure was in the
+new mock test's teardown: it asserted that the first tab's WebContents had
+been destroyed without first closing its browser window. The explicit window
+close was added before starting the simulated second process; the retry
+passed. This was a test-fixture error, not evidence of a production lifecycle
+defect.
+
+### Opt-in, non-user-data runtime verification procedure
+
+The following is a proposed test procedure; it has not been run and does not
+authorize launching Electron as part of ordinary tests.
+
+1. Add a separately invoked runtime test with an explicit opt-in flag and a
+   pinned Electron runtime. Require a newly created, unique temporary
+   `userData` directory owned by the test. Refuse to run if the directory is
+   not empty or is not beneath the test's temporary root. Never point it at
+   the developer's normal AETHER data directory. Do not call
+   `clearStorageData()` on any existing profile.
+2. Generate two test profile UUIDs and names, create a registry containing
+   only those test profiles plus the required Default entry, and select each
+   test profile only on its respective test startup. Assert the exact
+   partition names and that each `Session.getStoragePath()` is non-empty and
+   distinct. Record Electron/Chromium versions and the two paths as test
+   evidence.
+3. Keep the production remote-browsing flag false and preserve the production
+   session policies. Serve a fixed fixture only from an explicitly registered
+   secure custom test scheme backed by in-memory fixture bytes; do not make
+   HTTP(S) requests, contact the Internet, or add an HTTP allowlist. The
+   fixture should use one identical origin in both sessions and write
+   different random markers to cookies, `localStorage`, IndexedDB, a
+   service-worker registration, and Cache Storage.
+4. In one test process, create a new WebContents per profile with the
+   corresponding session; assert the session identity, read each store's
+   marker in its owning contents, and assert that the other profile's marker
+   is absent. Close the contents and process cleanly.
+5. Restart the test app using the same temporary test `userData` directory,
+   first with profile A and then profile B selected. Recreate contents only
+   with the selected profile's session, verify its marker persists, verify
+   that the other profile's marker is not visible, and confirm the two
+   storage paths remain stable. Save logs/results outside the user-data
+   directory. Clean up only the test-created temporary directory after the
+   run, never any pre-existing profile storage.
+6. Report HTTP cache separately. Do not enable HTTP(S) to manufacture cache
+   entries. Distinct session storage paths and web-platform Cache Storage
+   results are not proof that HTTP cache entries were populated or isolated.
+   The test must mark HTTP cache verification as outstanding unless a
+   policy-preserving, local-only method is independently established.
+
+Evidence sufficient for a bounded claim would include the test source and
+fixture, the opt-in command and successful results, Electron/Chromium
+versions, profile IDs (not names or user data), distinct stable storage
+paths, per-profile read/write assertions in the same origin, successful
+process-restart persistence checks, and proof the ordinary session policies
+and remote-browsing flag remained unchanged. Even then, the conclusion must
+be scoped to the tested Electron/Chromium build and tested storage APIs.
+Network isolation and HTTP-cache isolation require separate evidence.
+
+## A42-A46 profile isolation hardening and verification
+
+### Architecture and lifecycle
+
+The Default ID continues to map to the pre-existing persistent partition
+`persist:parmar-aether-browser-v1`; other validated generated UUIDs map to
+`persist:parmar-aether-profile-<uuid>`. The profile name is never part of a
+partition name or profile data path. Invalid IDs are rejected before Electron
+session lookup. A session lookup or policy-installation error is surfaced and
+does not fall back to another profile.
+
+At startup, AETHER validates the profile registry, selects the persisted
+startup profile, resolves its session, and installs the restrictive permission
+request/check, download, and HTTP(S)/WebSocket request-cancellation handlers.
+Only after that does it create a BrowserWindow and new `WebContentsView`
+instances with the selected session. A tab is not restored from an existing
+WebContents; it is recreated on the local Start Page, with a saved remote URL
+kept paused. The browser-window chrome remains a separate local renderer.
+
+Settings selection is explicit and staged for the next startup. The running
+process continues to use its original store/session; live switching is not
+implemented. Closing a tab removes its app event listeners, replaces its
+popup handler with deny, and closes its WebContents. Closing the browser
+window applies that disposal to every tab and clears tab references. Session
+policy setup is cached per profile and is not registered twice when the same
+profile's browser window is reopened in that process.
+
+### Data integrity, recovery, and compatibility
+
+The registry validates exact record shapes, supported versions, bounded
+profile counts, generated IDs, safe normalized names, unique IDs/names, valid
+creation timestamps, and a selected ID that references an existing profile.
+Malformed or partial registry JSON fails startup without rewriting the
+registry. Writes validate the candidate metadata, write to a unique
+exclusive-created temporary file, fsync it, then rename it into place. A
+failed write preserves the prior registry and removes only the temporary file
+created by that operation. Browser metadata uses the same temporary-file and
+rename pattern.
+
+Bookmarks, history, preferences, tab/session/zoom state, closed tabs, and
+download metadata remain in each profile's separate `aether-state.json`. The
+Default profile uses the existing user-data root and file in place; no
+copy/merge migration or Chromium storage reset is performed. New profiles use
+UUID-only directories. A missing metadata file is treated as an empty store
+for compatibility with a newly created, not-yet-used profile. AETHER cannot
+distinguish that case from external loss of a profile directory; it does not
+merge another profile's data or claim to recover externally deleted data.
+Malformed or unsupported existing metadata fails explicitly rather than
+being silently replaced. Profile deletion and Chromium storage cleanup are
+not implemented.
+
+### Settings diagnostics
+
+The profile settings state is described as:
+
+- **Metadata separation implemented** — AETHER-owned records are stored in
+  the selected profile metadata store.
+- **Dedicated Chromium partition configured** — each profile ID maps to a
+  persistent partition, and tab views are configured with that session.
+- **Runtime storage verification pending** — the current automated desktop
+  suite does not prove Chromium storage separation.
+- **Network isolation not verified** — AETHER continues to keep remote
+  browsing disabled; no network-isolation claim is made.
+
+The active profile name and restart-required selection are shown. Creating a
+profile and selecting one call the existing validated main-process
+operations. The UI does not expose storage paths, deletion, or unimplemented
+runtime controls.
+
+### A42 opt-in synthetic runtime harness
+
+`test/profile-storage-runtime.test.cjs` and
+`test/profile-storage-runtime-worker.cjs` implement an opt-in Electron test.
+The parent creates a unique temporary root and empty temporary user-data
+directory, generates two profiles and random synthetic markers, then runs
+four separate Electron processes: seed A, seed B, restart/verify A, and
+restart/verify B. Each worker verifies its selected profile, opens only that
+profile's validated persistent partition, installs deny-by-default
+permissions, cancels downloads, blocks HTTP(S)/WebSocket requests, denies
+popups, and allows top-level navigation only to its in-memory secure custom
+scheme fixture. No HTTP(S) allowlist or external server is added.
+
+For each profile the fixture writes a cookie, `localStorage` entry, IndexedDB
+record, service-worker registration and service-worker-owned Cache Storage
+marker, plus a page-owned Cache Storage marker. The two profiles use the
+same test origin and key names but different random values. After restart, the
+test asserts each profile reads its own values, not the other profile's
+marker, and has the same storage path and partition mapping. Results include
+only synthetic profile IDs, partition/storage paths under the temporary root,
+versions, and category pass states; marker values are not emitted. The
+temporary root is removed by the test after the child processes exit.
+
+Run only when deliberately performing runtime verification:
+
+```sh
+cd /workspaces/PARMAR-v1/PARMAR/desktop
+xvfb-run -a env PARMAR_AETHER_PROFILE_STORAGE_RUNTIME=1 npm run test:profile-storage-runtime
+```
+
+On a machine with a graphical display, omit `xvfb-run -a`. The pinned Electron
+runtime must already be present; this milestone does not install it. The
+harness has not been executed as part of this milestone. Its tests are skipped
+by default, including during ordinary `npm test`. A successful run is
+necessary runtime evidence for the listed APIs, not evidence for every
+Chromium storage mechanism or for AETHER's network boundary. The harness
+reports HTTP cache as **unverified** and keeps production HTTP(S) requests
+blocked. Cache Storage and Chromium HTTP cache are distinct mechanisms.
+
+### Verification status and limitations
+
+Implemented and mock-tested: Default partition compatibility, deterministic
+and distinct ID mappings, malformed ID rejection, no fallback on session
+initialization failure, deny-by-default permission request/check handling,
+request cancellation, popup/navigation restrictions, per-session download
+policy registration, profile-specific metadata restoration, restart-only
+selection, distinct mocked sessions, and WebContents disposal.
+
+Not runtime-verified in this milestone: cookies, HTTP cache, `localStorage`,
+IndexedDB, service-worker registrations, Cache Storage, storage persistence
+across real Electron restarts, and actual storage path behavior. The opt-in
+harness targets the web-platform storage categories and restart persistence
+but has not been run. HTTP cache remains unverified because HTTP(S) requests
+are cancelled by policy. Network isolation remains unverified and is a
+separate process/network-boundary question. Do not describe profile storage
+or network isolation as production-verified until test evidence exists for
+the exact Electron/Chromium build in use.
+
+Final non-runtime validation for this milestone: focused profile, lifecycle,
+settings, and runtime-gate tests passed 77 with 0 failures; the opt-in runtime
+test was skipped as intended. The full desktop suite passed 204 tests, failed
+0, and skipped 5 (209 total). Syntax checks for changed JavaScript files and
+`git diff --check` passed. `REMOTE_BROWSING_ENABLED` remained false. No
+Electron process or runtime harness was launched, so all Chromium storage
+categories above remain unverified.
+
+The five full-suite skips were:
+
+1. `built Linux artifact contains launchable app.asar paths and required
+   browser isolation assets` — the expected built Linux `app.asar` was absent.
+2. `live Electron and Chromium descendants stay outside the host namespace
+   and cannot reach controlled listeners` — Linux namespace tools, pinned
+   Electron, Xvfb, and the user-local GTK runtime directory are required.
+3. `packaged AETHER UI launches isolated Chromium and supports real browser
+   chrome interactions` — its `PARMAR_AETHER_UI_SMOKE=1` opt-in was not set;
+   it requires a packaged app and GUI environment.
+4. `test-only harness records packaged Chromium renderer requests in the
+   isolated network namespace` — its required opt-in and fresh Linux package
+   were not provided.
+5. `persistent Chromium profile storage remains isolated across process
+   restarts` — its `PARMAR_AETHER_PROFILE_STORAGE_RUNTIME=1` opt-in was
+   intentionally not set. This harness must be run separately to produce
+   runtime storage evidence.

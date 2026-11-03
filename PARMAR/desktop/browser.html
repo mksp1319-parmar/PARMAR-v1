@@ -19,7 +19,9 @@
           <span><strong>AETHER</strong><small>by PARMAR</small></span>
         </div>
         <nav class="tab-strip" aria-label="Browser tabs">
+          <button class="tab-overflow" type="button" data-action="tabs-scroll-left" aria-label="Scroll tabs left" title="Scroll tabs left">‹</button>
           <div class="tabs" id="tabs" role="tablist" aria-label="Open pages"></div>
+          <button class="tab-overflow" type="button" data-action="tabs-scroll-right" aria-label="Scroll tabs right" title="Scroll tabs right">›</button>
           <button class="tab-add" type="button" data-action="new-tab" aria-label="New tab" title="New tab (Ctrl+T)">
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
           </button>
@@ -65,7 +67,7 @@
         <nav class="sidebar" aria-label="Browser shortcuts">
           <div class="sidebar-group">
             <span class="sidebar-label">Workspace</span>
-            <button class="sidebar-action" type="button" data-action="new-tab" aria-label="Home, open a new AETHER tab">
+            <button class="sidebar-action" type="button" data-action="home" aria-label="Home, return to the AETHER start page" title="Home (Alt+Home)">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m3.5 9 6.5-5.5L16.5 9v7.5h-5v-5h-3v5h-5z"/></svg>
               <span>Home</span>
             </button>
@@ -76,6 +78,10 @@
           </div>
           <div class="sidebar-group">
             <span class="sidebar-label">Library</span>
+            <button class="sidebar-action" type="button" data-action="reopen-closed-tab" aria-label="Reopen recently closed tab" disabled>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 8A6 6 0 1 1 4 11M4.5 4.5V8H8M10 6v4l2.5 1.5"/></svg>
+              <span>Reopen Closed Tab</span>
+            </button>
             <button class="sidebar-action" type="button" data-action="bookmarks" aria-label="Saved bookmarks">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h8M4 9h8M4 12.5h5"/><path d="M13 4.5h3v12l-3-2-3 2v-3"/></svg>
               <span>Bookmarks</span>

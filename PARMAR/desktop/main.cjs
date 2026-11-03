@@ -1,13 +1,40 @@
 'use strict';
 
-const { app, BrowserWindow, WebContentsView, ipcMain, Menu, session } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  WebContentsView,
+  ipcMain,
+  Menu,
+  clipboard,
+  dialog,
+  session,
+} = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
-const { AetherStore } = require('./store.cjs');
+const { ClosedTabHistory } = require('./closed-tabs.cjs');
+const { AetherProfiles } = require('./profiles.cjs');
+const { profilePartition } = require('./profile-partitions.cjs');
+const {
+  safeDownloadDestination,
+  safeDownloadRecord,
+  sanitizeDownloadFilename,
+} = require('./download-utils.cjs');
+const {
+  AetherStore,
+  DEFAULT_ZOOM_FACTOR,
+  MIN_ZOOM_FACTOR,
+  MAX_ZOOM_FACTOR,
+} = require('./store.cjs');
 const { createBrowserChildSupervisor } = require('./browser-child-supervisor.cjs');
 const { startBrowserChildBroker } = require('./browser-child-broker.cjs');
 const { verifyCurrentIsolation } = require('./isolation-probe.cjs');
+const {
+  permissionDecision,
+  privacyStatusPayload,
+} = require('./permission-policy.cjs');
 const {
   MAX_ADDRESS_LENGTH,
   REMOTE_BROWSING_ENABLED,
@@ -25,6 +52,11 @@ const NEW_TAB_HTML = path.join(__dirname, 'newtab.html');
 const CONTROL_UNAVAILABLE_HTML = path.join(__dirname, 'control-unavailable.html');
 const BRAND_EMBLEM_PATH = path.resolve(__dirname, '../interface/static/assets/parmar-emblem.png');
 const MAX_TABS = 16;
+const DOWNLOAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TAB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CONTEXT_MENU_WIDTH = 260;
+const CONTEXT_MENU_ITEM_HEIGHT = 34;
+const CONTEXT_MENU_SEPARATOR_HEIGHT = 10;
 const DEFAULT_VIEW_TOP = 184;
 const APP_USER_DATA = app.getPath('userData');
 const IS_BROWSER_CHILD = process.platform === 'linux'
@@ -34,13 +66,22 @@ if (IS_BROWSER_CHILD) {
   app.setPath('userData', path.join(APP_USER_DATA, 'aether-browser-profile'));
 }
 const tabs = new Map();
+const activeDownloads = new Map();
+let closedTabHistory = new ClosedTabHistory();
 let controlWindow = null;
 let browserWindow = null;
 let browserWindowReady = null;
 let activeTabId = null;
+let browserZoomFactor = DEFAULT_ZOOM_FACTOR;
 let browserSession = null;
-let browserSessionPolicyInstalled = false;
+let browserSessionProfileId = null;
+const profileSessions = new Map();
+const failedProfileSessions = new Map();
+const sessionOwners = new WeakMap();
+let reopenClosedTabMenuItem = null;
 let aetherStore = null;
+let profileManager = null;
+let activeProfileId = null;
 let browserChildBroker = null;
 const browserChildSupervisor = process.platform === 'linux' && !IS_BROWSER_CHILD
   ? createBrowserChildSupervisor({
@@ -87,6 +128,7 @@ function statusPayload() {
     reason: REMOTE_BROWSING_ENABLED
       ? null
       : 'Remote browsing is disabled because this installation has no verified operating-system network boundary.',
+    privacy: privacyStatusPayload(REMOTE_BROWSING_ENABLED),
   };
 }
 
@@ -97,6 +139,7 @@ function browserStatusPayload() {
   return {
     ...statusPayload(),
     brandEmblemUrl: pathToFileURL(brandEmblemPath).href,
+    profiles: profileManager ? profileManager.snapshot(activeProfileId) : null,
   };
 }
 
@@ -112,30 +155,55 @@ function publicTab(tab) {
     canGoBack: tab.view.webContents.canGoBack(),
     canGoForward: tab.view.webContents.canGoForward(),
     isLoading: tab.view.webContents.isLoading(),
+    navigationStatus: tab.error
+      ? 'error'
+      : (tab.view.webContents.isLoading() ? 'loading' : 'complete'),
+    pinned: tab.pinned,
   };
 }
 
 function sendBrowserState() {
   if (!browserWindow || browserWindow.isDestroyed()) return;
+  if (reopenClosedTabMenuItem) {
+    reopenClosedTabMenuItem.enabled = closedTabHistory.length > 0;
+  }
   browserWindow.webContents.send('aether:state', {
     ...browserStatusPayload(),
     activeTabId,
     tabs: [...tabs.values()].map(publicTab),
+    closedTabCount: closedTabHistory.length,
     stored: aetherStore ? aetherStore.snapshot() : { bookmarks: [], history: [] },
+    downloads: aetherStore ? aetherStore.downloadsSnapshot() : [],
+    preferences: aetherStore ? aetherStore.preferencesSnapshot() : null,
   });
 }
 
-function persistTabSession() {
+function persistTabSession({ zoomFactor = browserZoomFactor, throwOnError = false } = {}) {
   if (!aetherStore) return;
   const tabIds = [...tabs.keys()];
   try {
     aetherStore.saveSession({
       tabs: tabIds.map((id) => {
         const tab = tabs.get(id);
-        return tab?.url || tab?.restoreUrl || null;
+        return {
+          url: tab?.url || tab?.restoreUrl || null,
+          pinned: Boolean(tab?.pinned),
+        };
       }),
       activeIndex: Math.max(0, tabIds.indexOf(activeTabId)),
+      zoomFactor,
+      zoomFactors: tabIds.map((id) => tabs.get(id).view.webContents.getZoomFactor()),
     });
+  } catch (error) {
+    if (throwOnError) throw error;
+    notifyNavigationError(errorMessage(error));
+  }
+}
+
+function persistClosedTabHistory() {
+  if (!aetherStore) return;
+  try {
+    aetherStore.saveClosedTabs(closedTabHistory.entries);
   } catch (error) {
     notifyNavigationError(errorMessage(error));
   }
@@ -184,6 +252,197 @@ function notifyNavigationError(message) {
   }
 }
 
+function updateDownload(record) {
+  const safeRecord = safeDownloadRecord(record);
+  if (!safeRecord) {
+    notifyNavigationError('AETHER received invalid download metadata.');
+    return false;
+  }
+  try {
+    aetherStore.updateDownload(safeRecord);
+    sendBrowserState();
+    return true;
+  } catch {
+    notifyNavigationError('Download status could not be saved.');
+    return false;
+  }
+}
+
+function downloadByteCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function suggestedDownloadPath(fileName) {
+  const directory = app.getPath('downloads');
+  const extension = path.extname(fileName);
+  const stem = path.basename(fileName, extension);
+  for (let index = 0; index < 1000; index += 1) {
+    const suffix = index === 0 ? '' : ` (${index})`;
+    const candidate = path.join(directory, `${stem}${suffix}${extension}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(directory, `download-${randomUUID()}`);
+}
+
+async function chooseDownloadDestination(record, item) {
+  let defaultPath = suggestedDownloadPath(record.fileName);
+  while (true) {
+    const result = await dialog.showSaveDialog(browserWindow, {
+      title: 'Save download',
+      buttonLabel: 'Save',
+      defaultPath,
+    });
+    if (result.canceled || !result.filePath) return null;
+    const destination = safeDownloadDestination(result.filePath);
+    if (!destination) {
+      throw new TypeError('The selected download destination is invalid.');
+    }
+
+    let reservation;
+    try {
+      reservation = await fs.promises.open(destination, 'wx', 0o600);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      await dialog.showMessageBox(browserWindow, {
+        type: 'warning',
+        title: 'File already exists',
+        message: 'AETHER will not overwrite an existing file. Choose a different name.',
+        buttons: ['Choose another name'],
+      });
+      defaultPath = suggestedDownloadPath(record.fileName);
+      continue;
+    }
+    try {
+      await reservation.close();
+      item.setSavePath(destination);
+    } catch (error) {
+      fs.rmSync(destination, { force: true });
+      throw error;
+    }
+    return destination;
+  }
+}
+
+function finalizeDownload(entry, state, error = null) {
+  if (activeDownloads.get(entry.record.id) !== entry) return;
+  activeDownloads.delete(entry.record.id);
+  updateDownload({
+    ...entry.record,
+    receivedBytes: downloadByteCount(entry.item.getReceivedBytes()),
+    totalBytes: downloadByteCount(entry.item.getTotalBytes()),
+    state,
+    error,
+    updatedAt: Date.now(),
+  });
+}
+
+function handleDownloadRequest(_event, item, webContents) {
+  const tab = [...tabs.values()].find((entry) => entry.view.webContents === webContents);
+  if (
+    !tab
+    || !item
+    || typeof item.pause !== 'function'
+    || typeof item.cancel !== 'function'
+    || typeof item.getFilename !== 'function'
+    || typeof item.getTotalBytes !== 'function'
+    || typeof item.getReceivedBytes !== 'function'
+    || typeof item.setSavePath !== 'function'
+    || typeof item.resume !== 'function'
+    || typeof item.on !== 'function'
+    || typeof item.once !== 'function'
+  ) {
+    try {
+      item?.cancel?.();
+    } catch {
+      notifyNavigationError('An invalid download request could not be cancelled.');
+    }
+    notifyNavigationError('AETHER rejected an invalid or unowned download request.');
+    return;
+  }
+
+  let record;
+  try {
+    record = {
+      id: randomUUID(),
+      fileName: sanitizeDownloadFilename(item.getFilename()),
+      receivedBytes: downloadByteCount(item.getReceivedBytes()),
+      totalBytes: downloadByteCount(item.getTotalBytes()),
+      state: 'awaiting-approval',
+      error: null,
+      updatedAt: Date.now(),
+    };
+  } catch {
+    try {
+      item.cancel();
+    } catch {
+      notifyNavigationError('Invalid download metadata could not be cancelled.');
+    }
+    notifyNavigationError('AETHER rejected invalid download metadata.');
+    return;
+  }
+  const entry = { item, record, tabId: tab.id };
+  activeDownloads.set(record.id, entry);
+  try {
+    item.pause();
+    updateDownload(record);
+  } catch {
+    try {
+      item.cancel();
+    } catch {
+      notifyNavigationError('A failed download could not be cancelled.');
+    }
+    finalizeDownload(entry, 'failed', 'The download could not be started.');
+    return;
+  }
+
+  item.on('updated', (_downloadEvent, downloadState) => {
+    if (activeDownloads.get(record.id) !== entry) return;
+    if (downloadState === 'interrupted') {
+      finalizeDownload(entry, 'interrupted', 'The download was interrupted.');
+      return;
+    }
+    entry.record = {
+      ...entry.record,
+      receivedBytes: downloadByteCount(item.getReceivedBytes()),
+      totalBytes: downloadByteCount(item.getTotalBytes()),
+      updatedAt: Date.now(),
+    };
+    updateDownload(entry.record);
+  });
+  item.once('done', (_downloadEvent, downloadState) => {
+    if (downloadState === 'completed') finalizeDownload(entry, 'completed');
+    else if (downloadState === 'cancelled') finalizeDownload(entry, 'cancelled');
+    else finalizeDownload(entry, 'interrupted', 'The download did not complete.');
+  });
+
+  (async () => {
+    try {
+      const destination = await chooseDownloadDestination(record, item);
+      if (activeDownloads.get(record.id) !== entry) return;
+      if (!destination) {
+        item.cancel();
+        finalizeDownload(entry, 'cancelled');
+        return;
+      }
+      entry.destination = destination;
+      entry.record = { ...entry.record, state: 'downloading', updatedAt: Date.now() };
+      updateDownload(entry.record);
+      item.resume();
+      entry.resumed = true;
+    } catch {
+      try {
+        item.cancel();
+      } catch {
+        notifyNavigationError('A failed download could not be cancelled.');
+      }
+      if (entry.destination && !entry.resumed) {
+        fs.rmSync(entry.destination, { force: true });
+      }
+      finalizeDownload(entry, 'failed', 'The download could not be saved. Check the selected location and try again.');
+    }
+  })();
+}
+
 function createTabFromUserAction(options) {
   if (tabs.size >= MAX_TABS) {
     notifyNavigationError(`AETHER supports at most ${MAX_TABS} tabs.`);
@@ -224,13 +483,267 @@ function openAllowedExternal(url, tab) {
   return true;
 }
 
-function createTab({ restoreUrl = null, persist = true } = {}) {
+function safeContextUrl(value) {
+  const url = safeTabUrl(value);
+  return url ? url : null;
+}
+
+function showTabContextMenu(tab, event, params) {
+  event.preventDefault();
+  if (tabs.get(tab.id) !== tab || !browserWindow || browserWindow.isDestroyed()) return;
+  if (!params || typeof params !== 'object' || Array.isArray(params)) params = {};
+
+  const contents = tab.view.webContents;
+  const selectedText = typeof params.selectionText === 'string'
+    ? params.selectionText
+    : '';
+  const linkUrl = safeContextUrl(params.linkURL);
+  const imageUrl = params.mediaType === 'image' ? safeContextUrl(params.srcURL) : null;
+  const template = [
+    {
+      label: 'Back',
+      enabled: contents.canGoBack(),
+      accelerator: 'Alt+Left',
+      click: () => {
+        if (tabs.get(tab.id) === tab && contents.canGoBack()) contents.goBack();
+      },
+    },
+    {
+      label: 'Forward',
+      enabled: contents.canGoForward(),
+      accelerator: 'Alt+Right',
+      click: () => {
+        if (tabs.get(tab.id) === tab && contents.canGoForward()) contents.goForward();
+      },
+    },
+    {
+      label: 'Reload',
+      accelerator: 'CommandOrControl+R',
+      click: () => {
+        if (tabs.get(tab.id) === tab) contents.reload();
+      },
+    },
+  ];
+
+  if (selectedText.trim()) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: 'Copy selected text',
+        accelerator: 'CommandOrControl+C',
+        click: () => {
+          if (tabs.get(tab.id) === tab) clipboard.writeText(selectedText);
+        },
+      },
+    );
+  }
+  if (linkUrl) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: 'Copy link address',
+        click: () => {
+          if (tabs.get(tab.id) === tab) clipboard.writeText(linkUrl);
+        },
+      },
+      {
+        label: 'Open link in new tab',
+        click: () => {
+          if (tabs.get(tab.id) === tab) {
+            createTabFromUserAction({ restoreUrl: linkUrl });
+          }
+        },
+      },
+    );
+  }
+  if (imageUrl) {
+    template.push(
+      { type: 'separator' },
+      {
+        label: 'Copy image address',
+        click: () => {
+          if (tabs.get(tab.id) === tab) clipboard.writeText(imageUrl);
+        },
+      },
+    );
+  }
+  template.push(
+    { type: 'separator' },
+    {
+      label: 'Select All',
+      accelerator: 'CommandOrControl+A',
+      click: () => {
+        if (tabs.get(tab.id) === tab) contents.selectAll();
+      },
+    },
+  );
+
+  const menu = Menu.buildFromTemplate(template);
+  const contentSize = browserWindow.getContentSize();
+  const menuHeight = template.reduce(
+    (height, item) => height + (item.type === 'separator'
+      ? CONTEXT_MENU_SEPARATOR_HEIGHT
+      : CONTEXT_MENU_ITEM_HEIGHT),
+    0,
+  );
+  const bounds = tab.lastBounds || { x: 0, y: 0 };
+  const requestedX = Number.isFinite(params.x) ? params.x : 0;
+  const requestedY = Number.isFinite(params.y) ? params.y : 0;
+  const x = Math.max(0, Math.min(
+    Math.round(bounds.x + requestedX),
+    Math.max(0, contentSize[0] - CONTEXT_MENU_WIDTH),
+  ));
+  const y = Math.max(0, Math.min(
+    Math.round(bounds.y + requestedY),
+    Math.max(0, contentSize[1] - menuHeight),
+  ));
+  menu.popup({ window: browserWindow, x, y });
+}
+
+function changeTabPin(tab, pinned) {
+  if (tabs.get(tab.id) !== tab || tab.pinned === pinned) return false;
+  tab.pinned = pinned;
+  const order = [...tabs.values()];
+  const changedIndex = order.indexOf(tab);
+  order.splice(changedIndex, 1);
+  const pinnedCount = order.filter((entry) => entry.pinned).length;
+  order.splice(pinnedCount, 0, tab);
+  tabs.clear();
+  for (const entry of order) tabs.set(entry.id, entry);
+  sendBrowserState();
+  persistTabSession();
+  return true;
+}
+
+function duplicateTab(tab) {
+  if (tabs.get(tab.id) !== tab) return false;
+  const restoreUrl = tab.url || tab.restoreUrl || null;
+  return Boolean(createTabFromUserAction({ restoreUrl }));
+}
+
+function closeOtherTabs(tab) {
+  if (tabs.get(tab.id) !== tab) return false;
+  for (const entry of [...tabs.values()]) {
+    if (entry.id !== tab.id && !entry.pinned) closeTab(entry.id);
+  }
+  return true;
+}
+
+function closeTabsToRight(tab) {
+  if (tabs.get(tab.id) !== tab) return false;
+  const order = [...tabs.values()];
+  const index = order.indexOf(tab);
+  for (const entry of order.slice(index + 1)) {
+    if (!entry.pinned) closeTab(entry.id);
+  }
+  return true;
+}
+
+function moveTabBy(tab, direction) {
+  if (tabs.get(tab.id) !== tab || (direction !== -1 && direction !== 1)) return false;
+  const order = [...tabs.values()];
+  const index = order.indexOf(tab);
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= order.length) return false;
+  if (order[targetIndex].pinned !== tab.pinned) return false;
+  [order[index], order[targetIndex]] = [order[targetIndex], order[index]];
+  tabs.clear();
+  for (const entry of order) tabs.set(entry.id, entry);
+  sendBrowserState();
+  persistTabSession();
+  return true;
+}
+
+function reorderTabs(ids) {
+  if (
+    !Array.isArray(ids)
+    || ids.length !== tabs.size
+    || ids.some((id) => typeof id !== 'string' || !TAB_ID_PATTERN.test(id))
+    || new Set(ids).size !== ids.length
+  ) return false;
+  const nextTabs = ids.map((id) => tabs.get(id));
+  if (nextTabs.some((tab) => !tab)) return false;
+  let sawUnpinned = false;
+  for (const tab of nextTabs) {
+    if (!tab.pinned) sawUnpinned = true;
+    else if (sawUnpinned) return false;
+  }
+  tabs.clear();
+  for (const tab of nextTabs) tabs.set(tab.id, tab);
+  sendBrowserState();
+  persistTabSession();
+  return true;
+}
+
+function showTabManagementMenu(tab) {
+  if (tabs.get(tab.id) !== tab || !browserWindow || browserWindow.isDestroyed()) return;
+  const order = [...tabs.values()];
+  const index = order.indexOf(tab);
+  const menu = Menu.buildFromTemplate([
+    {
+      label: 'Duplicate Tab',
+      enabled: tabs.size < MAX_TABS,
+      click: () => duplicateTab(tab),
+    },
+    {
+      label: tab.pinned ? 'Unpin Tab' : 'Pin Tab',
+      click: () => changeTabPin(tab, !tab.pinned),
+    },
+    { type: 'separator' },
+    {
+      label: 'Move Tab Left',
+      enabled: index > 0 && order[index - 1].pinned === tab.pinned,
+      click: () => moveTabBy(tab, -1),
+    },
+    {
+      label: 'Move Tab Right',
+      enabled: index < order.length - 1 && order[index + 1].pinned === tab.pinned,
+      click: () => moveTabBy(tab, 1),
+    },
+    { type: 'separator' },
+    {
+      label: 'Close Other Tabs',
+      enabled: order.some((entry) => entry.id !== tab.id && !entry.pinned),
+      click: () => closeOtherTabs(tab),
+    },
+    {
+      label: 'Close Tabs to the Right',
+      enabled: order.slice(index + 1).some((entry) => !entry.pinned),
+      click: () => closeTabsToRight(tab),
+    },
+    { type: 'separator' },
+    {
+      label: 'Close Tab',
+      enabled: !tab.pinned,
+      click: () => closeTab(tab.id),
+    },
+  ]);
+  menu.popup({ window: browserWindow });
+}
+
+function createTab({
+  restoreUrl = null,
+  persist = true,
+  zoomFactor = browserZoomFactor,
+  pinned = false,
+} = {}) {
   if (!browserWindow || browserWindow.isDestroyed()) throw new Error('AETHER browser window is unavailable.');
   if (tabs.size >= MAX_TABS) throw new Error(`AETHER supports at most ${MAX_TABS} tabs.`);
+  if (!activeProfileId || browserSessionProfileId !== activeProfileId || !browserSession) {
+    throw new Error('AETHER could not verify the selected profile Chromium session.');
+  }
 
   const safeRestoreUrl = restoreUrl === null ? null : safeTabUrl(restoreUrl);
   if (restoreUrl !== null && !safeRestoreUrl) {
     throw new TypeError('The restored AETHER tab address is invalid.');
+  }
+  if (
+    typeof zoomFactor !== 'number'
+    || !Number.isFinite(zoomFactor)
+    || zoomFactor < MIN_ZOOM_FACTOR
+    || zoomFactor > MAX_ZOOM_FACTOR
+  ) {
+    throw new TypeError('The restored AETHER tab zoom is invalid.');
   }
   const id = randomUUID();
   const view = new WebContentsView({
@@ -250,10 +763,15 @@ function createTab({ restoreUrl = null, persist = true } = {}) {
     restoreUrl: safeRestoreUrl,
     error: null,
     lastBounds: null,
+    pinned: Boolean(pinned),
   };
   tabs.set(id, tab);
 
   const contents = view.webContents;
+  if (contents.getZoomFactor() !== zoomFactor) contents.setZoomFactor(zoomFactor);
+  contents.on('context-menu', (event, params = {}) => {
+    showTabContextMenu(tab, event, params);
+  });
   contents.on('before-input-event', (event, input) => {
     handleBrowserKeyInput(event, input, tab);
   });
@@ -360,12 +878,22 @@ function createTab({ restoreUrl = null, persist = true } = {}) {
 function closeTab(tabId) {
   if (!tabs.has(tabId)) return false;
   const tab = tabs.get(tabId);
+  if (tab.pinned) {
+    notifyNavigationError('Unpin this tab before closing it.');
+    return false;
+  }
+  closedTabHistory.push({
+    url: tab.url || null,
+    restoreUrl: tab.restoreUrl,
+    zoomFactor: tab.view.webContents.getZoomFactor(),
+  });
+  persistClosedTabHistory();
   const wasActive = activeTabId === tabId;
   if (wasActive && browserWindow && !browserWindow.isDestroyed()) {
     browserWindow.contentView.removeChildView(tab.view);
   }
   tabs.delete(tabId);
-  tab.view.webContents.close();
+  disposeTabWebContents(tab);
   if (tabs.size === 0) {
     createTab();
   } else if (wasActive) {
@@ -377,10 +905,80 @@ function closeTab(tabId) {
   return true;
 }
 
+function disposeTabWebContents(tab) {
+  const contents = tab.view.webContents;
+  if (contents.isDestroyed()) return;
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  contents.removeAllListeners();
+  contents.close();
+}
+
+function reopenClosedTab() {
+  const closedTab = closedTabHistory.take();
+  if (!closedTab) {
+    sendBrowserState();
+    return null;
+  }
+  persistClosedTabHistory();
+  try {
+    const restoreUrl = closedTab.url || closedTab.restoreUrl;
+    const id = createTabFromUserAction({
+      restoreUrl,
+      zoomFactor: closedTab.zoomFactor,
+    });
+    if (!id) {
+      closedTabHistory.push(closedTab);
+      persistClosedTabHistory();
+      sendBrowserState();
+      return null;
+    }
+    return id;
+  } catch (error) {
+    closedTabHistory.push(closedTab);
+    persistClosedTabHistory();
+    sendBrowserState();
+    throw error;
+  }
+}
+
 function activeTab() {
   const tab = tabs.get(activeTabId);
   if (!tab) throw new Error('No AETHER tab is active.');
   return tab;
+}
+
+async function loadTabHome(tab) {
+  if (tabs.get(tab.id) !== tab) return false;
+  tab.error = null;
+  try {
+    await tab.view.webContents.loadFile(NEW_TAB_HTML);
+    return true;
+  } catch (error) {
+    setTabError(tab, errorMessage(error));
+    return false;
+  }
+}
+
+function setActiveTabZoomFactor(factor) {
+  if (
+    typeof factor !== 'number'
+    || !Number.isFinite(factor)
+    || factor < MIN_ZOOM_FACTOR
+    || factor > MAX_ZOOM_FACTOR
+  ) {
+    throw new TypeError('Zoom must be between 50% and 200%.');
+  }
+  const tab = tabs.get(activeTabId);
+  if (!tab) throw new Error('No AETHER tab is active.');
+  const previousFactor = tab.view.webContents.getZoomFactor();
+  try {
+    tab.view.webContents.setZoomFactor(factor);
+    persistTabSession({ throwOnError: true });
+  } catch (error) {
+    tab.view.webContents.setZoomFactor(previousFactor);
+    throw error;
+  }
+  sendBrowserState();
 }
 
 function handleBrowserKeyInput(event, input, tab) {
@@ -389,7 +987,10 @@ function handleBrowserKeyInput(event, input, tab) {
   const key = input.key.toLowerCase();
   const contents = tab.view.webContents;
 
-  if (command && key === 'tab') {
+  if (command && input.shift && (key === 'pageup' || key === 'pagedown')) {
+    event.preventDefault();
+    moveTabBy(tab, key === 'pageup' ? -1 : 1);
+  } else if (command && key === 'tab') {
     event.preventDefault();
     const ids = [...tabs.keys()];
     const current = Math.max(0, ids.indexOf(tab.id));
@@ -398,6 +999,14 @@ function handleBrowserKeyInput(event, input, tab) {
   } else if (command && key === 'l') {
     event.preventDefault();
     browserWindow.webContents.send('aether:focus-address');
+  } else if (command && input.shift && key === 't') {
+    if (!closedTabHistory.length) return;
+    event.preventDefault();
+    try {
+      reopenClosedTab();
+    } catch (error) {
+      notifyNavigationError(errorMessage(error));
+    }
   } else if (command && key === 't') {
     event.preventDefault();
     createTabFromUserAction();
@@ -409,16 +1018,28 @@ function handleBrowserKeyInput(event, input, tab) {
     contents.reload();
   } else if (command && (key === '+' || key === '=')) {
     event.preventDefault();
-    contents.setZoomFactor(Math.min(2, contents.getZoomFactor() + 0.1));
-    sendBrowserState();
+    try {
+      setActiveTabZoomFactor(Math.min(2, contents.getZoomFactor() + 0.1));
+    } catch (error) {
+      setTabError(tab, errorMessage(error));
+    }
   } else if (command && key === '-') {
     event.preventDefault();
-    contents.setZoomFactor(Math.max(0.5, contents.getZoomFactor() - 0.1));
-    sendBrowserState();
+    try {
+      setActiveTabZoomFactor(Math.max(0.5, contents.getZoomFactor() - 0.1));
+    } catch (error) {
+      setTabError(tab, errorMessage(error));
+    }
   } else if (command && key === '0') {
     event.preventDefault();
-    contents.setZoomFactor(1);
-    sendBrowserState();
+    try {
+      setActiveTabZoomFactor(1);
+    } catch (error) {
+      setTabError(tab, errorMessage(error));
+    }
+  } else if (input.alt && key === 'home') {
+    event.preventDefault();
+    loadTabHome(tab);
   } else if (input.alt && input.key === 'ArrowLeft') {
     event.preventDefault();
     if (contents.canGoBack()) contents.goBack();
@@ -470,7 +1091,10 @@ async function startBrowserChildRuntime() {
 }
 
 function registerBrowserHandlers() {
-  registerHandler('aether:status', async () => statusPayload());
+  registerHandler('aether:status', async (...args) => {
+    if (args.length) throw new TypeError('AETHER status requests do not accept a payload.');
+    return browserStatusPayload();
+  });
   registerHandler('aether:create-tab', async () => {
     createTab();
     return { ok: true };
@@ -478,9 +1102,48 @@ function registerBrowserHandlers() {
   registerHandler('aether:activate-tab', async (id) => ({
     ok: setActiveTab(typeof id === 'string' ? id : ''),
   }));
+  registerHandler('aether:home', async (id) => {
+    if (typeof id !== 'string' || !TAB_ID_PATTERN.test(id)) {
+      return { ok: false, error: 'The tab identifier is invalid.' };
+    }
+    const tab = tabs.get(id);
+    if (!tab || id !== activeTabId) {
+      return { ok: false, error: 'The active tab changed. Try again.' };
+    }
+    return { ok: await loadTabHome(tab) };
+  });
   registerHandler('aether:close-tab', async (id) => ({
     ok: closeTab(typeof id === 'string' ? id : ''),
   }));
+  registerHandler('aether:tab-management-menu', async (id) => {
+    if (typeof id !== 'string' || !TAB_ID_PATTERN.test(id)) {
+      return { ok: false, error: 'The tab identifier is invalid.' };
+    }
+    const tab = tabs.get(id);
+    if (!tab) return { ok: false, error: 'This tab is no longer available.' };
+    showTabManagementMenu(tab);
+    return { ok: true };
+  });
+  registerHandler('aether:reorder-tabs', async (ids) => ({
+    ok: reorderTabs(ids),
+    error: 'The tab order is invalid or crosses the pinned-tab boundary.',
+  }));
+  registerHandler('aether:reopen-closed-tab', async () => {
+    const id = reopenClosedTab();
+    return id
+      ? { ok: true }
+      : { ok: false, error: 'There are no recently closed tabs to reopen.' };
+  });
+  registerHandler('aether:cancel-download', async (id) => {
+    if (typeof id !== 'string' || !DOWNLOAD_ID_PATTERN.test(id)) {
+      return { ok: false, error: 'The download identifier is invalid.' };
+    }
+    const entry = activeDownloads.get(id);
+    if (!entry) return { ok: false, error: 'This download is no longer active.' };
+    entry.item.cancel();
+    finalizeDownload(entry, 'cancelled');
+    return { ok: true };
+  });
   registerHandler('aether:layout', async (bounds) => {
     if (!bounds || typeof bounds !== 'object') throw new TypeError('AETHER viewport bounds are invalid.');
     updateActiveTabBounds(bounds);
@@ -494,6 +1157,9 @@ function registerBrowserHandlers() {
       return { ok: false, error: 'The active tab changed. Try again.' };
     }
 
+    if (result.kind === 'search' && !REMOTE_BROWSING_ENABLED) {
+      return { ok: false, error: 'Search is unavailable while remote browsing is disabled.' };
+    }
     const policy = navigationPolicy(result.url);
     if (!policy.allowed) return { ok: false, error: policy.reason };
     try {
@@ -562,9 +1228,9 @@ function registerBrowserHandlers() {
       data: aetherStore.addBookmark({ title, url }).bookmarks,
     };
   });
-  registerHandler('aether:update-bookmark', async (url, title) => ({
+  registerHandler('aether:update-bookmark', async (url, title, updatedUrl) => ({
     ok: true,
-    data: aetherStore.updateBookmark(url, title).bookmarks,
+    data: aetherStore.updateBookmark(url, title, updatedUrl).bookmarks,
   }));
   registerHandler('aether:remove-bookmark', async (url) => ({
     ok: true,
@@ -583,36 +1249,99 @@ function registerBrowserHandlers() {
     data: aetherStore.removeHistory(url).history,
   }));
   registerHandler('aether:zoom', async (factor, id) => {
-    if (typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0.5 || factor > 2) {
-      throw new TypeError('Zoom must be between 50% and 200%.');
-    }
     const tab = tabs.get(id);
     if (!tab || id !== activeTabId) {
       return { ok: false, error: 'The active tab changed. Try again.' };
     }
-    tab.view.webContents.setZoomFactor(factor);
-    sendBrowserState();
+    setActiveTabZoomFactor(factor);
     return { ok: true, factor };
+  });
+  registerHandler('aether:update-preference', async (key, value) => {
+    if (typeof key !== 'string') {
+      return { ok: false, error: 'The preference name is invalid.' };
+    }
+    const preferences = aetherStore.updatePreferences({ [key]: value });
+    if (key === 'defaultZoom') browserZoomFactor = preferences.defaultZoom;
+    sendBrowserState();
+    return { ok: true, preferences };
+  });
+  registerHandler('aether:reset-preferences', async () => {
+    const preferences = aetherStore.resetPreferences();
+    browserZoomFactor = preferences.defaultZoom;
+    sendBrowserState();
+    return { ok: true, preferences };
+  });
+  registerHandler('aether:clear-download-history', async () => {
+    const downloads = aetherStore.clearDownloadHistory();
+    sendBrowserState();
+    return { ok: true, downloads };
+  });
+  registerHandler('aether:create-profile', async (name) => {
+    if (typeof name !== 'string') {
+      return { ok: false, error: 'The profile name is invalid.' };
+    }
+    const profiles = profileManager.createProfile(name);
+    sendBrowserState();
+    return { ok: true, profiles };
+  });
+  registerHandler('aether:select-profile', async (id) => {
+    if (typeof id !== 'string') {
+      return { ok: false, error: 'The selected profile is invalid.' };
+    }
+    const profiles = profileManager.selectProfile(id);
+    sendBrowserState();
+    return { ok: true, profiles };
   });
 }
 
-function installBrowserSessionPolicy() {
-  if (browserSessionPolicyInstalled) return;
-  browserSession = session.fromPartition('persist:parmar-aether-browser-v1');
-  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  browserSession.setPermissionCheckHandler(() => false);
-  browserSession.on('will-download', (event, _item, webContents) => {
-    event.preventDefault();
-    const message = 'Downloads are disabled while remote browsing is restricted.';
-    const tab = [...tabs.values()].find((entry) => entry.view.webContents === webContents);
-    if (tab) setTabError(tab, message);
-    else notifyNavigationError(message);
-  });
-  browserSession.webRequest.onBeforeRequest(
-    { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
-    (_details, callback) => callback({ cancel: true }),
-  );
-  browserSessionPolicyInstalled = true;
+function installBrowserSessionPolicy(profileId) {
+  const partition = profilePartition(profileId);
+  if (failedProfileSessions.has(profileId)) {
+    throw new Error(`AETHER profile session initialization previously failed for ${profileId}.`, {
+      cause: failedProfileSessions.get(profileId),
+    });
+  }
+  const existing = profileSessions.get(profileId);
+  if (existing) return existing;
+
+  let selectedSession;
+  try {
+    selectedSession = session.fromPartition(partition);
+    if (
+      !selectedSession
+      || typeof selectedSession.setPermissionRequestHandler !== 'function'
+      || typeof selectedSession.setPermissionCheckHandler !== 'function'
+      || typeof selectedSession.on !== 'function'
+      || typeof selectedSession.webRequest?.onBeforeRequest !== 'function'
+    ) {
+      throw new TypeError('Electron returned an incomplete AETHER profile session.');
+    }
+    const owner = sessionOwners.get(selectedSession);
+    if (owner && owner !== profileId) {
+      throw new Error('Electron returned a Chromium session already assigned to another AETHER profile.');
+    }
+    sessionOwners.set(selectedSession, profileId);
+    selectedSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+      callback(permissionDecision(permission, details?.securityOrigin).allowed);
+    });
+    selectedSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => (
+      permissionDecision(permission, requestingOrigin).allowed
+    ));
+    selectedSession.on('will-download', (event, item, webContents) => {
+      handleDownloadRequest(event, item, webContents);
+    });
+    selectedSession.webRequest.onBeforeRequest(
+      { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
+      (_details, callback) => callback({ cancel: true }),
+    );
+    profileSessions.set(profileId, selectedSession);
+    return selectedSession;
+  } catch (error) {
+    failedProfileSessions.set(profileId, error);
+    throw new Error(`AETHER Chromium session initialization failed for profile ${profileId}.`, {
+      cause: error,
+    });
+  }
 }
 
 async function createBrowserWindow({ newTab = false } = {}) {
@@ -636,9 +1365,19 @@ async function createBrowserWindow({ newTab = false } = {}) {
     if (browserWindowReady) await browserWindowReady;
     return;
   }
-  installBrowserSessionPolicy();
-  aetherStore = new AetherStore(app.getPath('userData'));
+  if (!profileManager) profileManager = new AetherProfiles(app.getPath('userData'));
+  if (!activeProfileId) {
+    activeProfileId = profileManager.startupProfileId;
+    browserSession = installBrowserSessionPolicy(activeProfileId);
+    browserSessionProfileId = activeProfileId;
+  } else if (browserSessionProfileId !== activeProfileId || !browserSession) {
+    throw new Error('AETHER active profile and Chromium session do not match.');
+  }
+  aetherStore = new AetherStore(profileManager.profileDataPath(activeProfileId));
+  closedTabHistory = new ClosedTabHistory(aetherStore.closedTabsSnapshot());
   const savedSession = aetherStore.sessionSnapshot();
+  const preferences = aetherStore.preferencesSnapshot();
+  browserZoomFactor = preferences.defaultZoom;
   const createdWindow = new BrowserWindow({
     width: 1320,
     height: 880,
@@ -671,7 +1410,7 @@ async function createBrowserWindow({ newTab = false } = {}) {
   createdWindow.on('resize', () => updateActiveTabBounds());
   createdWindow.on('closed', () => {
     for (const tab of tabs.values()) {
-      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+      disposeTabWebContents(tab);
     }
     tabs.clear();
     activeTabId = null;
@@ -688,14 +1427,19 @@ async function createBrowserWindow({ newTab = false } = {}) {
         throw new Error('AETHER browser window closed during startup.');
       }
       createdWindow.show();
-      if (savedSession.tabs.length) {
-        const restoredIds = savedSession.tabs.map((restoreUrl) => (
-          createTab({ restoreUrl, persist: false })
+      if (preferences.startupBehavior === 'restore-session' && savedSession.tabs.length) {
+        const restoredIds = savedSession.tabs.map(({ url, pinned }, index) => (
+          createTab({
+            restoreUrl: url,
+            pinned,
+            zoomFactor: savedSession.zoomFactors[index] ?? savedSession.zoomFactor,
+            persist: false,
+          })
         ));
         setActiveTab(restoredIds[savedSession.activeIndex] || restoredIds[0], { persist: false });
         persistTabSession();
       } else {
-        createTab();
+        createTab({ persist: preferences.startupBehavior !== 'start-page' });
       }
     } catch (error) {
       if (!createdWindow.isDestroyed()) createdWindow.close();
@@ -768,6 +1512,25 @@ async function createControlWindow() {
 }
 
 function installBrowserMenu() {
+  reopenClosedTabMenuItem = {
+    label: 'Reopen Closed Tab',
+    accelerator: 'CommandOrControl+Shift+T',
+    enabled: false,
+    click: async () => {
+      try {
+        if (!browserWindow || browserWindow.isDestroyed()) {
+          await createBrowserWindow();
+        }
+        reopenClosedTab();
+      } catch (error) {
+        if (browserWindow && !browserWindow.isDestroyed()) {
+          notifyNavigationError(errorMessage(error));
+        } else {
+          console.error(`AETHER closed tab reopen failed: ${errorMessage(error)}`);
+        }
+      }
+    },
+  };
   const template = [{
     label: 'AETHER',
     submenu: [
@@ -779,6 +1542,7 @@ function installBrowserMenu() {
           });
         },
       },
+      reopenClosedTabMenuItem,
       {
         label: 'Close Tab',
         click: () => {

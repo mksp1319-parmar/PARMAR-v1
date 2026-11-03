@@ -48,8 +48,11 @@ test('browser preload exposes only the fixed, validated AETHER interface', async
   assert.deepEqual(Object.keys(api).sort(), [
     'activateTab', 'addBookmark', 'back', 'clearHistory', 'closeTab',
     'createTab', 'forward', 'getBookmarks', 'getHistory', 'getStatus',
-    'layout', 'navigate', 'onNavigationError', 'onState', 'reload',
-    'onFocusAddress', 'removeBookmark', 'removeHistory', 'stop', 'zoom',
+    'home', 'layout', 'navigate', 'onNavigationError', 'onState', 'reload',
+    'reopenClosedTab',
+    'cancelDownload', 'onFocusAddress', 'removeBookmark', 'removeHistory',
+    'reorderTabs', 'showTabManagementMenu', 'stop', 'zoom',
+    'clearDownloadHistory', 'createProfile', 'resetPreferences', 'selectProfile', 'updatePreference',
     'updateBookmark',
   ].sort());
 
@@ -57,11 +60,23 @@ test('browser preload exposes only the fixed, validated AETHER interface', async
   await api.navigate('https://example.com');
   await api.closeTab('../../unexpected');
   await api.closeTab('------------------------------------');
+  await api.home('../../invalid');
+  await api.updatePreference('startupBehavior', 'unsafe');
+  await api.updatePreference('homepage', 'https://remote.example/');
+  await api.updatePreference('__proto__', 'pollute');
   await api.zoom(10);
+  await api.createProfile('x'.repeat(81));
+  await api.createProfile(null);
+  await api.selectProfile('../../outside');
+  await api.cancelDownload('../../outside');
+  await api.showTabManagementMenu('../../invalid');
+  await api.reorderTabs(['../../invalid']);
+  await api.reorderTabs(['123e4567-e89b-12d3-a456-426614174000', '123e4567-e89b-12d3-a456-426614174000']);
   assert.equal(calls.length, 0);
 
   const tabId = '123e4567-e89b-12d3-a456-426614174000';
   await api.navigate('https://example.com', tabId);
+  await api.home(tabId);
   await api.reload('../../stale');
   await api.stop(undefined);
   await api.zoom(1, '../../stale');
@@ -69,30 +84,58 @@ test('browser preload exposes only the fixed, validated AETHER interface', async
     channel: 'aether:navigate',
     args: ['https://example.com', tabId],
   });
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
 
   await api.reload(tabId);
   await api.stop(tabId);
+  await api.home(tabId);
   await api.zoom(1.2, tabId);
+  await api.cancelDownload(tabId);
+  await api.showTabManagementMenu(tabId);
+  await api.reorderTabs([tabId]);
+  await api.reopenClosedTab();
+  await api.updatePreference('startupBehavior', 'start-page');
+  await api.updatePreference('defaultZoom', 1.3);
+  await api.updatePreference('appearance', 'dark');
+  await api.updatePreference('homepage', 'aether-start');
+  await api.resetPreferences();
+  await api.clearDownloadHistory();
+  await api.createProfile('Work');
+  await api.selectProfile('default');
   assert.deepEqual(calls.slice(1), [
+    { channel: 'aether:home', args: [tabId] },
     { channel: 'aether:reload', args: [tabId] },
     { channel: 'aether:stop', args: [tabId] },
+    { channel: 'aether:home', args: [tabId] },
     { channel: 'aether:zoom', args: [1.2, tabId] },
+    { channel: 'aether:cancel-download', args: [tabId] },
+    { channel: 'aether:tab-management-menu', args: [tabId] },
+    { channel: 'aether:reorder-tabs', args: [[tabId]] },
+    { channel: 'aether:reopen-closed-tab', args: [] },
+    { channel: 'aether:update-preference', args: ['startupBehavior', 'start-page'] },
+    { channel: 'aether:update-preference', args: ['defaultZoom', 1.3] },
+    { channel: 'aether:update-preference', args: ['appearance', 'dark'] },
+    { channel: 'aether:update-preference', args: ['homepage', 'aether-start'] },
+    { channel: 'aether:reset-preferences', args: [] },
+    { channel: 'aether:clear-download-history', args: [] },
+    { channel: 'aether:create-profile', args: ['Work'] },
+    { channel: 'aether:select-profile', args: ['default'] },
   ]);
 
   await api.addBookmark('../../stale');
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 18);
   await api.updateBookmark('javascript:alert(1)', 'Title');
   await api.updateBookmark('https://example.com/', '');
   await api.updateBookmark('https://user:pass@example.com/', 'Title');
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 18);
+  await api.updateBookmark('https://example.com/', 'Title', 'file:///etc/passwd');
   await api.addBookmark(tabId);
   await api.updateBookmark('https://example.com/', 'Renamed page');
   await api.removeBookmark('https://example.com/');
   await api.removeHistory('https://example.com/');
   await api.removeBookmark('javascript:alert(1)');
   await api.removeHistory('file:///tmp/unsafe');
-  assert.equal(calls.length, 8);
+  assert.equal(calls.length, 22);
   assert.deepEqual(calls.at(-1), {
     channel: 'aether:remove-history',
     args: ['https://example.com/'],
@@ -103,7 +146,7 @@ test('browser preload exposes only the fixed, validated AETHER interface', async
   });
   assert.deepEqual(calls.at(-3), {
     channel: 'aether:update-bookmark',
-    args: ['https://example.com/', 'Renamed page'],
+    args: ['https://example.com/', 'Renamed page', 'https://example.com/'],
   });
   assert.deepEqual(calls.at(-4), {
     channel: 'aether:add-bookmark',
@@ -121,6 +164,16 @@ test('preload event subscriptions can be removed and have no generic IPC method'
   assert.equal(listeners.has('aether:state'), false);
   assert.equal(Object.hasOwn(api, 'send'), false);
   assert.equal(calls.length, 0);
+});
+
+test('browser preload exposes privacy status only through the fixed read-only status call', async () => {
+  const { api, calls } = loadPreload('browser-preload.cjs');
+  await api.getStatus({ permission: 'media', allow: true });
+
+  assert.deepEqual(calls, [{ channel: 'aether:status', args: [] }]);
+  assert.equal(Object.hasOwn(api, 'setPermission'), false);
+  assert.equal(Object.hasOwn(api, 'requestPermission'), false);
+  assert.equal(Object.hasOwn(api, 'send'), false);
 });
 
 test('history traversal IPC requires a valid tab ID and forwards it for main-process freshness checks', async () => {

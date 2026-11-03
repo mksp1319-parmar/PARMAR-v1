@@ -217,7 +217,7 @@ test('browser chrome has a restrictive CSP and an explicit restricted-mode messa
   assert.match(html, /object-src 'none'/);
   assert.match(html, /data-action="bookmarks"/);
   assert.match(html, /data-action="focus-address"/);
-  assert.match(html, /aria-label="Home, open a new AETHER tab"/);
+  assert.match(html, /aria-label="Home, return to the AETHER start page"/);
   assert.match(html, /class="sidebar" aria-label="Browser shortcuts"/);
   assert.match(html, /Remote browsing is disabled because this installation has no verified operating-system network boundary/);
   assert.match(html, /id="brand-emblem"[^>]*aria-hidden="true"/);
@@ -234,33 +234,44 @@ test('Linux runtime workflow requires namespace, Electron UI, isolation, and scr
     path.resolve(desktopDirectory, '../../.github/workflows/aether-linux-runtime.yml'),
     'utf8',
   );
-  assert.match(workflow, /unshare --user --map-current-user --net -- \/bin\/sh -eu -c/);
-  assert.match(workflow, /cat \/proc\/self\/uid_map/);
-  assert.match(workflow, /cat \/proc\/self\/gid_map/);
-  assert.match(workflow, /\/proc\/self\/ns\/user/);
-  assert.match(workflow, /\/proc\/self\/ns\/net/);
-  assert.match(workflow, /test "\$1" -eq "\$AETHER_HOST_UID"/);
-  assert.match(workflow, /test "\$1" -eq "\$AETHER_HOST_GID"/);
-  assert.match(workflow, /AETHER_PARENT_USER_NAMESPACE/);
-  assert.match(workflow, /AETHER_PARENT_NETWORK_NAMESPACE/);
-  assert.match(workflow, /test "\$user_namespace" != "\$AETHER_PARENT_USER_NAMESPACE"/);
-  assert.match(workflow, /test "\$network_namespace" != "\$AETHER_PARENT_NETWORK_NAMESPACE"/);
-  assert.match(workflow, /test "\$3" -eq 1/);
-  assert.match(workflow, /Runner UID\/GID: %s\/%s/);
-  assert.doesNotMatch(workflow, /Runner identity:.*\$\(id\)/);
-  assert.match(workflow, /User\/network namespace creation and UID\/GID mapping succeeded/);
-  assert.match(workflow, /Namespace creation failed \(exit status %s\)/);
-  assert.match(workflow, /collect_namespace_audit_diagnostics dmesg --color=never/);
-  assert.match(workflow, /collect_namespace_audit_diagnostics journalctl -k --no-pager -n 500/);
-  assert.match(workflow, /unavailable or denied \(diagnostic exit %s\)/);
-  assert.match(workflow, /no matching namespace\/AppArmor records/i);
-  assert.match(workflow, /exit "\$status"/);
-  assert.match(workflow, /Likely cause: AppArmor unprivileged-userns restriction is enabled/);
-  assert.match(workflow, /No AppArmor or sysctl policy was changed/);
+  const preflight = fs.readFileSync(
+    path.resolve(desktopDirectory, '../../.github/scripts/aether-namespace-preflight.sh'),
+    'utf8',
+  );
+  assert.match(workflow, /bash \.github\/scripts\/aether-namespace-preflight\.sh/);
+  assert.match(preflight, /unshare --user --map-current-user --net -- \/bin\/sh -eu -c/);
+  assert.match(preflight, /cat \/proc\/self\/uid_map/);
+  assert.match(preflight, /cat \/proc\/self\/gid_map/);
+  assert.match(preflight, /\/proc\/self\/ns\/user/);
+  assert.match(preflight, /\/proc\/self\/ns\/net/);
+  assert.match(preflight, /test "\$1" -eq "\$AETHER_HOST_UID"/);
+  assert.match(preflight, /test "\$1" -eq "\$AETHER_HOST_GID"/);
+  assert.match(preflight, /AETHER_PARENT_USER_NAMESPACE/);
+  assert.match(preflight, /AETHER_PARENT_NETWORK_NAMESPACE/);
+  assert.match(preflight, /test "\$user_namespace" != "\$AETHER_PARENT_USER_NAMESPACE"/);
+  assert.match(preflight, /test "\$network_namespace" != "\$AETHER_PARENT_NETWORK_NAMESPACE"/);
+  assert.match(preflight, /set -e -o pipefail/);
+  assert.match(preflight, /Parent user namespace ID is empty/);
+  assert.match(preflight, /Parent network namespace ID is empty/);
+  assert.match(preflight, /Child user namespace ID is empty/);
+  assert.match(preflight, /Child network namespace ID is empty/);
+  assert.match(preflight, /test "\$3" -eq 1/);
+  assert.match(preflight, /Runner UID\/GID: %s\/%s/);
+  assert.doesNotMatch(preflight, /Runner identity:.*\$\(id\)/);
+  assert.match(preflight, /User\/network namespace creation and UID\/GID mapping succeeded/);
+  assert.match(preflight, /Namespace creation failed \(exit status %s\)/);
+  assert.match(preflight, /collect_namespace_audit_diagnostics dmesg --color=never/);
+  assert.match(preflight, /collect_namespace_audit_diagnostics journalctl -k --no-pager -n 500/);
+  assert.match(preflight, /unavailable or denied \(diagnostic exit %s\)/);
+  assert.match(preflight, /no matching namespace\/AppArmor records/i);
+  assert.match(preflight, /exit "\$status"/);
+  assert.match(preflight, /Likely cause: AppArmor unprivileged-userns restriction is enabled/);
+  assert.match(preflight, /No AppArmor or sysctl policy was changed/);
   assert.match(workflow, /network-namespace-check\.log/);
   assert.match(workflow, /Verify Electron GUI runtime prerequisites/);
   assert.doesNotMatch(workflow, /sysctl\s+-w|kernel\.apparmor_restrict_unprivileged_userns=0/);
   assert.doesNotMatch(workflow, /steps\.enable-userns/);
+  assert.match(workflow, /"\.github\/scripts\/\*\*"/);
   assert.match(workflow, /PARMAR_ELECTRON_RUNTIME_REQUIRED:\s*"1"/);
   assert.match(workflow, /PARMAR_AETHER_UI_SMOKE:\s*"1"/);
   assert.match(workflow, /PARMAR_AETHER_UI_SMOKE_REQUIRED:\s*"1"/);
@@ -278,24 +289,31 @@ test('Linux runtime workflow requires namespace, Electron UI, isolation, and scr
   assert.match(workflow, /uses:\s*actions\/upload-artifact@v4/);
 });
 
+test('hosted namespace candidate workflow is manual, read-only, and runs only the shared preflight', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(desktopDirectory, '../../.github/workflows/aether-namespace-preflight.yml'),
+    'utf8',
+  );
+  assert.match(workflow, /^\s{2}workflow_dispatch:\s*$/m);
+  assert.doesNotMatch(workflow, /^\s{2}(?:push|pull_request|schedule):/m);
+  assert.match(workflow, /permissions:\s*\n\s+contents:\s*read/);
+  assert.match(workflow, /runner:\s*\n\s+- ubuntu-22\.04\s*\n\s+- ubuntu-24\.04/);
+  assert.match(workflow, /bash \.github\/scripts\/aether-namespace-preflight\.sh/);
+  assert.match(workflow, /if:\s*always\(\)/);
+  assert.match(workflow, /if-no-files-found:\s*error/);
+  assert.doesNotMatch(workflow, /(?:sudo|apt-get|npm\s+(?:ci|install|run)|electron-builder|test:electron|AppImage|PARMAR_AETHER_UI_SMOKE)/i);
+  assert.doesNotMatch(workflow, /\$\{\{\s*secrets\./);
+});
+
 test('namespace preflight preserves unshare failure when optional kernel logs are denied', (context) => {
   if (process.platform !== 'linux') {
     context.skip('The hosted Linux namespace preflight is Linux-specific.');
     return;
   }
-  const workflow = fs.readFileSync(
-    path.resolve(desktopDirectory, '../../.github/workflows/aether-linux-runtime.yml'),
+  const script = fs.readFileSync(
+    path.resolve(desktopDirectory, '../../.github/scripts/aether-namespace-preflight.sh'),
     'utf8',
   );
-  const stepStart = workflow.indexOf('- name: Verify unprivileged network namespace creation');
-  assert.notEqual(stepStart, -1);
-  const runStart = workflow.indexOf('        run: |\n', stepStart);
-  const runEnd = workflow.indexOf('\n      - name:', runStart);
-  assert.ok(runStart > stepStart && runEnd > runStart);
-  const script = workflow.slice(runStart + '        run: |\n'.length, runEnd)
-    .split('\n')
-    .map((line) => (line.startsWith('          ') ? line.slice(10) : line))
-    .join('\n');
 
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-namespace-preflight-'));
   context.after(() => fs.rmSync(temporaryDirectory, { recursive: true, force: true }));
@@ -312,6 +330,14 @@ test('namespace preflight preserves unshare failure when optional kernel logs ar
   );
   createCommand('setpriv', 'exit 0');
   createCommand('ip', 'exit 0');
+  createCommand(
+    'cat',
+    `case "$1" in
+  /proc/self/uid_map) printf '%s %s 1\\n' "$AETHER_PREFLIGHT_HOST_UID" "$AETHER_PREFLIGHT_HOST_UID"; exit 0 ;;
+  /proc/self/gid_map) printf '%s %s 1\\n' "$AETHER_PREFLIGHT_HOST_GID" "$AETHER_PREFLIGHT_HOST_GID"; exit 0 ;;
+esac
+exec /bin/cat "$@"`,
+  );
   for (const command of ['dmesg', 'journalctl']) {
     createCommand(command, `echo "${command}: restricted kernel-log access" >&2\nexit 1`);
   }
@@ -319,12 +345,15 @@ test('namespace preflight preserves unshare failure when optional kernel logs ar
     .replaceAll('/usr/bin/unshare', fakeUnshare)
     .replaceAll('/usr/bin/setpriv', path.join(fakeBinDirectory, 'setpriv'))
     .replaceAll('/usr/sbin/ip', path.join(fakeBinDirectory, 'ip'));
-  const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', isolatedScript], {
+  const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', isolatedScript, 'preflight',
+    path.join(temporaryDirectory, 'network-namespace-check.log')], {
     encoding: 'utf8',
     env: {
       ...process.env,
       PATH: `${fakeBinDirectory}${path.delimiter}${process.env.PATH || ''}`,
       AETHER_EVIDENCE_DIR: temporaryDirectory,
+      AETHER_PREFLIGHT_HOST_UID: String(process.getuid()),
+      AETHER_PREFLIGHT_HOST_GID: String(process.getgid()),
     },
   });
   const log = fs.readFileSync(path.join(temporaryDirectory, 'network-namespace-check.log'), 'utf8');
@@ -335,6 +364,193 @@ test('namespace preflight preserves unshare failure when optional kernel logs ar
   assert.match(log, /dmesg: unavailable or denied/);
   assert.match(log, /journalctl: unavailable or denied/);
   assert.doesNotMatch(log, /User\/network namespace creation and UID\/GID mapping succeeded/);
+});
+
+function runNamespacePreflightFixture(context, {
+  failReadlink = '',
+  failParentMap = '',
+  parentUidMap = '1201 1201 1',
+  parentGidMap = '1301 1301 1',
+  parentUserNamespace = 'user:[100]',
+  parentNetworkNamespace = 'net:[200]',
+  childUserNamespace = 'user:[101]',
+  childNetworkNamespace = 'net:[201]',
+} = {}) {
+  const script = fs.readFileSync(
+    path.resolve(desktopDirectory, '../../.github/scripts/aether-namespace-preflight.sh'),
+    'utf8',
+  );
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aether-namespace-fixture-'));
+  context.after(() => fs.rmSync(temporaryDirectory, { recursive: true, force: true }));
+  const fakeBinDirectory = path.join(temporaryDirectory, 'bin');
+  fs.mkdirSync(fakeBinDirectory);
+  const writeExecutable = (name, contents) => {
+    const executable = path.join(fakeBinDirectory, name);
+    fs.writeFileSync(executable, `#!/bin/sh\n${contents}\n`, { mode: 0o700 });
+    return executable;
+  };
+  const fakeUnshare = writeExecutable(
+    'unshare',
+    'exec /usr/bin/env AETHER_PREFLIGHT_FIXTURE_CHILD=1 /bin/sh -eu -c "$8"',
+  );
+  writeExecutable(
+    'readlink',
+    `if [ "\${AETHER_PREFLIGHT_FIXTURE_CHILD:-0}" = 1 ]; then
+  case "$1" in
+    /proc/self/ns/user) printf '%s\\n' "\${AETHER_PREFLIGHT_CHILD_USER_NAMESPACE-}"; exit 0 ;;
+    /proc/self/ns/net) printf '%s\\n' "\${AETHER_PREFLIGHT_CHILD_NETWORK_NAMESPACE-}"; exit 0 ;;
+  esac
+else
+  if [ "\${AETHER_PREFLIGHT_FAIL_READLINK:-}" = "$1" ]; then
+    echo "fixture readlink failed for $1" >&2
+    exit 41
+  fi
+  case "$1" in
+    /proc/self/ns/user) printf '%s\\n' "\${AETHER_PREFLIGHT_PARENT_USER_NAMESPACE-}"; exit 0 ;;
+    /proc/self/ns/net) printf '%s\\n' "\${AETHER_PREFLIGHT_PARENT_NETWORK_NAMESPACE-}"; exit 0 ;;
+  esac
+fi
+exec /usr/bin/readlink "$@"`,
+  );
+  writeExecutable(
+    'cat',
+    `if [ "\${AETHER_PREFLIGHT_FIXTURE_CHILD:-0}" = 1 ]; then
+  case "$1" in
+    /proc/self/uid_map) printf '1201 1201 1\\n'; exit 0 ;;
+    /proc/self/gid_map) printf '1301 1301 1\\n'; exit 0 ;;
+  esac
+fi
+if [ "\${AETHER_PREFLIGHT_FAIL_PARENT_MAP:-}" = "$1" ]; then
+  echo "fixture could not read $1" >&2
+  exit 42
+fi
+case "$1" in
+  /proc/self/uid_map) printf '%s\\n' "\${AETHER_PREFLIGHT_PARENT_UID_MAP-}"; exit 0 ;;
+  /proc/self/gid_map) printf '%s\\n' "\${AETHER_PREFLIGHT_PARENT_GID_MAP-}"; exit 0 ;;
+esac
+exec /bin/cat "$@"`,
+  );
+  writeExecutable(
+    'id',
+    'case "$1" in -u) echo 1201 ;; -g) echo 1301 ;; *) exec /usr/bin/id "$@" ;; esac',
+  );
+  const isolatedScript = script.replaceAll('/usr/bin/unshare', fakeUnshare);
+  const logFile = path.join(temporaryDirectory, 'network-namespace-check.log');
+  const result = spawnSync(
+    'bash',
+    ['-e', '-o', 'pipefail', '-c', isolatedScript, 'preflight', logFile],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeBinDirectory}${path.delimiter}${process.env.PATH || ''}`,
+        AETHER_EVIDENCE_DIR: temporaryDirectory,
+        AETHER_PREFLIGHT_FAIL_READLINK: failReadlink,
+        AETHER_PREFLIGHT_FAIL_PARENT_MAP: failParentMap,
+        AETHER_PREFLIGHT_PARENT_UID_MAP: parentUidMap,
+        AETHER_PREFLIGHT_PARENT_GID_MAP: parentGidMap,
+        AETHER_PREFLIGHT_PARENT_USER_NAMESPACE: parentUserNamespace,
+        AETHER_PREFLIGHT_PARENT_NETWORK_NAMESPACE: parentNetworkNamespace,
+        AETHER_PREFLIGHT_CHILD_USER_NAMESPACE: childUserNamespace,
+        AETHER_PREFLIGHT_CHILD_NETWORK_NAMESPACE: childNetworkNamespace,
+      },
+    },
+  );
+  return {
+    result,
+    log: fs.readFileSync(logFile, 'utf8'),
+  };
+}
+
+for (const mapName of ['uid_map', 'gid_map']) {
+  const mapPath = `/proc/self/${mapName}`;
+  const mapOption = mapName === 'uid_map' ? 'parentUidMap' : 'parentGidMap';
+
+  test(`namespace preflight fails when parent ${mapName} cannot be read`, (context) => {
+    const { result, log } = runNamespacePreflightFixture(context, {
+      failParentMap: mapPath,
+    });
+
+    assert.equal(result.status, 42, `${result.stdout}\n${result.stderr}\n${log}`);
+    assert.match(log, new RegExp(`Parent ${mapName} could not be read \\(exit status 42\\)`));
+    assert.match(log, new RegExp(`fixture could not read ${mapPath.replaceAll('/', '\\/')}`));
+    assert.doesNotMatch(log, /Namespace command:/);
+  });
+
+  for (const [description, mapping, expectedDiagnostic] of [
+    ['is empty', '', /exactly one mapping line with three numeric fields/],
+    ['is malformed', '1201 invalid 1', /exactly one mapping line with three numeric fields/],
+    ['has multiple entries', '1201 1201 1\n1202 1202 1', /exactly one mapping line with three numeric fields/],
+    ['has a wrong mapped ID', '1202 1201 1', /mapping must be/],
+    ['has a wrong namespace ID', '1201 1202 1', /mapping must be/],
+    ['has a zero range', '1201 1201 0', /mapping must be/],
+    ['has a multi-ID range', '1201 1201 2', /mapping must be/],
+  ]) {
+    test(`namespace preflight rejects parent ${mapName} that ${description}`, (context) => {
+      const { result, log } = runNamespacePreflightFixture(context, {
+        [mapOption]: mapping,
+      });
+
+      assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}\n${log}`);
+      assert.match(log, expectedDiagnostic);
+      assert.doesNotMatch(log, /Namespace command:/);
+      assert.doesNotMatch(log, /User\/network namespace creation and UID\/GID mapping succeeded/);
+    });
+  }
+}
+
+for (const namespace of ['user', 'network']) {
+  test(`namespace preflight fails when parent ${namespace} namespace readlink fails`, (context) => {
+    const namespacePath = namespace === 'network'
+      ? '/proc/self/ns/net'
+      : '/proc/self/ns/user';
+    const { result, log } = runNamespacePreflightFixture(context, {
+      failReadlink: namespacePath,
+    });
+
+    assert.equal(result.status, 41, `${result.stdout}\n${result.stderr}\n${log}`);
+    assert.match(log, new RegExp(`fixture readlink failed for ${namespacePath.replaceAll('/', '\\/')}`));
+    assert.doesNotMatch(log, /User\/network namespace creation and UID\/GID mapping succeeded/);
+    assert.doesNotMatch(log, /Namespace command:/);
+  });
+}
+
+for (const namespace of ['user', 'network']) {
+  test(`namespace preflight rejects an empty parent ${namespace} namespace ID`, (context) => {
+    const values = namespace === 'user'
+      ? { parentUserNamespace: '' }
+      : { parentNetworkNamespace: '' };
+    const { result, log } = runNamespacePreflightFixture(context, values);
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}\n${log}`);
+    assert.match(log, new RegExp(`Parent ${namespace} namespace ID is empty`));
+    assert.doesNotMatch(log, /User\/network namespace creation and UID\/GID mapping succeeded/);
+    assert.doesNotMatch(log, /Namespace command:/);
+  });
+}
+
+for (const namespace of ['user', 'network']) {
+  test(`namespace preflight rejects an empty child ${namespace} namespace ID`, (context) => {
+    const values = namespace === 'user'
+      ? { childUserNamespace: '' }
+      : { childNetworkNamespace: '' };
+    const { result, log } = runNamespacePreflightFixture(context, values);
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}\n${log}`);
+    assert.match(log, new RegExp(`Child ${namespace} namespace ID is empty`));
+    assert.doesNotMatch(log, /User\/network namespace creation and UID\/GID mapping succeeded/);
+  });
+}
+
+test('namespace preflight accepts exact mappings and distinct non-empty namespace IDs', (context) => {
+  const { result, log } = runNamespacePreflightFixture(context);
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}\n${log}`);
+  assert.match(log, /User\/network namespace creation and UID\/GID mapping succeeded/);
+  assert.match(log, /Child uid_map: 1201 1201 1/);
+  assert.match(log, /Child gid_map: 1301 1301 1/);
+  assert.match(log, /Child user namespace: user:\[101\]/);
+  assert.match(log, /Child network namespace: net:\[201\]/);
 });
 
 test('AETHER browser chrome adapts to narrow window widths', () => {

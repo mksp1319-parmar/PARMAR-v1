@@ -1,0 +1,106 @@
+name: AETHER Chromium profile storage runtime verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  profile-storage-runtime:
+    name: Profile storage runtime (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Initialize test log
+        shell: bash
+        run: |
+          printf '%s\n' 'AETHER profile storage runtime harness has not run yet.' \
+            > "$RUNNER_TEMP/aether-profile-storage-runtime.log"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: PARMAR/desktop/package-lock.json
+
+      - name: Install Electron runtime and Xvfb libraries
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libgtk-3-0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libgbm1 \
+            libxkbcommon0 \
+            libasound2t64 \
+            libatspi2.0-0 \
+            xvfb \
+            xauth
+
+      - name: Install pinned desktop dependencies
+        working-directory: PARMAR/desktop
+        run: npm ci
+
+      - name: Verify runtime and harness prerequisites
+        shell: bash
+        working-directory: PARMAR/desktop
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const version = process.versions.node.split('.').map(Number);
+          const atLeastMinimum = version[0] > 22
+            || (version[0] === 22 && version[1] >= 12);
+          assert.ok(atLeastMinimum && version[0] < 25, `Unsupported Node version: ${process.versions.node}`);
+          assert.equal(require('./node_modules/electron/package.json').version, '44.7.0');
+          assert.equal(require('./security.cjs').REMOTE_BROWSING_ENABLED, false);
+
+          const packageJson = require('./package.json');
+          assert.equal(packageJson.scripts['test:profile-storage-runtime'], 'node --test test/profile-storage-runtime.test.cjs');
+          for (const file of [
+            'test/profile-storage-runtime.test.cjs',
+            'test/profile-storage-runtime-worker.cjs',
+          ]) {
+            require('node:fs').accessSync(file);
+          }
+          console.log(`Node ${process.versions.node}; Electron 44.7.0; remote browsing disabled; harness files present.`);
+          NODE
+
+          command -v xvfb-run
+          electron_binary="node_modules/electron/dist/electron"
+          test -x "$electron_binary"
+          ldd "$electron_binary" | tee "$RUNNER_TEMP/aether-electron-ldd.log"
+          if grep -F 'not found' "$RUNNER_TEMP/aether-electron-ldd.log"; then
+            echo "Electron has unresolved shared-library dependencies." >&2
+            exit 1
+          fi
+
+      - name: Run isolated profile storage harness
+        shell: bash
+        working-directory: PARMAR/desktop
+        run: |
+          set +e
+          xvfb-run -a env PARMAR_AETHER_PROFILE_STORAGE_RUNTIME=1 \
+            npm run test:profile-storage-runtime \
+            2>&1 | tee -a "$RUNNER_TEMP/aether-profile-storage-runtime.log"
+          test_status=${PIPESTATUS[0]}
+          exit "$test_status"
+
+      - name: Upload runtime test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aether-profile-storage-runtime-log
+          path: ${{ runner.temp }}/aether-profile-storage-runtime.log
+          if-no-files-found: warn
+          retention-days: 7

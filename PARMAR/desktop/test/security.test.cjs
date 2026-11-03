@@ -25,15 +25,19 @@ test('address input distinguishes HTTPS destinations from search text', () => {
   assert.deepEqual(resolveAddressInput('example.com/path'), {
     ok: true,
     url: 'https://example.com/path',
+    kind: 'url',
   });
   const search = resolveAddressInput('PARMAR browser');
   assert.equal(search.ok, true);
+  assert.equal(search.kind, 'search');
   assert.match(search.url, /^https:\/\/html\.duckduckgo\.com\/html\/\?q=/);
   assert.equal(resolveAddressInput('example.com:443/path').url, 'https://example.com/path');
+  assert.equal(resolveAddressInput('example.com:443/path').kind, 'url');
   assert.equal(
     resolveAddressInput('HTTPS://EXAMPLE.COM:443/a/../path#section').url,
     'https://example.com/path#section',
   );
+  assert.equal(resolveAddressInput('https://example.com/path').kind, 'url');
 });
 
 test('address input rejects unsafe schemes, credentials, and excessive input', () => {
@@ -41,6 +45,7 @@ test('address input rejects unsafe schemes, credentials, and excessive input', (
     'http://example.com',
     'javascript:alert(1)',
     'file:///etc/passwd',
+    'https://bad host',
     'https://user:pass@example.com',
     'x'.repeat(MAX_ADDRESS_LENGTH + 1),
   ]) {

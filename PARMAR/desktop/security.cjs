@@ -51,16 +51,18 @@ function resolveAddressInput(value) {
 
   const hasScheme = /^[a-z][a-z\d+.-]*:/i.test(input)
     && !/^[^/:\s]+:\d+(?:\/|$)/.test(input);
-  if (hasScheme && !/^https:\/\//i.test(input)) {
+  const isExplicitHttpsUrl = /^https:\/\//i.test(input);
+  if (hasScheme && !isExplicitHttpsUrl) {
     return { ok: false, reason: 'Only HTTPS web addresses are permitted.' };
   }
 
+  const isSearch = !isExplicitHttpsUrl && (/\s/.test(input) || !input.includes('.'));
   let target;
   try {
-    if (/\s/.test(input) || !input.includes('.')) {
+    if (isSearch) {
       target = new URL(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(input)}`);
     } else {
-      target = new URL(/^https:\/\//i.test(input) ? input : `https://${input}`);
+      target = new URL(isExplicitHttpsUrl ? input : `https://${input}`);
     }
   } catch {
     return { ok: false, reason: 'Enter a valid HTTPS address or search query.' };
@@ -75,7 +77,7 @@ function resolveAddressInput(value) {
     return { ok: false, reason: 'Only credential-free HTTPS addresses are permitted.' };
   }
 
-  return { ok: true, url: target.href };
+  return { ok: true, url: target.href, kind: isSearch ? 'search' : 'url' };
 }
 
 function navigationPolicy(url) {
