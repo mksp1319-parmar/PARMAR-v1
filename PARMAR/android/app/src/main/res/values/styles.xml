@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.Aether" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#E2A46F</item>
+        <item name="android:navigationBarColor">#141516</item>
+        <item name="android:statusBarColor">#141516</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

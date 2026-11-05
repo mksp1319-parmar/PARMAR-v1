@@ -63,10 +63,22 @@ async function createNewTab() {
 async function activateTabById(id) {
   try {
     const result = await api.activateTab(id);
-    if (!result?.ok) setMessage(result?.error || 'The tab could not be activated.', true);
+    if (!result?.ok) {
+      setMessage(result?.error || 'The tab could not be activated.', true);
+      return false;
+    }
+    return true;
   } catch (error) {
     setMessage(error?.message || 'The tab could not be activated.', true);
+    return false;
   }
+}
+
+function focusTabById(id, control = 'select') {
+  const tab = [...elements.tabs.children].find((entry) => entry.dataset.tabId === id);
+  const target = [...(tab?.children || [])]
+    .find((button) => button.dataset.tabControl === control);
+  (target && !target.disabled ? target : tab?.children[0])?.focus();
 }
 
 async function closeTabById(id) {
@@ -158,6 +170,8 @@ async function goHome() {
 }
 
 function renderTabs(forceAddressUpdate = false) {
+  const focusedTabId = document.activeElement?.dataset?.tabId || null;
+  const focusedTabControl = document.activeElement?.dataset?.tabControl || 'select';
   elements.tabs.replaceChildren();
   for (const tab of state.tabs) {
     const classes = ['tab'];
@@ -201,6 +215,9 @@ function renderTabs(forceAddressUpdate = false) {
     const button = element('button', 'tab-select');
     button.type = 'button';
     button.setAttribute('role', 'tab');
+    button.dataset.tabId = tab.id;
+    button.dataset.tabControl = 'select';
+    button.tabIndex = tab.active ? 0 : -1;
     button.setAttribute('aria-selected', String(tab.active));
     button.setAttribute('aria-controls', 'viewport');
     button.setAttribute('aria-label', `${tab.title}${tab.active ? ', active tab' : ''}`);
@@ -213,6 +230,8 @@ function renderTabs(forceAddressUpdate = false) {
     const close = element('button', 'tab-close');
     const menuButton = element('button', 'tab-menu');
     menuButton.type = 'button';
+    menuButton.dataset.tabId = tab.id;
+    menuButton.dataset.tabControl = 'menu';
     menuButton.setAttribute('aria-label', `Tab actions for ${tab.title || 'New Tab'}`);
     menuButton.title = 'Tab actions';
     menuButton.textContent = '···';
@@ -221,6 +240,8 @@ function renderTabs(forceAddressUpdate = false) {
       showTabManagementMenu(tab.id);
     });
     close.type = 'button';
+    close.dataset.tabId = tab.id;
+    close.dataset.tabControl = 'close';
     close.disabled = Boolean(tab.pinned);
     close.title = tab.pinned ? 'Unpin this tab before closing it' : 'Close tab';
     close.setAttribute('aria-label', tab.pinned
@@ -236,6 +257,17 @@ function renderTabs(forceAddressUpdate = false) {
     item.append(button, menuButton, close);
     elements.tabs.append(item);
   }
+  if (focusedTabId) {
+    const focusedTab = state.tabs.find((entry) => entry.id === focusedTabId);
+    const selectedTab = activeTab() || state.tabs[0];
+    if (!focusedTab) {
+      if (selectedTab) focusTabById(selectedTab.id);
+    } else if (focusedTabControl === 'select' && !focusedTab.active) {
+      if (selectedTab) focusTabById(selectedTab.id);
+    } else {
+      focusTabById(focusedTabId, focusedTabControl);
+    }
+  }
   const tab = activeTab();
   updateAddress(tab, forceAddressUpdate);
   elements.tabState.setAttribute('aria-busy', String(Boolean(tab?.isLoading)));
@@ -250,7 +282,7 @@ function renderTabs(forceAddressUpdate = false) {
     ? (tab.error || (tab.isLoading
       ? 'Loading…'
       : (tab.url || (tab.restoreUrl
-        ? 'Session page paused · submit its address to retry'
+        ? 'Session URL saved · page content is not stored; remote retry is unavailable'
         : 'New tab · remote browsing restricted'))))
     : 'No browser tab selected';
   elements.tabState.style.color = tab?.error ? '#e49b83' : '';
@@ -1189,7 +1221,36 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 elements.form.addEventListener('submit', submitAddress);
 elements.tabs.addEventListener('scroll', updateTabScrollControls);
 
-window.addEventListener('keydown', (event) => {
+window.addEventListener('keydown', async (event) => {
+  const tabId = event.target?.dataset?.tabId;
+  const tabControl = event.target?.dataset?.tabControl;
+  const tabIndex = state.tabs.findIndex((tab) => tab.id === tabId);
+  if (
+    tabControl === 'select'
+    && tabIndex !== -1
+    && !event.altKey
+    && !event.ctrlKey
+    && !event.metaKey
+    && !event.shiftKey
+    && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)
+  ) {
+    event.preventDefault();
+    const lastIndex = state.tabs.length - 1;
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? lastIndex
+        : (tabIndex + (event.key === 'ArrowLeft' ? -1 : 1) + state.tabs.length)
+          % state.tabs.length;
+    const nextTab = state.tabs[nextIndex];
+    if (nextTab.id !== tabId && await activateTabById(nextTab.id)) {
+      focusTabById(nextTab.id);
+    } else {
+      focusTabById(tabId);
+    }
+    return;
+  }
+
   const command = event.ctrlKey || event.metaKey;
   if (command && event.key === 'Tab') {
     event.preventDefault();

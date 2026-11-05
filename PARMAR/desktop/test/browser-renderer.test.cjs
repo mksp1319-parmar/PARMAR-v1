@@ -50,6 +50,7 @@ class MockElement {
 
   focus() {
     this.focused = true;
+    if (this.ownerDocument) this.ownerDocument.activeElement = this;
   }
 
   select() {
@@ -270,11 +271,20 @@ function createRenderer({ statusRequest = Promise.resolve({ remoteBrowsing: fals
   const document = {
     activeElement: null,
     documentElement: rootElement,
-    createElement: (tagName) => new MockElement(tagName),
-    createElementNS: (_namespace, tagName) => new MockElement(tagName),
+    createElement: (tagName) => {
+      const element = new MockElement(tagName);
+      element.ownerDocument = document;
+      return element;
+    },
+    createElementNS: (_namespace, tagName) => {
+      const element = new MockElement(tagName);
+      element.ownerDocument = document;
+      return element;
+    },
     querySelector: (selector) => elements.get(selector) || new MockElement(),
     querySelectorAll: () => actions,
   };
+  for (const element of elements.values()) element.ownerDocument = document;
   const window = {
     aetherDesktop: api,
     addEventListener(type, listener) {
@@ -308,6 +318,7 @@ function createRenderer({ statusRequest = Promise.resolve({ remoteBrowsing: fals
     actions,
     api,
     calls,
+    document,
     elements,
     rootElement,
     historyCalls,
@@ -473,6 +484,205 @@ test('tab drag reorders within pin groups and tab controls expose accessible man
   await renderer.actions.find((button) => button.dataset.action === 'tabs-scroll-right').click();
   assert.equal(renderer.elements.get('#tabs').scrollLeft > 0, true);
   assert.equal(renderer.actions.find((button) => button.dataset.action === 'tabs-scroll-left').disabled, false);
+});
+
+test('tablist arrow keys navigate and wrap in the existing pinned and unpinned order', async () => {
+  const renderer = createRenderer();
+  const tabs = [
+    { id: 'pinned-one', title: 'Pinned one', active: true, pinned: true },
+    { id: 'pinned-two', title: 'Pinned two', active: false, pinned: true },
+    { id: 'regular-one', title: 'Regular one', active: false, pinned: false },
+    { id: 'regular-two', title: 'Regular two', active: false, pinned: false },
+  ];
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs,
+    stored: { bookmarks: [], history: [] },
+  });
+  const focusTab = (id) => {
+    const wrapper = renderer.elements.get('#tabs').children
+      .find((entry) => entry.dataset.tabId === id);
+    const button = wrapper.children[0];
+    renderer.document.activeElement = button;
+    return button;
+  };
+
+  await renderer.keydown({ key: 'ArrowLeft', target: focusTab('pinned-one') });
+  assert.deepEqual(renderer.tabCalls, [['activate', 'regular-two']]);
+  assert.equal(renderer.elements.get('#tabs').children[3].children[0].focused, true);
+
+  await renderer.keydown({ key: 'ArrowRight', target: focusTab('regular-two') });
+  assert.deepEqual(renderer.tabCalls.at(-1), ['activate', 'pinned-one']);
+  await renderer.keydown({ key: 'ArrowRight', target: focusTab('pinned-one') });
+  assert.deepEqual(renderer.tabCalls.at(-1), ['activate', 'pinned-two']);
+  await renderer.keydown({ key: 'ArrowLeft', target: focusTab('pinned-two') });
+  assert.deepEqual(renderer.tabCalls.at(-1), ['activate', 'pinned-one']);
+
+  assert.deepEqual(tabs.map(({ id }) => id), [
+    'pinned-one',
+    'pinned-two',
+    'regular-one',
+    'regular-two',
+  ]);
+  assert.deepEqual(
+    renderer.elements.get('#tabs').children.map((entry) => entry.dataset.tabId),
+    tabs.map(({ id }) => id),
+  );
+  assert.equal(renderer.tabCalls.every(([action]) => action === 'activate'), true);
+});
+
+test('tablist Home and End select the first and last tabs without mutating tab management', async () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [
+      { id: 'pinned', title: 'Pinned', active: false, pinned: true },
+      { id: 'regular-one', title: 'Regular one', active: true, pinned: false },
+      { id: 'regular-two', title: 'Regular two', active: false, pinned: false },
+    ],
+    stored: { bookmarks: [], history: [] },
+  });
+  const focusedButton = (index) => {
+    const button = renderer.elements.get('#tabs').children[index].children[0];
+    renderer.document.activeElement = button;
+    return button;
+  };
+
+  await renderer.keydown({ key: 'Home', target: focusedButton(1) });
+  assert.deepEqual(renderer.tabCalls, [['activate', 'pinned']]);
+  assert.equal(renderer.elements.get('#tabs').children[0].children[0].focused, true);
+
+  await renderer.keydown({ key: 'End', target: focusedButton(0) });
+  assert.deepEqual(renderer.tabCalls.at(-1), ['activate', 'regular-two']);
+  assert.equal(renderer.tabCalls.every(([action]) => action === 'activate'), true);
+});
+
+test('tab navigation keys do not switch tabs from tab menu or close controls', async () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [
+      { id: 'first', title: 'First', active: true, pinned: false },
+      { id: 'second', title: 'Second', active: false, pinned: false },
+    ],
+    stored: { bookmarks: [], history: [] },
+  });
+  const controls = renderer.elements.get('#tabs').children
+    .flatMap((tab) => [tab.children[1], tab.children[2]]);
+
+  for (const control of controls) {
+    for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
+      assert.equal(
+        await renderer.keydown({ key, target: control }),
+        false,
+        `${key} should not be consumed by ${control.dataset.tabControl} control`,
+      );
+    }
+  }
+  assert.deepEqual(renderer.tabCalls, []);
+});
+
+test('tablist navigation preserves focus and selected accessibility state after state updates', async () => {
+  const renderer = createRenderer();
+  const tabs = [
+    { id: 'first', title: 'First', active: true, pinned: false },
+    { id: 'second', title: 'Second', active: false, pinned: false },
+  ];
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs,
+    stored: { bookmarks: [], history: [] },
+  });
+  const firstButton = renderer.elements.get('#tabs').children[0].children[0];
+  renderer.document.activeElement = firstButton;
+
+  await renderer.keydown({ key: 'ArrowRight', target: firstButton });
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [
+      { ...tabs[0], active: false },
+      { ...tabs[1], active: true },
+    ],
+    stored: { bookmarks: [], history: [] },
+  });
+
+  const [first, second] = renderer.elements.get('#tabs').children.map(
+    (wrapper) => wrapper.children[0],
+  );
+  assert.equal(first.attributes['aria-selected'], 'false');
+  assert.equal(first.tabIndex, -1);
+  assert.equal(second.attributes['aria-selected'], 'true');
+  assert.equal(second.tabIndex, 0);
+  assert.equal(second.focused, true);
+});
+
+test('tablist navigation safely handles empty and single-tab states', async () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [],
+    stored: { bookmarks: [], history: [] },
+  });
+  assert.equal(await renderer.keydown({ key: 'ArrowLeft', target: null }), false);
+  assert.equal(await renderer.keydown({ key: 'Home', target: null }), false);
+  assert.deepEqual(renderer.tabCalls, []);
+
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [{ id: 'only', title: 'Only tab', active: true, pinned: true }],
+    stored: { bookmarks: [], history: [] },
+  });
+  const button = renderer.elements.get('#tabs').children[0].children[0];
+  renderer.document.activeElement = button;
+  for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
+    assert.equal(await renderer.keydown({ key, target: button }), true);
+  }
+  assert.equal(button.focused, true);
+  assert.deepEqual(renderer.tabCalls, []);
+});
+
+test('tab focus stays valid when the focused tab is removed or selection changes', () => {
+  const renderer = createRenderer();
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [
+      { id: 'first', title: 'First', active: true, pinned: false },
+      { id: 'second', title: 'Second', active: false, pinned: false },
+    ],
+    stored: { bookmarks: [], history: [] },
+  });
+  const firstButton = renderer.elements.get('#tabs').children[0].children[0];
+  renderer.document.activeElement = firstButton;
+
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [{ id: 'second', title: 'Second', active: true, pinned: false }],
+    stored: { bookmarks: [], history: [] },
+  });
+  let secondTab = renderer.elements.get('#tabs').children[0];
+  assert.equal(secondTab.children[0].focused, true);
+  assert.equal(renderer.document.activeElement, secondTab.children[0]);
+
+  renderer.document.activeElement = secondTab.children[1];
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [{ id: 'second', title: 'Second', active: true, pinned: true }],
+    stored: { bookmarks: [], history: [] },
+  });
+  secondTab = renderer.elements.get('#tabs').children[0];
+  assert.equal(secondTab.children[1].focused, true);
+  assert.equal(renderer.document.activeElement, secondTab.children[1]);
+
+  renderer.document.activeElement = secondTab.children[0];
+  renderer.setState({
+    remoteBrowsing: false,
+    tabs: [
+      { id: 'second', title: 'Second', active: false, pinned: true },
+      { id: 'third', title: 'Third', active: true, pinned: false },
+    ],
+    stored: { bookmarks: [], history: [] },
+  });
+  assert.equal(renderer.elements.get('#tabs').children[1].children[0].focused, true);
 });
 
 test('Downloads panel displays validated progress and exposes cancellation only while active', async () => {
@@ -1059,7 +1269,10 @@ test('restored session addresses are shown as paused and are not navigated autom
   });
 
   assert.equal(renderer.elements.get('#address').value, 'https://saved.example/path');
-  assert.match(renderer.elements.get('#tab-state').textContent, /Session page paused/);
+  assert.equal(
+    renderer.elements.get('#tab-state').textContent,
+    'Session URL saved · page content is not stored; remote retry is unavailable',
+  );
   assert.deepEqual(renderer.calls, []);
 });
 

@@ -50,11 +50,16 @@ jobs:
         working-directory: PARMAR/desktop
         run: npm ci
 
+      - name: Provision pinned Electron runtime
+        working-directory: PARMAR/desktop
+        run: node node_modules/electron/install.js
+
       - name: Verify runtime and harness prerequisites
         shell: bash
         working-directory: PARMAR/desktop
         run: |
           set -euo pipefail
+          node scripts/verify-electron-runtime.cjs
 
           node <<'NODE'
           const assert = require('node:assert/strict');
@@ -93,8 +98,14 @@ jobs:
           xvfb-run -a env PARMAR_AETHER_PROFILE_STORAGE_RUNTIME=1 \
             npm run test:profile-storage-runtime \
             2>&1 | tee -a "$RUNNER_TEMP/aether-profile-storage-runtime.log"
-          test_status=${PIPESTATUS[0]}
-          exit "$test_status"
+          pipeline_status=("${PIPESTATUS[@]}")
+          harness_status=${pipeline_status[0]}
+          tee_status=${pipeline_status[1]}
+          # Preserve the harness failure when both the test and log capture fail.
+          if (( harness_status != 0 )); then
+            exit "$harness_status"
+          fi
+          exit "$tee_status"
 
       - name: Upload runtime test log
         if: always()

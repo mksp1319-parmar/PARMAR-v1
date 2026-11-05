@@ -2798,3 +2798,98 @@ The five full-suite skips were:
    restarts` — its `PARMAR_AETHER_PROFILE_STORAGE_RUNTIME=1` opt-in was
    intentionally not set. This harness must be run separately to produce
    runtime storage evidence.
+
+## A68 workflow validation and evidence status (2026-11-03)
+
+This review used the worktree at HEAD
+`477d63656e760655fe23c2dc676031036840440b`. The AETHER workflows and desktop
+test file contain uncommitted changes; this section records source and local
+test evidence only. No GitHub Actions run was dispatched.
+
+### Local verification
+
+| Check | Result | Evidence boundary |
+|---|---|---|
+| YAML syntax | Both AETHER workflow files parsed with the already-installed `js-yaml` dependency. | Syntax parsing does not validate GitHub Actions schema, contexts, or runtime semantics. |
+| Workflow review and assertions | Source review confirmed the trigger definitions, read-only permissions, job timeouts, and dependency steps. Startup-config assertions statically check the standalone manual-only trigger and permissions, Perl ordering before both preflight calls, and the standalone privileged/package-command allowlist. | Static source checks do not execute workflow steps or fully validate Actions semantics. |
+| Perl | Local `/usr/bin/perl` loaded `Fcntl` constants `O_WRONLY`, `O_CREAT`, `O_NOFOLLOW`, and `O_NONBLOCK`. | This proves availability only in this environment, not package installation on a hosted runner. |
+| Script and runtime verifier syntax | `bash -n` and `node --check` passed. | Syntax only. |
+| Namespace preflight tests | 75 passed, 0 failed. Fixtures cover bounded diagnostics, log-path rejection, exit precedence, signals, and cleanup. | Fixture tests do not prove host kernel namespace creation or isolation. |
+| Startup-config suite | 83 passed, 0 failed. | Local suite only. |
+| Electron runtime provisioning tests | 12 passed, 0 failed. | These tests do not launch Electron. |
+
+Commands and exit codes:
+
+```text
+REMOTE_BROWSING_ENABLED=false node -e 'const fs=require("node:fs"); const yaml=require("./PARMAR/desktop/node_modules/js-yaml"); for (const file of process.argv.slice(1)) { yaml.load(fs.readFileSync(file,"utf8")); console.log(`${file}: YAML syntax parsed`); }' .github/workflows/aether-linux-runtime.yml .github/workflows/aether-namespace-preflight.yml
+exit 0
+
+perl -MFcntl=O_WRONLY,O_CREAT,O_NOFOLLOW,O_NONBLOCK -e 'print "Perl Fcntl flags available\n"'
+exit 0
+
+REMOTE_BROWSING_ENABLED=false bash -n .github/scripts/aether-namespace-preflight.sh
+exit 0
+
+REMOTE_BROWSING_ENABLED=false node --check PARMAR/desktop/scripts/verify-electron-runtime.cjs
+exit 0
+
+REMOTE_BROWSING_ENABLED=false node --check PARMAR/desktop/test/startup-config.test.cjs
+exit 0
+
+REMOTE_BROWSING_ENABLED=false node --test --test-name-pattern='namespace preflight' PARMAR/desktop/test/startup-config.test.cjs
+exit 0 — 75 passed, 0 failed, 0 skipped
+
+cd PARMAR/desktop && REMOTE_BROWSING_ENABLED=false node --test test/startup-config.test.cjs
+exit 0 — 83 passed, 0 failed, 0 skipped
+
+cd PARMAR/desktop && REMOTE_BROWSING_ENABLED=false node --test test/electron-runtime-provisioning.test.cjs
+exit 0 — 12 passed, 0 failed, 0 skipped
+
+REMOTE_BROWSING_ENABLED=false git diff --check
+exit 0
+```
+
+`actionlint`, `yamllint`, and `yq` were not installed. The existing local
+`js-yaml` dependency parses syntax but is not an Actions semantic validator;
+no dependency was installed. Workflow expression and step structure were
+inspected locally, but formal Actions schema/expression validation remains
+pending.
+
+### Hosted-runner evidence still required
+
+After the reviewed workflow changes are published, run the relevant workflows
+on an authorized GitHub-hosted runner for that exact revision, then retain the
+workflow run URL, job logs, and uploaded artifacts. Evidence must show:
+
+- The apt Perl installation step completed and the dependent preflight step
+  actually ran.
+- The preflight log records successful namespace creation, exact child
+  UID/GID mappings, and child user/network namespace identities distinct from
+  the parent. A failed or unsupported runner must remain failed and preserve
+  diagnostics; it must not report success.
+- The Linux runtime job's required live process checks show the production
+  Electron/Chromium processes in the intended non-host network namespace,
+  loopback down, only the loopback interface, empty IPv4/IPv6 routes, zero
+  effective capabilities, and `no_new_privs`. Retain the relevant focused
+  test logs, full-suite result, and screenshot/evidence artifact.
+- If an unsupported hosted runner is part of the compatibility claim, retain
+  a run on that runner showing the expected fail-closed nonzero result and
+  diagnostic artifact. Local fixtures are not a substitute for that runner
+  behavior.
+
+No hosted workflow run occurred during A68. YAML parsing and local tests do
+not establish package installation or kernel behavior on GitHub Actions.
+
+### Independent production verification still required
+
+An independent review must verify the packaged Electron renderer and
+NetworkService process boundary and establish that remote browsing remains
+blocked until isolation is approved. Production claims require evidence from
+the actual packaged runtime and controlled probes with clear process/request
+attribution; source assertions, mocked fixtures, or UI-policy rejection alone
+do not prove kernel-level packet blocking. Preserve the existing Electron
+sandbox and fail-closed behavior.
+
+**Status: `REMOTE_BROWSING_ENABLED` remains `false`. Production is not marked
+ready.** Hosted-runner evidence, Actions semantic validation, and independent
+production-boundary verification remain pending.

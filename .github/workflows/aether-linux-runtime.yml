@@ -76,6 +76,7 @@ jobs:
             libnss3 \
             libpango-1.0-0 \
             libpangocairo-1.0-0 \
+            perl \
             libx11-xcb1 \
             libxcomposite1 \
             libxdamage1 \
@@ -198,14 +199,15 @@ jobs:
         working-directory: PARMAR/desktop
         run: npm ci
 
-      - name: Verify Electron runtime libraries and prepare AppImage tools
+      - name: Provision pinned Electron runtime and verify runtime libraries
         working-directory: PARMAR/desktop
         env:
           AETHER_EVIDENCE_DIR: ${{ steps.outputs.outputs.evidence_dir }}
         run: |
           set -o pipefail
+          node node_modules/electron/install.js
+          node scripts/verify-electron-runtime.cjs
           electron_binary="node_modules/electron/dist/electron"
-          test -x "$electron_binary"
           if ! ldd "$electron_binary" 2>&1 | tee "$AETHER_EVIDENCE_DIR/electron-runtime-libraries.log"; then
             echo "Could not inspect the pinned Electron runtime libraries."
             exit 1
@@ -242,6 +244,7 @@ jobs:
             /usr/bin/xdotool version
             /usr/bin/convert -version | head -n 1
           } | tee "$AETHER_EVIDENCE_DIR/runtime-tool-versions.log"
+          node --test test/electron-runtime-provisioning.test.cjs
           node - <<'NODE' 2>&1 | tee "$AETHER_EVIDENCE_DIR/appimage-toolset.log"
           const { Arch } = require('builder-util');
           const { getAppImageTools } = require('app-builder-lib/out/toolsets/linux');
