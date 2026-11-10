@@ -51,7 +51,7 @@ object ParmarVokkiCopy {
     const val VOKKI_LIMITS =
         "VOKKI suggestions do not approve browser actions. Any future approval is explicit and limited to the action shown. Native Android voice input, wake-word detection and live assistant integration are not implemented in this milestone."
     const val AETHER_ROLE =
-        "AETHER is PARMAR's browser project. This Android build is currently an offline native shell; it does not load websites or provide remote browsing."
+        "AETHER is PARMAR's browser project. This Android build is currently an offline native shell; it does not load websites and does not provide remote browsing."
 
     val sections = listOf(
         ProductInformationSection("PARMAR", PARMAR_NAME),
@@ -69,13 +69,13 @@ fun ParmarVokkiScreen(onHome: () -> Unit) {
     val emblem = remember(context) { CanonicalEmblem.load(context) }
 
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp),
+        modifier = Modifier.fillMaxSize(),
     ) {
+        val horizontalPadding = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(horizontal = horizontalPadding)
                 .widthIn(max = if (maxWidth >= 720.dp) 760.dp else Dp.Unspecified)
                 .align(Alignment.TopCenter)
                 .verticalScroll(rememberScrollState())

@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +38,7 @@ import org.parmar.aether.data.ClearResult
 import org.parmar.aether.data.ClearStatus
 import org.parmar.aether.ui.theme.AetherColors
 import org.parmar.aether.ui.theme.AetherSpacing
+import kotlinx.coroutines.launch
 
 data class PrivacySection(
     val title: String,
@@ -45,7 +47,7 @@ data class PrivacySection(
 
 object PrivacyCopy {
     const val OFFLINE =
-        "This offline-shell milestone does not load websites or make browsing requests."
+        "This offline-shell milestone does not load websites and does not make browsing requests."
     const val PERMISSIONS =
         "The Android source manifest currently declares no permissions. This describes the manifest only; it does not verify every runtime or device behavior."
     const val LOCAL_DATA =
@@ -77,20 +79,22 @@ object PrivacyCopy {
 fun PrivacyScreen(
     onSettings: () -> Unit,
     onHome: () -> Unit,
-    onClearCategory: (String) -> ClearResult,
-    onClearAll: () -> List<ClearResult>,
+    onClearCategory: suspend (String) -> ClearResult,
+    onClearAll: suspend () -> List<ClearResult>,
 ) {
+    val scope = rememberCoroutineScope()
     var pendingCategory by remember { mutableStateOf<String?>(null) }
     var results by remember { mutableStateOf<List<ClearResult>>(emptyList()) }
     var showClearAllConfirmation by remember { mutableStateOf(false) }
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp),
+        modifier = Modifier.fillMaxSize(),
     ) {
+        val availableWidth = maxWidth
+        val horizontalPadding = if (availableWidth >= 720.dp) 48.dp else AetherSpacing.large.dp
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(horizontal = horizontalPadding)
                 .widthIn(max = if (maxWidth >= 720.dp) 720.dp else Dp.Unspecified)
                 .align(Alignment.TopCenter)
                 .verticalScroll(rememberScrollState())
@@ -111,11 +115,11 @@ fun PrivacyScreen(
                     color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = FontWeight.SemiBold,
                 )
-                if (maxWidth >= 400.dp) {
+                if (availableWidth >= 400.dp) {
                     PrivacyNavigationButtons(onSettings, onHome)
                 }
             }
-            if (maxWidth < 400.dp) {
+            if (availableWidth < 400.dp) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
@@ -171,7 +175,13 @@ fun PrivacyScreen(
             results.forEach { result ->
                 ClearResultCard(
                     result = result,
-                    onRetry = { results = results.map { if (it.category == result.category) onClearCategory(it.category) else it } },
+                    onRetry = {
+                        scope.launch {
+                            results = results.map {
+                                if (it.category == result.category) onClearCategory(it.category) else it
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -184,8 +194,10 @@ fun PrivacyScreen(
             text = { Text("This permanently removes the selected local $category metadata from AETHER.") },
             confirmButton = {
                 TextButton(onClick = {
-                    results = listOf(onClearCategory(category))
-                    pendingCategory = null
+                    scope.launch {
+                        results = listOf(onClearCategory(category))
+                        pendingCategory = null
+                    }
                 }) {
                     Text("Clear $category")
                 }
@@ -205,8 +217,10 @@ fun PrivacyScreen(
             text = { Text("This removes tab descriptors and bookmarks. History and Downloads are not included because they are empty.") },
             confirmButton = {
                 TextButton(onClick = {
-                    results = onClearAll()
-                    showClearAllConfirmation = false
+                    scope.launch {
+                        results = onClearAll()
+                        showClearAllConfirmation = false
+                    }
                 }) {
                     Text("Clear local data")
                 }

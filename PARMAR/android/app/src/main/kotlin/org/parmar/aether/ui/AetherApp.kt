@@ -19,9 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -30,6 +28,7 @@ import org.parmar.aether.data.AetherStorageException
 import org.parmar.aether.data.ClearResult
 import org.parmar.aether.data.ClearStatus
 import org.parmar.aether.data.CreateTabResult
+import org.parmar.aether.data.onDatabaseDispatcher
 import org.parmar.aether.ui.bookmarks.BookmarkRepository
 import org.parmar.aether.ui.bookmarks.BookmarksScreen
 import org.parmar.aether.ui.tabs.LocalTabsSession
@@ -53,7 +52,7 @@ fun AetherApp() {
 
     suspend fun loadLocalData() {
         try {
-            val storedData = withContext(Dispatchers.IO) {
+            val storedData = onDatabaseDispatcher {
                 bookmarkRepository.list() to localDatabase.tabSession()
             }
             bookmarks = storedData.first
@@ -65,7 +64,7 @@ fun AetherApp() {
         }
     }
 
-    fun reportStorageError(block: () -> Unit) {
+    suspend fun reportStorageError(block: suspend () -> Unit) {
         try {
             block()
             storageError = null
@@ -133,7 +132,7 @@ fun AetherApp() {
                             session = tabsSession,
                             onCreateTab = {
                                 try {
-                                    localDatabase.createNewTab().also { result ->
+                                    onDatabaseDispatcher { localDatabase.createNewTab() }.also { result ->
                                         if (result is CreateTabResult.Created) {
                                             tabsSession = result.session
                                         }
@@ -146,16 +145,28 @@ fun AetherApp() {
                                 }
                             },
                             onCloseTab = { tabId ->
-                                reportStorageError { tabsSession = localDatabase.closeTab(tabId) }
+                                reportStorageError {
+                                    tabsSession = onDatabaseDispatcher { localDatabase.closeTab(tabId) }
+                                }
                             },
                             onActivateTab = { tabId ->
-                                reportStorageError { tabsSession = localDatabase.activateTab(tabId) }
+                                reportStorageError {
+                                    tabsSession = onDatabaseDispatcher { localDatabase.activateTab(tabId) }
+                                }
                             },
                             onTogglePin = { tabId, pinned ->
-                                reportStorageError { tabsSession = localDatabase.setTabPinned(tabId, pinned) }
+                                reportStorageError {
+                                    tabsSession = onDatabaseDispatcher {
+                                        localDatabase.setTabPinned(tabId, pinned)
+                                    }
+                                }
                             },
                             onMoveTab = { tabId, direction ->
-                                reportStorageError { tabsSession = localDatabase.moveTab(tabId, direction) }
+                                reportStorageError {
+                                    tabsSession = onDatabaseDispatcher {
+                                        localDatabase.moveTab(tabId, direction)
+                                    }
+                                }
                             },
                             onHome = {
                                 navController.navigate(AetherDestination.HOME.route) {
@@ -194,36 +205,59 @@ fun AetherApp() {
                             addBookmark = { url, title ->
                                 var result: org.parmar.aether.ui.bookmarks.AddBookmarkResult =
                                     org.parmar.aether.ui.bookmarks.AddBookmarkResult.InvalidUrl
-                                reportStorageError {
-                                    result = bookmarkRepository.add(url, title)
-                                    if (result is org.parmar.aether.ui.bookmarks.AddBookmarkResult.Added) {
-                                        bookmarks = bookmarkRepository.list()
+                                try {
+                                    val updated = onDatabaseDispatcher {
+                                        val mutation = bookmarkRepository.add(url, title)
+                                        mutation to if (
+                                            mutation is org.parmar.aether.ui.bookmarks.AddBookmarkResult.Added
+                                        ) bookmarkRepository.list() else null
                                     }
+                                    result = updated.first
+                                    updated.second?.let { bookmarks = it }
+                                    storageError = null
+                                } catch (error: AetherStorageException) {
+                                    storageError = error.message ?: "AETHER local data could not be updated."
                                 }
                                 result
                             },
                             updateBookmark = { id, url, title ->
                                 var result: org.parmar.aether.ui.bookmarks.AddBookmarkResult =
                                     org.parmar.aether.ui.bookmarks.AddBookmarkResult.NotFound
-                                reportStorageError {
-                                    result = bookmarkRepository.update(id, url, title)
-                                    if (result is org.parmar.aether.ui.bookmarks.AddBookmarkResult.Updated) {
-                                        bookmarks = bookmarkRepository.list()
+                                try {
+                                    val updated = onDatabaseDispatcher {
+                                        val mutation = bookmarkRepository.update(id, url, title)
+                                        mutation to if (
+                                            mutation is org.parmar.aether.ui.bookmarks.AddBookmarkResult.Updated
+                                        ) bookmarkRepository.list() else null
                                     }
+                                    result = updated.first
+                                    updated.second?.let { bookmarks = it }
+                                    storageError = null
+                                } catch (error: AetherStorageException) {
+                                    storageError = error.message ?: "AETHER local data could not be updated."
                                 }
                                 result
                             },
                             onRemoveBookmark = { bookmarkId ->
                                 var removed = false
-                                reportStorageError {
-                                    removed = bookmarkRepository.remove(bookmarkId)
-                                    if (removed) bookmarks = bookmarkRepository.list()
+                                try {
+                                    val updated = onDatabaseDispatcher {
+                                        val didRemove = bookmarkRepository.remove(bookmarkId)
+                                        didRemove to if (didRemove) bookmarkRepository.list() else null
+                                    }
+                                    removed = updated.first
+                                    updated.second?.let { bookmarks = it }
+                                    storageError = null
+                                } catch (error: AetherStorageException) {
+                                    storageError = error.message ?: "AETHER local data could not be updated."
                                 }
                                 removed
                             },
                             onCreateSavedUrlTab = { bookmark ->
                                 try {
-                                    localDatabase.createSavedUrlTab(bookmark.url, null).also { result ->
+                                    onDatabaseDispatcher {
+                                        localDatabase.createSavedUrlTab(bookmark.url, null)
+                                    }.also { result ->
                                         if (result is CreateTabResult.Created) {
                                             tabsSession = result.session
                                         }
@@ -266,12 +300,14 @@ fun AetherApp() {
                             onClearCategory = { category ->
                                 try {
                                     when (category) {
-                                        "Tabs" -> localDatabase.clearTabs().also {
+                                        "Tabs" -> onDatabaseDispatcher { localDatabase.clearTabs() }.also {
                                             if (it.status != ClearStatus.FAILED) {
                                                 tabsSession = LocalTabsSession()
                                             }
                                         }
-                                        "Bookmarks" -> localDatabase.clearBookmarks().also {
+                                        "Bookmarks" -> onDatabaseDispatcher {
+                                            localDatabase.clearBookmarks()
+                                        }.also {
                                             if (it.status != ClearStatus.FAILED) {
                                                 bookmarks = emptyList()
                                             }
@@ -291,31 +327,32 @@ fun AetherApp() {
                                 }
                             },
                             onClearAll = {
-                                listOf(
-                                    "Tabs",
-                                    "Bookmarks",
-                                ).map { category ->
-                                    try {
-                                        when (category) {
-                                            "Tabs" -> localDatabase.clearTabs().also {
-                                                if (it.status != ClearStatus.FAILED) {
-                                                    tabsSession = LocalTabsSession()
-                                                }
+                                val results = onDatabaseDispatcher {
+                                    listOf(
+                                        "Tabs",
+                                        "Bookmarks",
+                                    ).map { category ->
+                                        try {
+                                            when (category) {
+                                                "Tabs" -> localDatabase.clearTabs()
+                                                else -> localDatabase.clearBookmarks()
                                             }
-                                            else -> localDatabase.clearBookmarks().also {
-                                                if (it.status != ClearStatus.FAILED) {
-                                                    bookmarks = emptyList()
-                                                }
-                                            }
+                                        } catch (error: AetherStorageException) {
+                                            ClearResult(
+                                                category = category,
+                                                status = ClearStatus.FAILED,
+                                                message = error.message ?: "Deletion could not be confirmed.",
+                                            )
                                         }
-                                    } catch (error: AetherStorageException) {
-                                        ClearResult(
-                                            category = category,
-                                            status = ClearStatus.FAILED,
-                                            message = error.message ?: "Deletion could not be confirmed.",
-                                        )
                                     }
                                 }
+                                results.filter { it.status != ClearStatus.FAILED }.forEach {
+                                    when (it.category) {
+                                        "Tabs" -> tabsSession = LocalTabsSession()
+                                        "Bookmarks" -> bookmarks = emptyList()
+                                    }
+                                }
+                                results
                             },
                             onSettings = {
                                 navController.popBackStack(

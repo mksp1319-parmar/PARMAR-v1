@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -9,7 +11,7 @@ val canonicalEmblemSha256 = "d2327d8b5853a4c9dd5e43b8a776c3f91a962276b37cd1c8e13
 val verifyCanonicalEmblem = tasks.register("verifyCanonicalEmblem") {
     inputs.file(canonicalEmblem)
     doLast {
-        val actual = java.security.MessageDigest.getInstance("SHA-256")
+        val actual = MessageDigest.getInstance("SHA-256")
             .digest(canonicalEmblem.readBytes())
             .joinToString("") { "%02x".format(it) }
         check(actual == canonicalEmblemSha256) {

@@ -2893,3 +2893,556 @@ sandbox and fail-closed behavior.
 **Status: `REMOTE_BROWSING_ENABLED` remains `false`. Production is not marked
 ready.** Hosted-runner evidence, Actions semantic validation, and independent
 production-boundary verification remain pending.
+
+## Cross-platform mission status
+
+This status records the repository and local verification evidence collected
+for the cross-platform AETHER development review. It does not replace the
+platform-specific acceptance gates above or in the mobile contracts.
+
+| Area | Status | Evidence and remaining limits |
+|---|---|---|
+| Desktop offline foundation | **IMPLEMENTED, NOT FULLY VERIFIED** | The desktop app retains its isolated Electron child, narrow validated preload/IPC, local state, and fail-closed navigation policy. `REMOTE_BROWSING_ENABLED` is `false`; remote browsing and site permissions remain unavailable. After restoring the exact locked npm dependencies, the serial desktop suite passed 277 tests, failed 0, and skipped 5. The live Electron/Chromium checks and runtime-dependent cases were not established by this run. |
+| Android offline shell | **IMPLEMENTED, NOT FULLY VERIFIED** | Android remains a native Compose offline shell with local tab/bookmark metadata and no browser engine or network permission. Database operations in the AETHER UI now dispatch through `Dispatchers.IO`; affected screen callbacks are suspend operations. A dispatcher regression test was added. Using the already installed JDK 21 and a checksum-verified temporary Android SDK, all 26 JVM tests passed, Kotlin compilation passed, and the debug APK assembled. No emulator/device runtime or instrumentation test was run. |
+| Full Android browser | **BLOCKED** | There is no approved engine/network security architecture, and the offline shell is not a functional web browser. Do not add a WebView or enable browsing as a shortcut. |
+| iOS | **NOT STARTED** | The repository contains iOS implementation requirements but no Xcode project or Swift source. `xcodebuild` and Swift tooling are unavailable in this environment; no iOS build or test is claimed. |
+| Cross-platform integration | **PARTIALLY IMPLEMENTED** | The mobile offline contract defines shared record constraints while persistence and UI remain platform-native. A working shared serialization/migration layer and end-to-end migration compatibility tests have not been established. |
+| Security and release readiness | **BLOCKED** | The production browser remains fail-closed. Process-group cleanup is not cgroup containment or independently acknowledged cleanup evidence. Native Ubuntu acceptance, a durable observer/evidence barrier, and independent production-boundary verification remain release gates. |
+
+### Verification recorded for this review
+
+- Desktop: `cd PARMAR/desktop && REMOTE_BROWSING_ENABLED=false npm test`
+  completed with **282 tests, 277 passed, 0 failed, 5 skipped**. The first
+  run could not load `@electron/asar` because dependencies were absent; the
+  exact locked dependencies were then restored with `npm ci --ignore-scripts
+  --no-audit --no-fund --prefer-offline`, after which the suite passed. No
+  package lifecycle scripts ran.
+- Android: JDK 21 was selected from the already installed toolchains instead
+  of the default Java 25 runtime. AGP 8.7.3 was resolved from the project's
+  configured Google, Maven Central, and Plugin Portal repositories. The
+  official Android command-line tools archive was verified against the
+  published SHA-256 and installed temporarily under `/tmp`; Android platform
+  35 and the required build tools were installed there without changing
+  project dependency versions or host configuration.
+- Android: `app/build.gradle.kts` had a Kotlin DSL name-resolution defect in
+  the canonical-emblem SHA-256 task. The first SDK-backed Kotlin compilation
+  also exposed a missing `height` import and `maxWidth` references used
+  outside their `BoxWithConstraints` scope in the responsive screens; these
+  were corrected. Existing Android tests then exposed a wrong package
+  reference for `BookmarksCopy` and two offline-status copy strings that
+  contradicted their asserted behavior; those were corrected without
+  deleting or weakening tests.
+- Android final command:
+  `ANDROID_HOME=/tmp/aether-android-sdk ANDROID_SDK_ROOT=/tmp/aether-android-sdk
+  JAVA_HOME=/usr/local/sdkman/candidates/java/21.0.13.0+2-ms
+  ./gradlew :app:testDebugUnitTest :app:compileDebugKotlin :app:assembleDebug`
+  completed successfully. JUnit XML reports **26 tests, 26 passed, 0 failed,
+  0 skipped**. Kotlin compilation and debug APK assembly passed. The build
+  emitted a tooling warning that command-line tools recognized SDK XML only
+  through version 3 while a package used version 4, and packaged one native
+  library unstripped; neither stopped the build. No emulator/device runtime
+  or instrumentation verification was performed. The debug APK is
+  `PARMAR/android/app/build/outputs/apk/debug/app-debug.apk`.
+- iOS: no Xcode project exists; Apple build/test tools are unavailable here.
+- Worktree verification: `git diff --check` passed after the Android changes.
+  No staging, commit, push, privileged test, or system configuration change
+  was performed.
+
+The Android dispatcher and responsive-layout fixes improve the offline
+foundation only. They do not add browser functionality, change the offline
+contract, or satisfy Android release verification. Android runtime,
+instrumentation, accessibility, and device acceptance remain outstanding.
+
+## Phase 2R.4 admission-freeze decision
+
+**NO-GO.** The current Linux child lifecycle uses process-group signaling; it
+does not create or own a cgroup, close cgroup admission, fence writable
+`cgroup.procs` descriptors, or produce independent durable cleanup evidence.
+An independent `populated 0` observation alone would not prove that the cgroup
+cannot be repopulated. No AETHER systemd unit or delegated cgroup configuration
+is present, and the current host does not provide a writable delegated subtree
+or running user systemd manager.
+
+The threat analysis, alternative comparison, proposed state machine,
+failure/acknowledgement protocol, native acceptance plan, residual risks, and
+remote-browsing gates are in
+[ADMISSION-FREEZE-ARCHITECTURE.md](./ADMISSION-FREEZE-ARCHITECTURE.md).
+The dedicated admission-controller architecture is only a candidate pending
+implementation and native-Ubuntu evidence. `REMOTE_BROWSING_ENABLED` remains
+`false`; no cgroup or host configuration was changed.
+
+## Phase 3A desktop runtime acceptance (2026-11-07)
+
+**Runtime acceptance: NOT ACHIEVED.** The desktop test suites passed, but this
+environment could not load Electron, so no Electron window, BrowserWindow,
+WebContentsView, or Chromium renderer was launched. Do not treat mock tests,
+dependency consistency, or a skipped packaged test as runtime acceptance.
+
+### Environment and checks
+
+- Runtime: Ubuntu 24.04.5 LTS container, x86_64, Linux
+  `6.8.0-1064-azure`; Node `v24.22.2`, npm `11.19.1`.
+- Desktop package manifest, lockfile, and installed package agree on Electron
+  `44.7.0` and electron-builder `26.15.3`. `npm ls --depth=0` passed.
+- `REMOTE_BROWSING_ENABLED` remains hard-coded `false` in
+  `security.cjs`.
+- `ldd`/the existing `scripts/verify-electron-runtime.cjs` found these missing
+  Electron shared libraries: `libatk-1.0.so.0`, `libatk-bridge-2.0.so.0`,
+  `libcups.so.2`, `libgtk-3.so.0`, `libXcomposite.so.1`, `libXdamage.so.1`,
+  `libXfixes.so.3`, `libXrandr.so.2`, `libgbm.so.1`, `libxkbcommon.so.0`,
+  `libasound.so.2`, and `libatspi.so.0`.
+- `DISPLAY` and `WAYLAND_DISPLAY` are unset; Xvfb, xvfb-run, Weston, and
+  xdotool are unavailable.
+- An actual `npm start -- --enable-logging` attempt failed before application
+  startup with exit 127: the Electron loader could not find
+  `libatk-1.0.so.0`. Electron `--version` fails for the same reason.
+- No Linux package artifact exists under `desktop/dist`; the packaged archive
+  check therefore skipped. No package build or host library/display-server
+  installation was performed.
+
+### Test results
+
+| Check | Result | Evidence boundary |
+|---|---|---|
+| `REMOTE_BROWSING_ENABLED=false npm test` from `PARMAR/desktop` | **282 tests: 277 passed, 0 failed, 5 skipped.** | The five skipped tests are the packaged artifact content check, live Electron/Chromium namespace integration, packaged UI screenshot smoke, packaged production-child probe, and Chromium profile-storage runtime test. Their stated gates require a package, runtime libraries, GUI tooling, or explicit opt-in. |
+| Focused security, preload, permission, renderer, lifecycle, persistence, profile, and browser-child suites | **142 tests: 141 passed, 0 failed, 1 skipped.** | The skip is the packaged Linux artifact check. These tests are primarily mocks, policy tests, and local persistence tests, not Electron runtime evidence. |
+| `npm run test:electron-isolation` | **1 skipped, 0 run, 0 failed.** | Missing GTK runtime, Xvfb, and required configured runtime-library directory. |
+| `node scripts/verify-electron-runtime.cjs` | **Failed as expected** on unresolved shared libraries. | Confirms Electron cannot be launched here; not an app defect result. |
+| `npm start -- --enable-logging` | **Exit 127** before app code. | Dynamic linker failure for `libatk-1.0.so.0`; no application startup/shutdown or renderer evidence. |
+| `git diff --check` | Passed. | Whitespace only. |
+
+### Feature evidence boundary and decision
+
+Mocks and static/policy tests cover navigation denial and address validation,
+window and tab lifecycle, history/bookmark and profile state handling,
+download and permission policy, preload validation, fixed IPC surfaces,
+persistence/recovery behavior, and cleanup signaling. They do not prove
+real UI rendering, Electron IPC behavior, browser chrome interaction, actual
+download UX, or Chromium storage in this run.
+
+No desktop source defect was established by the available evidence, so no
+runtime code was changed. The actual Electron/Chromium acceptance tests must
+be rerun on a supported host with the exact locked Electron package, required
+GTK/ATK/X11/GBM libraries, and a working X11 or Wayland display (or the
+repository's supported Xvfb harness). Require the packaged UI smoke and
+profile-storage runtime checks to run rather than skip, and retain screenshots
+and process/runtime logs. Network isolation, cgroup admission, and cleanup
+claims remain subject to the separate architecture NO-GO and native
+acceptance gates.
+
+**Decision: desktop runtime acceptance remains BLOCKED; remote browsing stays
+disabled.** No Android change or security architecture report was modified by
+this review.
+
+## Phase 3A.1 desktop runtime recovery (2026-11-08)
+
+**Decision: Phase 3A remains BLOCKED.** The package and CI setup improved, but
+the application was not launched with a working display. A package build,
+Electron version probe, or passing unit suite is not runtime acceptance.
+
+### Environment and launch attempts
+
+- Host: Ubuntu 24.04.5 LTS, x86_64, kernel `6.8.0-1064-azure`; host Node
+  `v24.22.2`, npm `11.19.1`.
+- Locked desktop packages: Electron `44.7.0`, electron-builder `26.15.3`.
+  Electron runtime metadata reports Chromium `152.0.7977.130`.
+- `DISPLAY` and `WAYLAND_DISPLAY` are unset. The host has no `/usr/bin/Xvfb`,
+  `xvfb-run`, Weston, xdotool, or usable XKB compiler. A `/dev/dri/card0`
+  device node exists, but this run did not verify GPU access or acceleration.
+  `/dev/fuse` exists; AppImage extraction worked, but no FUSE mount or launch
+  was performed.
+- The Electron binary initially had unresolved host libraries:
+  `libatk-1.0.so.0`, `libatk-bridge-2.0.so.0`, `libcups.so.2`,
+  `libgtk-3.so.0`, `libXcomposite.so.1`, `libXdamage.so.1`, `libXfixes.so.3`,
+  `libXrandr.so.2`, `libgbm.so.1`, `libxkbcommon.so.0`, `libasound.so.2`,
+  and `libatspi.so.0`. Ubuntu 24.04 package metadata had no candidates for
+  the old package names; the available packages use `t64` names.
+- No host packages or privileged settings were changed. For diagnosis only,
+  verified Ubuntu packages were downloaded and extracted under `/tmp`; with
+  that temporary library path, `ldd` resolved Electron and
+  `electron --version` returned `v44.7.0`. Electron's embedded Node and
+  Chromium versions were also read from that binary. This did not launch the
+  AETHER application.
+- `npm start -- --enable-logging` on the unmodified host exited **127** before
+  application code because `libatk-1.0.so.0` was missing. A temporary Xvfb
+  attempt also exited before becoming a display: XKB keymap initialization
+  failed, and the X11 socket directory requires host-owned setup. No
+  `BrowserWindow`, application renderer, preload, or application IPC session
+  was observed.
+- Docker was available, but no container was run. No host dependency install,
+  security relaxation, or external navigation by AETHER was performed.
+
+### Packaging and workflow recovery
+
+- `npm run package:dir` exited **0** with the locked Electron distribution and
+  wrote an x86-64 unpacked package under `/tmp`. The package-content test ran
+  against it: **18 passed, 0 failed, 0 skipped**, including the check for
+  `app.asar`, isolation assets, and the PARMAR emblem.
+- `npm run package:linux` exited **0** under the workflow's unprivileged,
+  network-isolated build pattern. The resulting 120 MiB AppImage is x86-64,
+  SHA-256
+  `4f29427cb3672c81fbce39e007f96f8015401312001e10379d2d1daa6ed0140d`.
+  `--appimage-extract` exited **0**. Its executable and `app.asar` were
+  inspected, 17 required ASAR entries were present, and the embedded emblem
+  matched the source byte-for-byte. The packaged application itself was not
+  launched.
+- The Ubuntu 24.04 runtime workflows requested several package names that
+  have no Noble candidates. Both workflows now request the available `t64`
+  package names, and a startup-configuration regression test covers the
+  package list.
+- The AppImage preflight incorrectly required every toolset path to be
+  executable. Electron Builder's pinned `runtime-x64` is a readable data
+  resource appended to the AppImage (the builder reads it as bytes), not an
+  executable. The preflight now requires read access for `runtime` and
+  `runtimeLibraries`, and execute access for the actual executable tools.
+  The updated preflight passed against the downloaded pinned toolset.
+
+### Functional acceptance matrix
+
+| Capability | Status | Evidence and remaining limit |
+|---|---|---|
+| Application startup, window lifecycle, renderer, preload, IPC, shutdown, restart | **BLOCKED** | Host startup exited before app code; no working display was available. |
+| Browser UI, address/search, navigation, back/forward/reload, tabs, offline/error states | **BLOCKED** | No live renderer was launched; the packaged UI smoke remains gated. |
+| Bookmark/history/settings/session persistence and corrupted-store recovery | **BLOCKED** | Persistence unit tests ran, but the Electron/Chromium profile-storage runtime test did not. |
+| Real download and permission flows | **NOT VERIFIED** | Policy/unit coverage passed; no real runtime request or user cancellation flow was exercised. |
+| Renderer privilege boundary and live IPC/process behavior | **NOT VERIFIED** | Preload, broker, and policy regressions passed; no live renderer-to-main session was observed. |
+| Remote browsing fail-closed configuration | **VERIFIED (configuration/tests only)** | `REMOTE_BROWSING_ENABLED` remains `false`; this is not evidence of production network isolation. |
+
+### Five previously skipped checks
+
+| Check | Retry result | Remaining blocker |
+|---|---|---|
+| `built Linux artifact contains launchable app.asar paths and required browser isolation assets` | **Resolved:** fresh unpacked package built; `browser-child.test.cjs` passed 18/18 with this check enabled. | This verifies package contents, not a launch. |
+| `live Electron and Chromium descendants stay outside the host namespace and cannot reach controlled listeners` | **Still blocked/skipped:** dedicated command reported 1 skipped, 0 failed. | The test requires `/usr/bin/Xvfb` and a runtime library directory. Temporary libraries resolved Electron linkage, but the host lacks the required Xvfb/XKB setup. |
+| `packaged AETHER UI launches isolated Chromium and supports real browser chrome interactions` | **Still blocked/skipped:** direct test reported 1 skipped, 0 failed. | An AppImage was built and extracted, but the GUI smoke needs a working display and screenshot/input tools. |
+| `test-only harness records packaged Chromium renderer requests in the isolated network namespace` | **Still blocked/skipped:** direct command reported 1 cleanup/policy test passed and this runtime check skipped. | A fresh directory package exists, but the required Xvfb and xdotool executables are not installed at the test's required host paths. |
+| `persistent Chromium profile storage remains isolated across process restarts` | **Still blocked/skipped:** direct test reported 1 skipped, 0 failed. | Requires explicit runtime opt-in and a working Xvfb display; neither was used to claim success. |
+
+### Test results and security status
+
+- `REMOTE_BROWSING_ENABLED=false PARMAR_AETHER_LINUX_DIR_PATH=... npm test`:
+  **283 tests, 279 passed, 0 failed, 4 skipped**, exit **0**. The four
+  remaining skips are the live namespace integration, packaged UI smoke,
+  packaged production-child probe, and Chromium profile-storage runtime test.
+- Focused security, preload, and permission-policy tests: **12 passed, 0
+  failed, 0 skipped**. Runtime workflow/Electron provisioning tests:
+  **100 passed, 0 failed, 0 skipped**.
+- Dedicated `npm run test:electron-isolation`: **1 skipped, 0 failed**.
+  Packaged UI smoke: **1 skipped, 0 failed**. Profile storage: **1 skipped,
+  0 failed**. Production-child probe: **1 passed, 1 skipped, 0 failed**.
+- Package builds and extraction succeeded, but **real Electron application
+  runtime tests: 0 passed**. Builds and unit tests do not establish renderer,
+  IPC, browser interaction, or packaged-app launch behavior.
+- `REMOTE_BROWSING_ENABLED` remains `false`; approval and permission gates,
+  sandboxing, context isolation, and renderer privilege boundaries were not
+  relaxed. No production network-isolation, cgroup admission, or durable
+  observer-acknowledgement claim is made. Phase 2R.5 admission-controller
+  **NO-GO** remains unchanged.
+
+**Next gate:** run the existing Linux runtime workflow on its Ubuntu 24.04
+host after these dependency/preflight fixes, require the four runtime checks
+to execute without skips, retain screenshots and process logs, and inspect
+the results. Until those checks run successfully, Phase 3A remains BLOCKED.
+
+## Phase 3A.2 supported CI runtime audit (2026-11-08)
+
+**Decision: runtime acceptance is still BLOCKED; no run of the current
+uncommitted workflow changes exists.**
+
+### Existing GitHub Actions evidence
+
+The public Actions API listed these recent runs of
+`aether-linux-runtime.yml`, all on commit `92107ec9cd2d1a687ccb01b13067a4c31aee7f6b`:
+
+| Run | Date (UTC) | Result | Failed step |
+|---|---|---|---|
+| [42016439079](https://github.com/mksp1319-parmar/PARMAR-v1/actions/runs/42016439079) | 2026-11-05 | **failure** | Verify unprivileged network namespace creation |
+| [41598702752](https://github.com/mksp1319-parmar/PARMAR-v1/actions/runs/41598702752) | 2026-11-03 | **failure** | Verify unprivileged network namespace creation |
+| [41225181362](https://github.com/mksp1319-parmar/PARMAR-v1/actions/runs/41225181362) | 2026-10-31 | **failure** | Verify unprivileged network namespace creation |
+
+These runs stopped before runtime dependencies, Xvfb, packaging, or Electron
+tests. The unauthenticated API exposed job/step metadata but denied job-log
+downloads; no detailed namespace error is claimed. No run of
+`aether-profile-storage-runtime.yml` was listed. The current workflow edits
+are uncommitted and therefore are not covered by those runs.
+
+### CI dependency and display audit
+
+- Ubuntu 24.04 uses the `t64` names for ATK, AT-SPI, CUPS, GLib, and GTK
+  libraries. Both runtime workflows and the installed-package verification
+  now use those names.
+- Because the GUI install uses `--no-install-recommends`, the workflows now
+  explicitly install `x11-xkb-utils` and `xkb-data`. They check `xkbcomp` and
+  the XKB `evdev` rules file, then run `xvfb-run -a true` before tests. This
+  makes X server/XKB initialization a required preflight rather than
+  discovering it during an opted-in Electron test.
+- `xdotool`, Xvfb, X authentication, and ImageMagick screenshot executables
+  remain explicit Linux-workflow prerequisites. The profile-storage workflow
+  checks XKB/Xvfb availability before launching its Electron worker.
+- The Linux workflow's required Electron libraries, `ldd` check, locked
+  Electron version probe, `PARMAR_ELECTRON_RUNTIME_LIB_DIR`, and
+  `PARMAR_ELECTRON_RUNTIME_REQUIRED` gates remain in place. The profile
+  storage workflow checks Electron linkage and `xvfb-run`.
+- The package workflow builds a fresh directory package and AppImage,
+  extracts the AppImage without mounting it, and validates both package
+  contents and the emblem. UI smoke receives the fresh AppImage path;
+  production-child probing receives the fresh directory-package path.
+  Required-mode flags make the UI and production-child checks fail rather
+  than silently skip.
+- Namespace preflight runs before package build and Electron runtime tests.
+  All three recent hosted-runner attempts failed at this gate, so they do
+  not establish that the GitHub-hosted Ubuntu runner can satisfy the
+  namespace prerequisite. No namespace bypass or security relaxation was
+  introduced.
+
+### Runtime and security result
+
+No CI run of the changes above has executed; there is no new Electron,
+Chromium, BrowserWindow, preload, IPC, packaged-launch, screenshot, or profile
+storage evidence. The four runtime checks recorded in Phase 3A.1 remain
+unresolved until a successful required-mode run produces logs and screenshots.
+The AppImage build and extraction evidence from Phase 3A.1 is package evidence,
+not launch acceptance.
+
+`REMOTE_BROWSING_ENABLED=false` and the approval, sandbox, context-isolation,
+and renderer privilege boundaries remain unchanged. The Phase 2R.5 admission
+controller recommendation remains **NO-GO**.
+
+**Next action:** after authorization to publish these workflow/test/document
+changes on a branch, run
+`gh workflow run aether-linux-runtime.yml --ref <updated-branch>`. Inspect the
+run and uploaded `aether-linux-runtime-evidence` artifact. If namespace
+preflight fails again, use the authorized detailed job logs to identify a
+supported Ubuntu 24.04 runner configuration that can satisfy it; do not skip
+or bypass that gate. Phase 3A stays BLOCKED until all required live runtime
+checks pass without skips.
+
+## Phase 3B.0 admission contract foundation
+
+`admission-contract.cjs` defines a private, versioned in-process generation
+contract and explicit lifecycle transitions. Its operations require an
+authorized caller adapter: only the admission role may create/start, lifecycle
+may request termination, and the observer role may verify cleanup. The fixed
+operations are create, start, query, close admission, request termination,
+verify cleanup, and retrieve evidence. States progress through `CREATED`,
+`ADMISSION_CLOSED`, `STARTING`, `RUNNING`, `TERMINATING`, and
+`CLEANUP_VERIFIED`; uncertain outcomes enter `QUARANTINED`, while unavailable
+launch components fail in `FAILED`. A running or quarantined generation blocks
+new admission. Requests reject unknown fields, reused request IDs with
+different data, unauthorized operation roles, and stale generation IDs.
+Ambiguous adapter outcomes quarantine the generation.
+
+This is a contract/state-machine foundation only. It is not connected to
+`main.cjs`, renderer IPC, or the existing browser supervisor. The current
+supervisor still uses the existing same-UID process-group design; this change
+does not replace it or claim cgroup admission, pre-execution OS placement,
+independent observer identity, durable storage, or OS-authenticated caller
+identity. The generation/request ledger is in-memory and is not crash
+recoverable. Adapter confirmations and mocked tests are not native containment
+evidence. With missing native components, start fails closed and cleanup
+cannot become `CLEANUP_VERIFIED`. `REMOTE_BROWSING_ENABLED` remains `false`;
+security admission remains **NO-GO**.
+
+## Phase 3B.1 native admission IPC foundation
+
+`admission-service.c` adds a Linux-only Unix-domain-socket daemon. It obtains
+the connecting peer's kernel-reported UID with `SO_PEERCRED`, maps configured
+UIDs to fixed roles, and rejects unconfigured UIDs before reading request data.
+Caller-supplied UID or role fields are not accepted. The newline-delimited
+version-1 protocol has a fixed operation allowlist, bounded messages, strict
+field validation, and a random service-instance identifier that rejects
+requests bound to an earlier service instance. The socket is created with mode
+`0660` inside a service-owned parent directory that is not group/world writable.
+
+The daemon relays only normalized requests and its UID-derived role over private
+pipes to `admission-service-backend.cjs`, which reuses the Phase 3B.0 contract.
+The worker's authorization adapter accepts only this authenticated service
+envelope; operation-role restrictions remain enforced by the contract. The
+worker has no native admission, browser-launch, termination, observer, or
+durable-evidence adapters, so browser start fails closed. The native daemon is
+not connected to Electron, renderer IPC, or the production browser supervisor.
+No systemd unit, delegated cgroup, distinct production identities, observer, or
+durable recovery mechanism is installed or implemented.
+
+The focused Linux tests compiled and launched the daemon and exercised actual
+`SO_PEERCRED` UID reporting for the test process, socket permissions, protocol
+rejection, replay/stale-generation handling, shutdown, restart, and fail-closed
+start. These tests do not establish production identity separation, secure
+service installation/configuration, systemd lifecycle guarantees, cgroup
+containment, independent cleanup observation, or crash-persistent request or
+evidence state. Configured peer roles are UID-based rather than executable
+identity-based; any process sharing an authorized UID receives that role.
+Distinct UIDs and accessible socket-directory/group policy remain deployment
+requirements, not verified here. `REMOTE_BROWSING_ENABLED` remains `false`;
+security admission remains **NO-GO** and D-01 remains unresolved.
+
+## Phase 3B.2 service identity and least-privilege foundation
+
+The native service now requires explicit service UID, socket access GID, and
+admission, browser, lifecycle, and observer UIDs. Numeric IDs must be strict
+decimal values; admission, browser, lifecycle, and observer mappings must be
+pairwise distinct. The configured service UID/GID must match the process
+effective UID/GID, and the service UID cannot overlap the configured browser,
+admission, lifecycle, or observer UID. Browser UID is configuration-only: no
+browser is launched and no browser API is exposed. The role used for IPC is
+still derived only from `SO_PEERCRED`; request fields cannot assign a UID or
+role.
+
+The socket must be created under an absolute path whose parent has exactly
+service-UID ownership, access-GID ownership, and mode `0750`. Parent components
+are inspected without following symlinks; writable ancestors are rejected
+except root-owned sticky directories such as `/tmp`. The socket must have the
+configured service UID/GID and mode `0660`. Any pre-existing socket path,
+including a stale socket, causes startup failure and is left untouched for
+explicit operator recovery. Startup also fails when the configured effective
+identity or socket ownership/mode cannot be verified.
+
+`systemd/aether-admission.service` is a source-level deployment template, not
+installed or started here. It selects a dedicated `aether-admission` account
+and primary group, a systemd-owned `/run/aether-admission` runtime directory,
+`NoNewPrivileges`, empty capability sets, a read-only system filesystem,
+restricted address families, and control-group shutdown. Automatic restart is
+disabled because generation state is volatile and restart creates a new
+service instance. The service needs no Linux capabilities for its current
+IPC/worker duties; it requires read/execute access to the installed service,
+Node runtime and worker, plus write access only to its runtime directory.
+No syscall filter is enabled yet: the Node runtime/worker syscall set has not
+been measured and restricting it without that evidence risks breaking startup
+or silently weakening the claimed deployment contract. `systemd-analyze verify`
+accepted the unit directives on the available systemd 255 parser using
+temporary path/target stubs; it did not install, start, or validate the service
+under PID 1.
+
+Deployment must create the service account/group and root-owned, non-service-
+writable `/etc/aether/admission-service.conf` containing matching numeric IDs.
+Only the admission client, lifecycle controller, and observer identities may
+be granted socket-group access; the browser identity must not be a member.
+All processes sharing a configured peer UID are equivalent to this policy;
+`SO_PEERCRED` PID values do not distinguish processes sharing a UID and are not
+treated as durable identities.
+Package paths, group membership, ID allocation and systemd hardening require
+installer and supported-host validation. The unit is not evidence that these
+identities exist or that the systemd manager enforces the intended lifecycle.
+The current test process and daemon ran with the same UID/GID, while the
+configured peer roles used other numeric UIDs. Tests exercised kernel-reported
+peer rejection and identity-policy validation, but authorized IPC from a
+distinct UID and **distinct-UID role isolation were not verified**; those
+end-to-end cases skip when the runner cannot switch UIDs. This foundation does
+not implement a separate browser process,
+cgroup admission, cleanup observation, durable recovery, or production
+containment. D-01 remains unresolved, `REMOTE_BROWSING_ENABLED` remains
+`false`, and security admission remains **NO-GO**.
+
+## Phase 3B.3 native admission lifecycle authority foundation
+
+The daemon now acquires a non-blocking `flock` on a fixed lock file in the
+socket's parent directory before creating its worker or listener. A second
+daemon using that same socket parent fails startup. The daemon accepts and
+relays one socket client at a time; the Node worker also queues input lines
+before dispatch, and the contract serializes operations by generation within
+that worker process. These measures establish a single active daemon for a
+configured socket directory and sequential in-process state mutation. They do
+not prevent another configured socket directory or a differently configured
+service from creating another authority. The lock is not an OS-enforced
+exclusive identity boundary against the service account, host administrator,
+or root.
+
+The service requires a separately configured persistent state directory. On
+startup it validates that directory, takes the socket-directory lock, then
+creates `service-started` exclusively and fsyncs the marker and directory
+before starting the worker or listener. A pre-existing marker blocks startup.
+The marker is intentionally retained after ordinary shutdown; the systemd
+template also has `Restart=no`. This conservative restart fence prevents the
+service from silently starting with an empty generation ledger after a prior
+run. It is not a generation ledger, cleanup record, or proof of termination.
+If startup fails after marker creation, or the service exits, subsequent
+startup remains blocked until separately authorized operator recovery; no
+recovery mechanism is implemented here. Filesystem and power-loss durability
+were not validated on a supported production host.
+
+Request processing now serializes worker line handling. Existing request-ID
+fingerprints reject reuse with different request data, duplicate requests
+share the pending result, and generation-scoped operations are queued. State
+transitions are checked before mutation; ambiguous launch or termination
+outcomes and unavailable cleanup confirmation quarantine the generation and
+block later admission. Those generation and replay records remain only in
+worker memory. A worker relay/protocol error causes the daemon to exit rather
+than continue with potentially desynchronized state; the persistent marker
+then blocks a new instance. This is fail-closed behavior, not crash-safe
+recovery or durable replay protection.
+
+The forked worker receives only stdin/stdout pipes, a fixed executable and
+script path, and a minimal environment; other inherited descriptors are
+closed before execution. The daemon protocol remains fixed and does not
+accept caller-supplied roles, executable paths, commands, cgroup paths, or
+identity values. The native service still has no production browser,
+admission, termination, observer, or durable-evidence adapters, and remains
+disconnected from Electron and renderer IPC. Its systemd unit is a source
+template only and has not been installed or run.
+
+Focused contract tests passed **15/15**. Native-service tests passed **8**,
+failed **0**, and skipped **4** because the environment cannot run a client
+under an authorized UID distinct from the service UID. The native suite
+compiled and launched the daemon; the singleton test used two daemon
+processes and verified exclusion for one shared socket directory, and the
+restart test verified the persistent marker blocks a later instance. These
+are source/test-environment results only. Distinct-UID role isolation,
+multiple independent deployments, production systemd lifecycle, power-loss
+behavior, hostile same-UID behavior, cgroup containment, independent cleanup
+observation, and production recovery remain **NOT VERIFIED**. D-01 remains
+unresolved, `REMOTE_BROWSING_ENABLED` remains `false`, and security admission
+remains **NO-GO**.
+
+## Phase 3B.4R durable lifecycle corrections
+
+This section supersedes the earlier Phase 3B.3 startup-marker and in-memory
+state descriptions. The admission contract now requires a lifecycle store and a
+valid service-instance ID at construction and validates the store document at
+initialization. There is no contract-level in-memory or no-op persistence
+fallback. Request intent, lifecycle transitions, completion/replay records,
+and shutdown events are committed before a successful response is returned.
+An ambiguous commit failure poisons the contract and keeps admission closed.
+
+The version-1 ledger is bounded and integrity-checked, uses exclusive temporary
+files and atomic rename, and synchronizes the ledger file and state directory.
+The state directory and ledger are checked for ownership, mode, symlinks,
+identity changes, unexpected entries, and size limits. A missing, corrupt,
+unsupported, incomplete, or unsynchronized ledger is rejected; it is not
+replaced with an empty ledger. A ledger that reaches disk but cannot be matched
+to its anchor is also rejected rather than reconciled or rolled back.
+
+Anti-rollback requires an injected monotonic anchor with read, one-time
+initialization, and atomic compare-and-swap operations. The native backend has
+no production anchor provider configured, so it fails closed before announcing
+readiness or creating its listener. A future provider must retain its high-water
+sequence and ledger integrity value outside the ledger's rollback domain and
+must remain independently available and trustworthy. A file beside the ledger
+or in the same restorable image is not such a trust boundary. The native
+Codespaces environment supplies no external monotonic anchor; therefore this
+implementation does **not** establish deployed anti-rollback protection or
+permit the native service to become ready.
+
+Tests use a deliberately rollbackable file-backed anchor, enabled only when the
+native test binary is built with `AETHER_TESTING`. That fixture allows restart,
+rollback, and failure-path tests; it is not an independent authority, does not
+survive coordinated rollback by design, and is not production evidence. The
+injected `fsync`, write, and I/O faults are simulations, not power-loss tests.
+No actual power-loss durability claim is made.
+
+Restart never establishes cleanup. Unresolved generations remain unresolved
+and are quarantined; no generation ID is reused. Operator recovery remains
+unavailable without an independent observer and validated, durable evidence.
+There is no assertion-only cleanup path. Process exit, service restart, and
+marker changes are not cleanup evidence. The admission service remains
+disconnected from Electron and production browser launch.
+
+The implementation does not provide kernel-enforced cgroup containment,
+pre-execution browser placement, or an independent cleanup observer. The
+systemd file remains a source template and was not installed or started. Native
+validation under a supported Ubuntu/systemd deployment, an independently
+operated anti-rollback provider, cgroup admission and containment, observer
+evidence, and crash/power-loss testing remain outstanding. D-01 remains OPEN,
+D-02 and overall security admission remain **NO-GO**, and
+`REMOTE_BROWSING_ENABLED` remains `false`. Phase 3B.5 must not begin until the
+independent anchor and the remaining native containment gates are designed and
+accepted.

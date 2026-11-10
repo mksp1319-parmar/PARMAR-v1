@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -35,24 +36,25 @@ import org.parmar.aether.data.AetherDataLimits
 import org.parmar.aether.data.CreateTabResult
 import org.parmar.aether.ui.theme.AetherColors
 import org.parmar.aether.ui.theme.AetherSpacing
+import kotlinx.coroutines.launch
 
 @Composable
 fun TabsScreen(
     session: LocalTabsSession,
-    onCreateTab: () -> CreateTabResult,
-    onCloseTab: (String) -> Unit,
-    onActivateTab: (String) -> Unit,
-    onTogglePin: (String, Boolean) -> Unit,
-    onMoveTab: (String, Int) -> Unit,
+    onCreateTab: suspend () -> CreateTabResult,
+    onCloseTab: suspend (String) -> Unit,
+    onActivateTab: suspend (String) -> Unit,
+    onTogglePin: suspend (String, Boolean) -> Unit,
+    onMoveTab: suspend (String, Int) -> Unit,
     onHome: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     var pendingClose by remember { mutableStateOf<LocalTab?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp),
+        modifier = Modifier.fillMaxSize(),
     ) {
+        val horizontalPadding = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp
         val isTabletWidth = maxWidth >= 600.dp
         val contentModifier = if (isTabletWidth) {
             Modifier.fillMaxWidth().padding(horizontal = 24.dp)
@@ -63,6 +65,7 @@ fun TabsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(horizontal = horizontalPadding)
                 .then(contentModifier)
                 .padding(vertical = 24.dp),
         ) {
@@ -98,10 +101,12 @@ fun TabsScreen(
 
             Button(
                 onClick = {
-                    message = when (val result = onCreateTab()) {
-                        is CreateTabResult.Created -> null
-                        CreateTabResult.LimitReached -> "The maximum of 16 tabs has been reached."
-                        is CreateTabResult.Failed -> result.message
+                    scope.launch {
+                        message = when (val result = onCreateTab()) {
+                            is CreateTabResult.Created -> null
+                            CreateTabResult.LimitReached -> "The maximum of 16 tabs has been reached."
+                            is CreateTabResult.Failed -> result.message
+                        }
                     }
                 },
                 enabled = session.tabs.size < AetherDataLimits.MAX_TABS,
@@ -138,9 +143,9 @@ fun TabsScreen(
                                 session.tabs[session.tabs.indexOf(tab) - 1].pinned == tab.pinned,
                             canMoveDown = session.tabs.indexOf(tab) < session.tabs.lastIndex &&
                                 session.tabs[session.tabs.indexOf(tab) + 1].pinned == tab.pinned,
-                            onSelect = { onActivateTab(tab.id) },
-                            onPin = { onTogglePin(tab.id, !tab.pinned) },
-                            onMove = { direction -> onMoveTab(tab.id, direction) },
+                            onSelect = { scope.launch { onActivateTab(tab.id) } },
+                            onPin = { scope.launch { onTogglePin(tab.id, !tab.pinned) } },
+                            onMove = { direction -> scope.launch { onMoveTab(tab.id, direction) } },
                             onClose = { pendingClose = tab },
                         )
                     }
@@ -157,8 +162,10 @@ fun TabsScreen(
             text = { Text("This removes the tab descriptor and updates the active tab.") },
             confirmButton = {
                 TextButton(onClick = {
-                    onCloseTab(tab.id)
-                    pendingClose = null
+                    scope.launch {
+                        onCloseTab(tab.id)
+                        pendingClose = null
+                    }
                 }) {
                     Text("Close tab")
                 }

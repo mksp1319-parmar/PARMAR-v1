@@ -14,19 +14,8 @@ const { AetherProfiles, isValidProfileId } = require('../profiles.cjs');
 const { profilePartition } = require('../profile-partitions.cjs');
 const { permissionDecision } = require('../permission-policy.cjs');
 
-protocol.registerSchemesAsPrivileged([{
-  scheme: 'aether-profile-test',
-  privileges: {
-    standard: true,
-    secure: true,
-    supportFetchAPI: true,
-    allowServiceWorkers: true,
-    corsEnabled: true,
-  },
-}]);
-
-const TEST_URL = 'aether-profile-test://storage.test/index.html';
-const TEST_ORIGIN = 'aether-profile-test://storage.test';
+const TEST_URL = 'https://storage.test/index.html';
+const TEST_ORIGIN = 'https://storage.test';
 
 function readConfig() {
   let config;
@@ -92,9 +81,9 @@ function response(body, contentType) {
 }
 
 function installTestProtocol(profileSession) {
-  return profileSession.protocol.handle('aether-profile-test', (request) => {
+  return profileSession.protocol.handle('https', (request) => {
     const url = new URL(request.url);
-    if (url.protocol !== 'aether-profile-test:' || url.host !== 'storage.test') {
+    if (url.protocol !== 'https:' || url.host !== 'storage.test') {
       return new Response('Not found', { status: 404 });
     }
     if (url.pathname === '/index.html') {
@@ -134,7 +123,9 @@ function installRestrictivePolicies(profileSession) {
   ));
   profileSession.webRequest.onBeforeRequest(
     { urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] },
-    (_details, callback) => callback({ cancel: true }),
+    (details, callback) => {
+      callback({ cancel: new URL(details.url).origin !== TEST_ORIGIN });
+    },
   );
   profileSession.on('will-download', (_event, item) => item.cancel());
 }
@@ -199,7 +190,9 @@ async function evaluateStorage(contents, config) {
   }
 
   const seedScript = `(() => {
-  document.cookie = ${JSON.stringify(`aether_profile_marker=${marker}; Path=/; SameSite=Lax`)};
+    document.cookie = ${JSON.stringify(
+      `aether_profile_marker=${marker}; Path=/; Max-Age=3600; SameSite=Lax; Secure`,
+    )};
   localStorage.setItem('aether-profile-marker', ${JSON.stringify(marker)});
   return (${indexedDbOperation(marker, 'seed')})
     .then(() => caches.open('aether-profile-test')
@@ -286,7 +279,7 @@ async function main() {
       httpCache: 'unverified',
     }
     : {
-      cookies: storageResult.cookie === `aether_profile_marker=${config.expectedMarker}`,
+      cookies: storageResult.cookie === config.expectedMarker,
       localStorage: storageResult.localStorageMarker === config.expectedMarker,
       indexedDB: storageResult.indexedDbMarker === config.expectedMarker,
       serviceWorkerRegistration: storageResult.serviceWorkerRegistration,

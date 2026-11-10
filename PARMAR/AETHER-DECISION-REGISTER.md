@@ -1,0 +1,54 @@
+# AETHER Decision Register
+
+**Snapshot:** 2026-11-10. A decision is not resolved by a prototype, test, or
+roadmap preference alone. Decision status describes whether evidence/authority
+is sufficient to proceed. “BLOCKED” means a dependency prevents responsible
+selection; “NO-GO” records a release-prohibiting decision and is not included
+in the blocked-decision count. These statuses are inputs to the
+[risk register](./AETHER-RISK-REGISTER.md) and [security gates](./AETHER-SECURITY-GATES.md).
+
+| ID | Decision / status | Options and trade-offs | Evidence required to decide | Owner / dependency |
+|---|---|---|---|---|
+| D-01 | Threat boundary for privileged host actors — OPEN | Include root/systemd/kernel as adversaries (likely impossible to guarantee); trust host root explicitly; constrain only app/browser actors. Stronger claim needs much stronger proof; an explicit trusted-root boundary limits claim honestly. | Product security requirements, Linux authority analysis, independent review and accepted residual-risk statement. | Security/product; Stage 1.1. |
+| D-02 | Production Linux admission/containment architecture — **NO-GO** | Current process-group/namespace approach is insufficient; delegated cgroup/service-controller alternatives have writer, migration, observer and trust assumptions; retain offline product if unprovable. | Close Phase 2R.4/2R.5 open races with native evidence, durable observer/ACK and independent acceptance. No implementation approval until evidence exists. | Independent security authority; Gate D. Current decision blocks remote browsing. |
+| D-03 | Declared desktop platforms and minimum OS versions — OPEN | Linux only initially lowers verification breadth; Windows/macOS add platform-specific sandbox/package/signing work and broader reach. | Engine/build support matrix, security/runtime/device evidence, maintenance owner and lifecycle policy. | Product/release; Stage 2.4. |
+| D-04 | Supported Linux distribution/kernel/systemd matrix — OPEN | Narrow Ubuntu LTS scope is easier to validate; broader distribution support raises sandbox and packaging variance. | Native runtime/preflight and containment tests on each claimed kernel/systemd combination. | Desktop/security; D-02 and Stage 2.4. |
+| D-05 | Android browser engine — BLOCKED | Platform WebView has OS updates/integration but platform behavior/limitations; other engines have licensing, update and compatibility costs. | Current official API/security guidance, licenses, threat model, engine spike on min/target APIs and update ownership. | Android/security; Stages 4.4 and 5.1. |
+| D-06 | iOS engine and entitlements — BLOCKED | WebKit/platform browser path vs any legally permitted alternative depend on current policy/entitlement and target distribution. | Dated Apple requirements, App Store constraints, supported API, signing/distribution review and security analysis. | iOS/product/legal; Stage 6.1. |
+| D-07 | Cross-platform schema authority and versioning — BLOCKED | JSON-schema-like canonical contract and per-platform adapters vs platform-owned models with explicit mapping; shared code improves consistency but can constrain native evolution. | Audit actual models, data portability needs, migration plan, golden fixture prototype. | Data architecture; Stage 7.1. |
+| D-08 | Import/export file format and compatibility policy — BLOCKED | Versioned JSON allows interoperability but requires strict validation/privacy; platform-native archive may improve fidelity but reduce portability. | D-07, threat review, limits, secret/private exclusion, corruption and migration tests. | Data/privacy; Stages 7.1–7.3. |
+| D-09 | Cloud synchronization — OPEN | Explicitly no sync minimizes data exposure/maintenance; optional encrypted opt-in sync adds utility but requires real backend/auth/key/revocation/conflict handling. | User/product need, backend ownership, threat model, privacy review and operational cost. No backend means decision “no sync,” not a placeholder. | Product/privacy/security; Stage 7.4. |
+| D-10 | Private-session guarantee and cleanup semantics — BLOCKED | Session-only ephemeral engine context vs platform-limited privacy mode; claims may be scoped by what OS/storage can prove. | Engine/platform selected, artifact inspection after normal close/crash/kill/reboot, recovery and independent review. | Browser/security; D-05/D-06 and Stages 3.8/5.6/6.4. |
+| D-11 | Browser storage deletion categories and language — BLOCKED | Separate categories (cookies/cache/site storage/history/downloads) provide honest scope; “clear all” must include precisely specified stores. | Engine inventory, seeded data class tests, failure handling and UX review; no secure-erasure promise without proof. | Privacy/browser; engine decision and Stage 3.10/5.8. |
+| D-12 | Site permission grant/retention model — BLOCKED | Deny-only is safest but limits browsing; per-site temporary/persistent grants increase utility and storage/UX risk. | Platform engine behavior, prompt/revocation tests, origin validation and privacy review. | Security/platform; D-05/D-06 and Stage 3.9/5.7/6.5. |
+| D-13 | Profile backup/export policy — OPEN | No export avoids secret portability; encrypted user-controlled export improves recovery but increases secret leakage risk; exclude cookies/credentials by default. | Data inventory, key handling, user recovery model, threat review and cross-profile tests. | Product/privacy/security; Stage 3.7. |
+| D-14 | Update architecture and rollback — BLOCKED | Platform stores may own updates; self-update offers control but adds signing, metadata, rollback and service burden. | Platform support decision, signing keys/operations, release ownership, tamper/interruption/rollback prototype. | Release/security; D-03 and Stage 13.4. |
+| D-15 | Release signing identities and distribution channels — OPEN | Store distribution vs direct downloads alter signing, notarization, updates and disclosure. | Platform support matrix, organization identity, key custody/rotation plan, legal requirements and support model. | Product/release/legal; Stage 13.3. |
+| D-16 | AI provider/local model and data transfer — OPEN | No AI keeps boundary smaller; local models reduce external transfer but add size/resource; provider APIs add quality/latency/cost/privacy trade-offs. | User value, data map, retention/security review, offline behavior, cost/latency benchmark and consent design. | Product/privacy/security; Stage 9.1. |
+| D-17 | PARMAR/AETHER protocol, identity and authorization — BLOCKED | Local authenticated IPC vs documented service API; each has platform-specific trust, key lifecycle, replay and availability costs. | Product boundaries, identity authority, threat model, version/revocation/audit design and mock/real interface test plan. | PARMAR/AETHER security; Stage 8.1. |
+| D-18 | VOKKI voice feature scope — OPEN | No voice until approved; push-to-talk is clearer than wake word; continuous listening entails greater permission/privacy burden. Camera video is excluded from silent capture. | Consent UX, platform permissions, privacy/retention, accessibility and device indicator tests. | VOKKI/privacy; Stage 8.3. |
+| D-19 | Original AETHER logo and visual identity — OPEN | Commission/design original mark and iconography; keep PARMAR emblem only for appropriately labeled integration. | Provenance, legal/brand review, multi-platform rendering and no-copy checklist. | Product/design/legal; Stage 10.1. |
+| D-20 | Desktop toolchain/runtime support range — OPEN | Pin one validated runtime/OS range vs broader compatibility; wider range raises testing and security patch obligations. | Electron/Chromium support cadence, OS runtime tests, dependency and maintenance analysis. | Desktop/release; Stages 2.1–2.4. |
+| D-21 | Performance budgets and reference hardware — OPEN | Budgets should follow measured supported devices; arbitrary targets can conceal poor UX or exclude low-resource systems. | Reproducible measurements, baseline devices, percentile methodology and product priorities. | Product/performance; Stage 11.4. |
+| D-22 | Platform feature support declarations — BLOCKED | Narrow support matrix yields credible releases; broad parity requires native runtime/device and security evidence. | Gate F evidence for each OS/version/device, feature matrix reconciliation, support owner and update plan. | Product/release; D-03 through D-06 and Stage 7.5. |
+| D-23 | Universal-search provider contract and provider selection — OPEN | Provider-neutral adapters and category capabilities preserve choice; selecting a provider before terms, privacy, category coverage, reliability and platform support are reviewed creates lock-in and data-flow risk. Do not treat the current desktop hard-coded endpoint as approval. | Define direct-URL/query intent, general/image/video/news/academic/shopping/local categories, suggestions disclosure, provider preference, result provenance/sponsored labels, history/retention, offline behavior and per-platform adapter contract. Approve a provider separately; this decision does not select one. | Product/search/privacy; Stage 3.2 and Phase 3B.8. |
+| D-24 | AI research provenance and source-validation contract — OPEN | Local/external model and retrieval approaches have different disclosure, freshness, coverage and validation limits. Generated answers can assist but cannot be represented as verified source content without evidence. | Define source discovery/validation, claim-to-citation mapping, link verification, freshness/conflict/coverage limits, generated-vs-verified labels, research organization and test cases for fabricated/missing/unavailable sources. D-16 governs provider/data-transfer choice. | Product/research/privacy; D-16 and Stage 9.1/9.2. |
+
+## Decision closure rules
+
+1. Attach evidence, date, exact source/ref or official requirement, owner and
+   independent reviewer where security/legal claims are involved.
+2. Record chosen option, rejected alternatives, assumptions, consequence,
+   revisit trigger and affected roadmap/gate IDs.
+3. Keep D-02 NO-GO until the security authority explicitly replaces it with a
+   reviewed, evidence-backed GO; an implementation change alone does not close
+   it.
+4. Keep BLOCKED decisions from being silently treated as defaults. Where work
+   can proceed safely (for example offline-shell runtime acceptance), state
+   its bounded assumptions and do not cross the blocked gate.
+5. Changes to remote browsing, signing, network access, external AI, sync, or
+   workflow dispatch require separate authorization appropriate to that action.
+
+At this snapshot there are **10 BLOCKED decisions** (D-05–D-08, D-10–D-12,
+D-14, D-17, D-22) and **one NO-GO decision** (D-02); D-23 and D-24 are OPEN,
+as are the other OPEN decisions. These counts refer only to this register.

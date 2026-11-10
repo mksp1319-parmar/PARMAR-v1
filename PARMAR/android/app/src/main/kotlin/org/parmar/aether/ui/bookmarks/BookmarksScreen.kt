@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import org.parmar.aether.data.CreateTabResult
 import org.parmar.aether.ui.theme.AetherColors
 import org.parmar.aether.ui.theme.AetherSpacing
+import kotlinx.coroutines.launch
 
 object BookmarksCopy {
     const val EMPTY_TITLE = "No bookmarks yet"
@@ -49,12 +51,13 @@ object BookmarksCopy {
 @Composable
 fun BookmarksScreen(
     bookmarks: List<Bookmark>,
-    addBookmark: (String, String?) -> AddBookmarkResult,
-    updateBookmark: (String, String, String?) -> AddBookmarkResult,
-    onRemoveBookmark: (String) -> Boolean,
-    onCreateSavedUrlTab: (Bookmark) -> CreateTabResult,
+    addBookmark: suspend (String, String?) -> AddBookmarkResult,
+    updateBookmark: suspend (String, String, String?) -> AddBookmarkResult,
+    onRemoveBookmark: suspend (String) -> Boolean,
+    onCreateSavedUrlTab: suspend (Bookmark) -> CreateTabResult,
     onHome: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf("") }
     var title by remember { mutableStateOf("") }
     var search by remember { mutableStateOf("") }
@@ -69,13 +72,13 @@ fun BookmarksScreen(
     }
 
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp),
+        modifier = Modifier.fillMaxSize(),
     ) {
+        val horizontalPadding = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(horizontal = horizontalPadding)
                 .widthIn(max = if (maxWidth >= 720.dp) 800.dp else Dp.Unspecified)
                 .align(Alignment.TopCenter),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -137,26 +140,28 @@ fun BookmarksScreen(
                         formMessage = null
                     },
                     onAdd = {
-                        val result = editingBookmark?.let {
-                            updateBookmark(it.id, url, title)
-                        } ?: addBookmark(url, title)
-                        when (result) {
-                            is AddBookmarkResult.Added, is AddBookmarkResult.Updated -> {
-                                editingBookmark = null
-                                url = ""
-                                title = ""
-                                formMessage = null
+                        scope.launch {
+                            val result = editingBookmark?.let {
+                                updateBookmark(it.id, url, title)
+                            } ?: addBookmark(url, title)
+                            when (result) {
+                                is AddBookmarkResult.Added, is AddBookmarkResult.Updated -> {
+                                    editingBookmark = null
+                                    url = ""
+                                    title = ""
+                                    formMessage = null
+                                }
+                                AddBookmarkResult.Duplicate ->
+                                    formMessage = "That address is already bookmarked."
+                                AddBookmarkResult.InvalidUrl ->
+                                    formMessage = "Enter a valid credential-free HTTPS address."
+                                AddBookmarkResult.TitleTooLong ->
+                                    formMessage = "Title must be 300 characters or fewer."
+                                AddBookmarkResult.LimitReached ->
+                                    formMessage = "The maximum of 500 bookmarks has been reached."
+                                AddBookmarkResult.NotFound ->
+                                    formMessage = "That bookmark no longer exists."
                             }
-                            AddBookmarkResult.Duplicate ->
-                                formMessage = "That address is already bookmarked."
-                            AddBookmarkResult.InvalidUrl ->
-                                formMessage = "Enter a valid credential-free HTTPS address."
-                            AddBookmarkResult.TitleTooLong ->
-                                formMessage = "Title must be 300 characters or fewer."
-                            AddBookmarkResult.LimitReached ->
-                                formMessage = "The maximum of 500 bookmarks has been reached."
-                            AddBookmarkResult.NotFound ->
-                                formMessage = "That bookmark no longer exists."
                         }
                     },
                 )
@@ -196,12 +201,14 @@ fun BookmarksScreen(
                         },
                         onRemove = { removingBookmark = bookmark },
                         onCreateSavedUrlTab = {
-                            formMessage = when (val result = onCreateSavedUrlTab(bookmark)) {
-                                is CreateTabResult.Created ->
-                                    "Saved-URL tab created. Page content was not loaded."
-                                CreateTabResult.LimitReached ->
-                                    "The 16-tab limit has been reached."
-                                is CreateTabResult.Failed -> result.message
+                            scope.launch {
+                                formMessage = when (val result = onCreateSavedUrlTab(bookmark)) {
+                                    is CreateTabResult.Created ->
+                                        "Saved-URL tab created. Page content was not loaded."
+                                    CreateTabResult.LimitReached ->
+                                        "The 16-tab limit has been reached."
+                                    is CreateTabResult.Failed -> result.message
+                                }
                             }
                         },
                     )
@@ -236,10 +243,12 @@ fun BookmarksScreen(
             text = { Text("This removes the saved address only; it does not affect page content.") },
             confirmButton = {
                 TextButton(onClick = {
-                    if (!onRemoveBookmark(bookmark.id)) {
-                        formMessage = "The bookmark could not be removed."
+                    scope.launch {
+                        if (!onRemoveBookmark(bookmark.id)) {
+                            formMessage = "The bookmark could not be removed."
+                        }
+                        removingBookmark = null
                     }
-                    removingBookmark = null
                 }) {
                     Text("Remove")
                 }

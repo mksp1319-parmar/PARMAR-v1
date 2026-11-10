@@ -113,7 +113,7 @@ class BookmarkRepositoryTest {
         val bookmark = (repository.add("https://example.test", null) as AddBookmarkResult.Added).bookmark
         repository.remove(bookmark.id)
         assertTrue(repository.list().isEmpty())
-        assertEquals("No bookmarks yet", org.parmar.aether.ui.BookmarksCopy.EMPTY_TITLE)
-        assertTrue(org.parmar.aether.ui.BookmarksCopy.EMPTY_MESSAGE.contains("Nothing will be opened"))
+        assertEquals("No bookmarks yet", BookmarksCopy.EMPTY_TITLE)
+        assertTrue(BookmarksCopy.EMPTY_MESSAGE.contains("Nothing will be opened"))
     }
 }

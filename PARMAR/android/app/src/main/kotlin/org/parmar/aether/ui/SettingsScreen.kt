@@ -53,13 +53,13 @@ fun SettingsScreen(
     val appName = stringResource(R.string.app_name)
 
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp),
+        modifier = Modifier.fillMaxSize(),
     ) {
+        val horizontalPadding = if (maxWidth >= 720.dp) 48.dp else AetherSpacing.large.dp
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(horizontal = horizontalPadding)
                 .widthIn(max = if (maxWidth >= 720.dp) 720.dp else androidx.compose.ui.unit.Dp.Unspecified)
                 .align(Alignment.TopCenter)
                 .verticalScroll(rememberScrollState())
