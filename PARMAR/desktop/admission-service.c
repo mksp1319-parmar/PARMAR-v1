@@ -22,7 +22,8 @@
 
 #define MAX_REQUEST_BYTES 4096
 #define MAX_RESPONSE_BYTES 65536
-#define IO_TIMEOUT_MS 5000
+#define REQUEST_TIMEOUT_MS 5000
+#define WORKER_TIMEOUT_MS 5000
 #define SOCKET_MODE 0660
 #define SOCKET_PARENT_MODE 0750
 
@@ -71,6 +72,17 @@ typedef struct {
 
 static volatile sig_atomic_t stop_requested = 0;
 static int write_all(int fd, const char *buffer, size_t length);
+
+static int deadline_after_ms(struct timespec *deadline, int timeout_ms) {
+  if (clock_gettime(CLOCK_MONOTONIC, deadline) != 0) return -1;
+  deadline->tv_sec += timeout_ms / 1000;
+  deadline->tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (deadline->tv_nsec >= 1000000000L) {
+    ++deadline->tv_sec;
+    deadline->tv_nsec -= 1000000000L;
+  }
+  return 0;
+}
 
 static void handle_signal(int signal_number) {
   (void)signal_number;
@@ -363,20 +375,35 @@ static int write_all(int fd, const char *buffer, size_t length) {
   return 0;
 }
 
-static int wait_fd(int fd, short events) {
+static int wait_fd_until(int fd, short events, const struct timespec *deadline) {
   struct pollfd descriptor = { .fd = fd, .events = events };
-  int result;
-  do {
-    result = poll(&descriptor, 1, IO_TIMEOUT_MS);
-  } while (result < 0 && errno == EINTR && !stop_requested);
-  if (result <= 0 || (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) return -1;
-  return (descriptor.revents & events) != 0 ? 0 : -1;
+  for (;;) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;
+    int64_t remaining_ns = ((int64_t)deadline->tv_sec - (int64_t)now.tv_sec) * 1000000000
+      + deadline->tv_nsec - now.tv_nsec;
+    if (remaining_ns <= 0) {
+      errno = ETIMEDOUT;
+      return -1;
+    }
+    int64_t remaining_ms = (remaining_ns + 999999) / 1000000;
+    int timeout = remaining_ms > INT_MAX ? INT_MAX : (int)remaining_ms;
+    int result = poll(&descriptor, 1, timeout);
+    if (result < 0 && errno == EINTR && !stop_requested) continue;
+    if (result == 0) {
+      errno = ETIMEDOUT;
+      return -1;
+    }
+    if (result < 0 || (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) return -1;
+    return (descriptor.revents & events) != 0 ? 0 : -1;
+  }
 }
 
-static int read_line(int fd, char *buffer, size_t capacity, size_t *length) {
+static int read_line(int fd, char *buffer, size_t capacity, size_t *length,
+  const struct timespec *deadline) {
   size_t used = 0;
   while (used + 1 < capacity) {
-    if (wait_fd(fd, POLLIN) != 0) return -1;
+    if (wait_fd_until(fd, POLLIN, deadline) != 0) return -1;
     char ch;
     ssize_t count = read(fd, &ch, 1);
     if (count < 0 && errno == EINTR) continue;
@@ -630,7 +657,10 @@ static int start_worker(service_config *config) {
   config->worker_out_fd = from_worker[0];
   char ready[64];
   size_t ready_length = 0;
-  if (read_line(config->worker_out_fd, ready, sizeof(ready), &ready_length) != 0
+  struct timespec worker_deadline;
+  if (deadline_after_ms(&worker_deadline, WORKER_TIMEOUT_MS) != 0
+    || read_line(config->worker_out_fd, ready, sizeof(ready), &ready_length,
+      &worker_deadline) != 0
     || strcmp(ready, "{\"ready\":true}") != 0) {
     errno = EIO;
     return -1;
@@ -639,7 +669,8 @@ static int start_worker(service_config *config) {
 }
 
 static int relay_to_worker(service_config *config, const char *role,
-  const service_request *request, const char *raw_request, int client_fd) {
+  const service_request *request, const char *raw_request, int client_fd,
+  const struct timespec *deadline) {
   char envelope[MAX_REQUEST_BYTES + 256];
   char contract_request[MAX_REQUEST_BYTES];
   int contract_length;
@@ -666,7 +697,8 @@ static int relay_to_worker(service_config *config, const char *role,
 
   char response[MAX_RESPONSE_BYTES];
   size_t response_length = 0;
-  if (read_line(config->worker_out_fd, response, sizeof(response), &response_length) != 0) {
+  if (read_line(config->worker_out_fd, response, sizeof(response), &response_length,
+    deadline) != 0) {
     config->worker_failed = 1;
     return send_error(client_fd, "WORKER_UNAVAILABLE", "Admission contract worker did not respond.");
   }
@@ -680,6 +712,9 @@ static int relay_to_worker(service_config *config, const char *role,
 }
 
 static int handle_client(service_config *config, int client_fd) {
+  struct timespec deadline;
+  if (deadline_after_ms(&deadline, REQUEST_TIMEOUT_MS) != 0) return -1;
+
   struct ucred credentials;
   socklen_t credentials_length = sizeof(credentials);
   if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &credentials, &credentials_length) != 0
@@ -692,7 +727,7 @@ static int handle_client(service_config *config, int client_fd) {
 
   char line[MAX_REQUEST_BYTES + 1];
   size_t length = 0;
-  if (read_line(client_fd, line, sizeof(line), &length) != 0) {
+  if (read_line(client_fd, line, sizeof(line), &length, &deadline) != 0) {
     return send_error(client_fd, "INVALID_MESSAGE", "Request was incomplete, malformed, or too large.");
   }
   if (length == 0) return send_error(client_fd, "INVALID_MESSAGE", "Request must not be empty.");
@@ -716,7 +751,7 @@ static int handle_client(service_config *config, int client_fd) {
     return send_error(client_fd, "UNAUTHORIZED_OPERATION", "Peer role is not authorized for this operation.");
   }
 
-  return relay_to_worker(config, role, &request, line, client_fd);
+  return relay_to_worker(config, role, &request, line, client_fd, &deadline);
 }
 
 static int create_listener(service_config *config) {

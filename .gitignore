@@ -58,6 +58,7 @@ build/
 dist/
 site/
 node_modules/
+.gradle/
 PARMAR/desktop/out/
 
 # Local runtime artifacts

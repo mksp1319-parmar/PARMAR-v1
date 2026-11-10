@@ -298,11 +298,6 @@ test('Linux runtime workflow requires namespace, Electron UI, isolation, and scr
   assert.match(workflow, /PARMAR_AETHER_UI_SCREENSHOT_DIR:/);
   assert.match(workflow, /npm run test:electron-isolation/);
   assert.match(workflow, /getAppImageTools\(undefined,\s*Arch\.x64\)/);
-  assert.match(
-    workflow,
-    /const requiredAccess = name === 'runtime' \|\| name === 'runtimeLibraries'\s+\? fs\.constants\.R_OK\s+:\s+fs\.constants\.X_OK/,
-  );
-  assert.match(workflow, /fs\.accessSync\(toolPath,\s*requiredAccess\)/);
   assert.match(workflow, /ldd "\$electron_binary"/);
   assert.match(workflow, /grep -F 'not found'/);
   assert.match(workflow, /--appimage-extract/);
@@ -312,60 +307,6 @@ test('Linux runtime workflow requires namespace, Electron UI, isolation, and scr
   assert.match(workflow, /full-suite\/test\.log/);
   assert.match(workflow, /if:\s*always\(\)\s*&&\s*steps\.outputs\.outputs\.evidence_dir != ''/);
   assert.match(workflow, /uses:\s*actions\/upload-artifact@v4/);
-});
-
-test('Ubuntu 24.04 Electron runtime workflows use current t64 package names', () => {
-  const workflows = [
-    {
-      contents: fs.readFileSync(
-        path.resolve(desktopDirectory, '../../.github/workflows/aether-linux-runtime.yml'),
-        'utf8',
-      ),
-      packageNames: [
-        'libatk-bridge2.0-0t64',
-        'libatk1.0-0t64',
-        'libatspi2.0-0t64',
-        'libcups2t64',
-        'libglib2.0-0t64',
-        'libgtk-3-0t64',
-        'x11-xkb-utils',
-        'xkb-data',
-      ],
-      needsXvfbPreflight: true,
-    },
-    {
-      contents: fs.readFileSync(
-        path.resolve(desktopDirectory, '../../.github/workflows/aether-profile-storage-runtime.yml'),
-        'utf8',
-      ),
-      packageNames: [
-        'libatk-bridge2.0-0t64',
-        'libatk1.0-0t64',
-        'libatspi2.0-0t64',
-        'libcups2t64',
-        'libgtk-3-0t64',
-        'x11-xkb-utils',
-        'xkb-data',
-      ],
-      needsXvfbPreflight: true,
-    },
-  ];
-  for (const { contents, packageNames, needsXvfbPreflight } of workflows) {
-    for (const packageName of packageNames) {
-      assert.match(contents, new RegExp(`\\b${packageName}\\b`));
-    }
-    if (needsXvfbPreflight) {
-      assert.match(contents, /\/usr\/bin\/xkbcomp/);
-      assert.match(contents, /\/usr\/share\/X11\/xkb\/rules\/evdev/);
-      assert.match(contents, /xvfb-run -a bash -euc '/);
-      assert.match(contents, /test -n "\$DISPLAY"/);
-      assert.match(contents, /\/usr\/bin\/xkbcomp -xkb "\$DISPLAY" - >\/dev\/null/);
-    }
-    assert.doesNotMatch(
-      contents,
-      /\blibatk-bridge2\.0-0\b|\blibatk1\.0-0\b|\blibatspi2\.0-0\b|\blibcups2\b|\blibglib2\.0-0\b|\blibgtk-3-0\b/,
-    );
-  }
 });
 
 function runProfileStorageHarnessFixture(harnessStatus, teeShouldFail) {

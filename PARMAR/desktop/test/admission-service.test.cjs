@@ -18,6 +18,9 @@ const GENERATION_ID = '123e4567-e89b-42d3-a456-426614174000';
 const CURRENT_UID = typeof process.getuid === 'function' ? process.getuid() : null;
 const CURRENT_GID = typeof process.getgid === 'function' ? process.getgid() : null;
 const REQUEST_TIMEOUT_MS = 3000;
+const SETPRIV_PATH = ['/usr/bin/setpriv', '/bin/setpriv'].find((candidate) =>
+  fs.existsSync(candidate));
+const CAN_SPAWN_AUTHORIZED_PEER = CURRENT_UID === 0 && SETPRIV_PATH !== undefined;
 
 let temporaryRoot;
 let serviceBinary;
@@ -100,6 +103,95 @@ function connectAndSend(socketPath, data, { disconnectAfterWrite = false } = {})
 function sendRequest(socketPath, value, options) {
   const serialized = typeof value === 'string' ? value : JSON.stringify(value);
   return connectAndSend(socketPath, `${serialized}\n`, options);
+}
+
+function spawnAuthorizedPeer(uid, socketPath, script) {
+  return spawn(SETPRIV_PATH, [
+    '--reuid', String(uid),
+    '--regid', String(CURRENT_GID),
+    '--clear-groups',
+    '--',
+    process.execPath,
+    '-e',
+    script,
+    socketPath,
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+function waitForOutputLine(child, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let output = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('Authorized admission peer did not connect in time.'));
+    }, timeoutMs);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+      const newline = output.indexOf('\n');
+      if (newline >= 0) {
+        clearTimeout(timer);
+        resolve(output.slice(0, newline));
+      }
+    });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      if (output.includes('\n')) return;
+      clearTimeout(timer);
+      reject(new Error(`Authorized admission peer exited before connecting (${code}).`));
+    });
+  });
+}
+
+function queryServiceInfoAsAuthorizedPeer(uid, socketPath, timeoutMs) {
+  const child = spawnAuthorizedPeer(uid, socketPath, `
+    const net = require('node:net');
+    const socket = net.createConnection(process.argv[1]);
+    let response = '';
+    socket.on('error', (error) => {
+      process.stderr.write(error.message);
+      process.exit(2);
+    });
+    socket.on('connect', () => socket.write(
+      '{"version":1,"operation":"serviceInfo","requestId":"queued-info"}\\n',
+    ));
+    socket.on('data', (chunk) => {
+      response += chunk.toString('utf8');
+      const newline = response.indexOf('\\n');
+      if (newline >= 0) {
+        process.stdout.write(response.slice(0, newline));
+        socket.end();
+      }
+    });
+  `);
+  return new Promise((resolve, reject) => {
+    let output = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('Queued authorized request was starved by a stalled client.'));
+    }, timeoutMs);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`Authorized service-info peer exited with status ${code}.`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(output));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 async function waitForSocket(service, socketPath) {
@@ -250,6 +342,45 @@ test('native service rejects the actual kernel peer UID when it has no configure
       assert.equal(response.error.code, 'UNAUTHORIZED_PEER');
     }
   } finally {
+    await stopService(service.service);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('native service bounds a stalled authorized client so queued requests proceed', {
+  skip: CAN_SPAWN_AUTHORIZED_PEER
+    ? false
+    : 'Requires root to spawn a distinct authorized peer UID.',
+}, async () => {
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, 'stalled-authorized-peer-'));
+  fs.chmodSync(directory, 0o750);
+  const admissionUid = uidForRole(24);
+  const service = await startService(directory, { admissionUid });
+  const slowPeer = spawnAuthorizedPeer(admissionUid, service.socketPath, `
+    const net = require('node:net');
+    const socket = net.createConnection(process.argv[1]);
+    socket.on('error', () => process.exit(0));
+    socket.on('connect', () => {
+      process.stdout.write('connected\\n');
+      socket.write('{');
+      setInterval(() => socket.write('x'), 500);
+    });
+    socket.on('close', () => process.exit(0));
+  `);
+  try {
+    assert.equal(await waitForOutputLine(slowPeer, REQUEST_TIMEOUT_MS), 'connected');
+    await new Promise((resolve) => setTimeout(resolve, 2700));
+    const response = await queryServiceInfoAsAuthorizedPeer(
+      admissionUid,
+      service.socketPath,
+      3500,
+    );
+    assert.equal(response.ok, true);
+  } finally {
+    if (slowPeer.exitCode === null) {
+      slowPeer.kill('SIGKILL');
+      await new Promise((resolve) => slowPeer.once('exit', resolve));
+    }
     await stopService(service.service);
     fs.rmSync(directory, { recursive: true, force: true });
   }
