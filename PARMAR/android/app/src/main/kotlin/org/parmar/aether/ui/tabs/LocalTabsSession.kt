@@ -35,6 +35,28 @@ data class LocalTabsSession(
         return copy(activeTabId = id)
     }
 
+    fun setPinned(id: String, pinned: Boolean): LocalTabsSession {
+        val target = tabs.firstOrNull { it.id == id } ?: return this
+        val ordered = tabs
+            .map { if (it.id == id) it.copy(pinned = pinned) else it }
+            .sortedWith(compareByDescending<LocalTab> { it.pinned }.thenBy { it.order })
+            .mapIndexed { order, tab -> tab.copy(order = order) }
+        if (ordered == tabs) return this
+        return copy(tabs = ordered)
+    }
+
+    fun move(id: String, direction: Int): LocalTabsSession {
+        require(direction == -1 || direction == 1) { "Tab movement must be one position." }
+        val index = tabs.indexOfFirst { it.id == id }
+        if (index < 0) return this
+        val adjacent = index + direction
+        if (adjacent !in tabs.indices || tabs[adjacent].pinned != tabs[index].pinned) return this
+        val reordered = tabs.toMutableList().apply {
+            add(adjacent, removeAt(index))
+        }.mapIndexed { order, tab -> tab.copy(order = order) }
+        return copy(tabs = reordered)
+    }
+
     fun close(id: String): LocalTabsSession {
         val index = tabs.indexOfFirst { it.id == id }
         if (index < 0) return this

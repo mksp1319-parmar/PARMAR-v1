@@ -184,6 +184,13 @@ def test_authenticated_principal_is_server_resolved_and_not_passed_to_chat(monke
         SessionPolicy(idle_timeout_seconds=60, absolute_timeout_seconds=300),
     )
     credentials = manager.create_authenticated_session(uuid4(), "test-identity-source")
+    active_profile_id = uuid4()
+    selected_session = manager.select_profile(
+        credentials.session.session_id,
+        credentials.session.user_id,
+        active_profile_id,
+    )
+    assert selected_session is not None
     body = json.dumps({"message": "hello"}).encode("utf-8")
     csrf_token = manager.csrf_token(credentials.session.session_id)
     request, errors, _ = make_request(
@@ -216,6 +223,7 @@ def test_authenticated_principal_is_server_resolved_and_not_passed_to_chat(monke
     assert request.request_context == HTTPRequestContext(
         Principal.authenticated_user(credentials.session.user_id, "test-identity-source"),
         credentials.session.session_id,
+        active_profile_id,
     )
     assert calls[0][0] == "hello"
     assert isinstance(calls[0][1], ChatContext)

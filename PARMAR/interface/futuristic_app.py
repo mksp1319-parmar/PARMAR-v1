@@ -27,6 +27,11 @@ from PARMAR.conversations import (
     SQLiteConversationRepository,
 )
 from PARMAR.identity import HTTPRequestContext, LocalDemoPrincipalResolver, Principal, PrincipalResolver
+from PARMAR.identity_store import (
+    IdentityAccessDenied,
+    IdentityStorageUnavailable,
+    SQLiteIdentityRepository,
+)
 from PARMAR.memories import (
     MAX_RETRIEVED_MEMORIES,
     MemoryConsentRequired,
@@ -80,6 +85,7 @@ _PERSISTENT_CONVERSATIONS = SQLiteConversationRepository.from_environment()
 CONVERSATION_REPOSITORY: ConversationRepository = _PERSISTENT_CONVERSATIONS
 MESSAGE_REPOSITORY: MessageRepository = _PERSISTENT_CONVERSATIONS
 MEMORY_REPOSITORY: MemoryRepository = SQLiteMemoryRepository.from_environment()
+IDENTITY_REPOSITORY = SQLiteIdentityRepository.from_environment()
 
 
 def _validate_development_auth_configuration(
@@ -437,7 +443,11 @@ def _resolve_request_context(request: object) -> bool:
             return False
         if session is not None:
             principal = Principal.authenticated_user(session.user_id, session.authentication_source)
-            request.request_context = HTTPRequestContext(principal, session.session_id)
+            request.request_context = HTTPRequestContext(
+                principal,
+                session.session_id,
+                session.active_profile_id,
+            )
             return True
     try:
         principal = PRINCIPAL_RESOLVER.resolve(request)
@@ -509,8 +519,29 @@ def _public_conversation(conversation) -> dict[str, object]:
     }
 
 
+def _public_profile(profile) -> dict[str, object]:
+    return {
+        "profile_id": str(profile.profile_id),
+        "name": profile.name,
+        "created_at": profile.created_at.isoformat(),
+    }
+
+
+def _public_workspace(workspace) -> dict[str, object]:
+    return {
+        "workspace_id": str(workspace.workspace_id),
+        "name": workspace.name,
+        "role": workspace.role,
+        "created_at": workspace.created_at.isoformat(),
+    }
+
+
 def _conversation_storage_error(request: object) -> None:
     request.send_error(503, "Conversation storage is unavailable")
+
+
+def _identity_storage_error(request: object) -> None:
+    request.send_error(503, "Identity storage is unavailable")
 
 
 def _is_authoritatively_released(response: object) -> bool:
@@ -682,6 +713,11 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                     "authenticated": True,
                     "csrf_token": csrf_token,
                     "identity_scope": identity_scope,
+                    "active_profile_id": (
+                        str(context.active_profile_id)
+                        if context.active_profile_id is not None
+                        else None
+                    ),
                 }
                 if (
                     development_auth_available
@@ -715,6 +751,58 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                     {"Cache-Control": "no-store"},
                 )
             return
+        if parsed.path in {"/api/identity/profiles", "/api/identity/workspaces"}:
+            context = self.request_context
+            if not context.principal.authenticated or context.principal.user_id is None:
+                self.send_error(401, "An authenticated session is required")
+                return
+            try:
+                if parsed.path == "/api/identity/profiles":
+                    records = IDENTITY_REPOSITORY.list_profiles(context.principal.user_id)
+                    result = {"profiles": [_public_profile(item) for item in records]}
+                else:
+                    records = IDENTITY_REPOSITORY.list_workspaces(context.principal.user_id)
+                    result = {"workspaces": [_public_workspace(item) for item in records]}
+            except IdentityStorageUnavailable:
+                _identity_storage_error(self)
+                return
+            _send_json_with_headers(self, 200, result, {"Cache-Control": "no-store"})
+            return
+        if parsed.path.startswith("/api/identity/workspaces/") and parsed.path.endswith("/profiles"):
+            context = self.request_context
+            if not context.principal.authenticated or context.principal.user_id is None:
+                self.send_error(401, "An authenticated session is required")
+                return
+            parts = parsed.path.strip("/").split("/")
+            if len(parts) != 5:
+                self.send_error(404, "Workspace not found")
+                return
+            try:
+                workspace_id = UUID(parts[3])
+                if (
+                    parts[0] != "api"
+                    or parts[1] != "identity"
+                    or parts[2] != "workspaces"
+                    or parts[4] != "profiles"
+                ):
+                    raise ValueError
+                profiles = IDENTITY_REPOSITORY.list_workspace_profiles(
+                    context.principal.user_id,
+                    workspace_id,
+                )
+            except (ValueError, IdentityAccessDenied):
+                self.send_error(404, "Workspace not found")
+                return
+            except IdentityStorageUnavailable:
+                _identity_storage_error(self)
+                return
+            _send_json_with_headers(
+                self,
+                200,
+                {"profiles": [_public_profile(item) for item in profiles]},
+                {"Cache-Control": "no-store"},
+            )
+            return
         if parsed.path == "/api/conversations":
             context = self.request_context
             if (
@@ -724,8 +812,14 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             ):
                 self.send_error(401, "An authenticated session is required")
                 return
+            if context.active_profile_id is None:
+                self.send_error(409, "An active profile is required")
+                return
             try:
-                conversations = CONVERSATION_REPOSITORY.list_owned(context.principal.user_id)
+                conversations = CONVERSATION_REPOSITORY.list_owned(
+                    context.principal.user_id,
+                    context.active_profile_id,
+                )
             except ConversationStorageUnavailable:
                 _conversation_storage_error(self)
                 return
@@ -745,6 +839,9 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             ):
                 self.send_error(401, "An authenticated session is required")
                 return
+            if context.active_profile_id is None:
+                self.send_error(409, "An active profile is required")
+                return
             conversation_id_value = parsed.path.removeprefix("/api/conversations/")
             try:
                 conversation_id = UUID(conversation_id_value)
@@ -752,7 +849,11 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                 conversation_id = None
             try:
                 conversation = (
-                    CONVERSATION_REPOSITORY.get_owned(conversation_id, context.principal.user_id)
+                    CONVERSATION_REPOSITORY.get_owned(
+                        conversation_id,
+                        context.principal.user_id,
+                        context.active_profile_id,
+                    )
                     if conversation_id is not None
                     else None
                 )
@@ -761,6 +862,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                         conversation_id,
                         context.principal.user_id,
                         MAX_MESSAGES_PER_CONVERSATION,
+                        context.active_profile_id,
                     )
                     if conversation is not None
                     else None
@@ -961,6 +1063,138 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                     "Set-Cookie": clear_session_cookie_header(),
                     "Cache-Control": "no-store",
                 },
+            )
+            return
+
+        if parsed.path == "/api/session/profile":
+            context = self.request_context
+            if (
+                not context.principal.authenticated
+                or context.principal.user_id is None
+                or context.session_id is None
+                or SESSION_MANAGER is None
+            ):
+                self.send_error(401, "An authenticated session is required")
+                return
+            if set(payload) != {"profile_id"} or not isinstance(payload["profile_id"], str):
+                self.send_error(400, "A profile ID is required")
+                return
+            try:
+                profile_id = UUID(payload["profile_id"])
+            except ValueError:
+                self.send_error(404, "Profile not found")
+                return
+            try:
+                profile = IDENTITY_REPOSITORY.get_owned_profile(
+                    context.principal.user_id,
+                    profile_id,
+                )
+                if profile is None:
+                    self.send_error(404, "Profile not found")
+                    return
+                selected_session = SESSION_MANAGER.select_profile(
+                    context.session_id,
+                    context.principal.user_id,
+                    profile_id,
+                )
+            except IdentityStorageUnavailable:
+                _identity_storage_error(self)
+                return
+            except SessionStorageUnavailable:
+                self.send_error(503, "Authenticated session storage is unavailable")
+                return
+            if selected_session is None:
+                self.send_error(401, "A valid server-side session is required")
+                return
+            self.request_context = HTTPRequestContext(
+                context.principal,
+                context.session_id,
+                selected_session.active_profile_id,
+            )
+            _send_json_with_headers(
+                self,
+                200,
+                {"active_profile": _public_profile(profile)},
+                {"Cache-Control": "no-store"},
+            )
+            return
+
+        if parsed.path in {"/api/identity/profiles", "/api/identity/workspaces"}:
+            context = self.request_context
+            if not context.principal.authenticated or context.principal.user_id is None:
+                self.send_error(401, "An authenticated session is required")
+                return
+            if set(payload) != {"name"}:
+                self.send_error(400, "Only a resource name is accepted")
+                return
+            try:
+                if parsed.path == "/api/identity/profiles":
+                    profile = IDENTITY_REPOSITORY.create_profile(
+                        context.principal.user_id,
+                        payload["name"],
+                    )
+                    result = _public_profile(profile)
+                else:
+                    workspace = IDENTITY_REPOSITORY.create_workspace(
+                        context.principal.user_id,
+                        payload["name"],
+                    )
+                    result = _public_workspace(workspace)
+            except ValueError as error:
+                self.send_error(400, str(error))
+                return
+            except IdentityStorageUnavailable:
+                _identity_storage_error(self)
+                return
+            _send_json_with_headers(
+                self,
+                201,
+                result,
+                {"Cache-Control": "no-store"},
+            )
+            return
+
+        if parsed.path.startswith("/api/identity/workspaces/"):
+            context = self.request_context
+            if not context.principal.authenticated or context.principal.user_id is None:
+                self.send_error(401, "An authenticated session is required")
+                return
+            parts = parsed.path.strip("/").split("/")
+            if (
+                len(parts) != 6
+                or parts[0] != "api"
+                or parts[1] != "identity"
+                or parts[2] != "workspaces"
+                or parts[4] != "profiles"
+            ):
+                self.send_error(404, "Workspace or profile not found")
+                return
+            if payload:
+                self.send_error(400, "Workspace profile sharing accepts an empty JSON object only")
+                return
+            try:
+                workspace_id = UUID(parts[3])
+                profile_id = UUID(parts[5])
+            except ValueError:
+                self.send_error(404, "Workspace or profile not found")
+                return
+            try:
+                IDENTITY_REPOSITORY.add_profile_to_workspace(
+                    context.principal.user_id,
+                    workspace_id,
+                    profile_id,
+                )
+            except IdentityAccessDenied:
+                self.send_error(404, "Workspace or profile not found")
+                return
+            except IdentityStorageUnavailable:
+                _identity_storage_error(self)
+                return
+            _send_json_with_headers(
+                self,
+                200,
+                {"shared": True},
+                {"Cache-Control": "no-store"},
             )
             return
 
@@ -1189,6 +1423,14 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                     "message": "The pending approval is missing, expired, or already used.",
                 })
                 return
+            pending_profile_id = (
+                pending.execution_context.get("profile_id")
+                if pending.execution_context is not None
+                else None
+            )
+            if pending_profile_id is not None and pending_profile_id != str(context.active_profile_id):
+                self.send_error(404, "Approval not found")
+                return
             if request_text is not None and request_text.strip() != pending.request_text:
                 self._send_json(409, {
                     "status": "APPROVAL_REQUEST_MISMATCH",
@@ -1276,6 +1518,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                                 owner_user_id,
                                 (("assistant", result["message"]),),
                                 research=research_result,
+                                profile_id=UUID(pending_profile_id),
                             )
                         except ConversationLimitExceeded:
                             self.send_error(413, "Conversation response exceeds the storage limit")
@@ -1352,10 +1595,18 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                 if owner_user_id is None:
                     self.send_error(401, "A valid server-side session is required")
                     return
+                profile_id = request_context.active_profile_id
+                if profile_id is None:
+                    self.send_error(409, "An active profile is required")
+                    return
                 created_for_message = conversation_id_value is None
                 if created_for_message:
                     try:
-                        conversation = CONVERSATION_REPOSITORY.create_for_message(owner_user_id, message)
+                        conversation = CONVERSATION_REPOSITORY.create_for_message(
+                            owner_user_id,
+                            message,
+                            profile_id,
+                        )
                     except ConversationLimitExceeded:
                         self.send_error(429, "Conversation storage limit reached")
                         return
@@ -1369,7 +1620,11 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                         conversation_id = None
                     try:
                         conversation = (
-                            CONVERSATION_REPOSITORY.get_owned(conversation_id, owner_user_id)
+                            CONVERSATION_REPOSITORY.get_owned(
+                                conversation_id,
+                                owner_user_id,
+                                profile_id,
+                            )
                             if conversation_id is not None
                             else None
                         )
@@ -1385,6 +1640,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                         conversation_id,
                         owner_user_id,
                         MAX_RECENT_MESSAGES,
+                        profile_id,
                     )
                 except ConversationStorageUnavailable:
                     _conversation_storage_error(self)
@@ -1402,6 +1658,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                             conversation_id,
                             owner_user_id,
                             message,
+                            profile_id,
                         )
                     except ConversationStorageUnavailable:
                         _conversation_storage_error(self)
@@ -1467,6 +1724,11 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                         "recent_messages": recent_messages,
                         "research": research,
                         "conversation_id": str(conversation_id) if conversation_id is not None else None,
+                        "profile_id": (
+                            str(request_context.active_profile_id)
+                            if request_context.active_profile_id is not None
+                            else None
+                        ),
                     },
                 )
                 if getattr(self, "_approval_storage_unavailable", False):
@@ -1517,6 +1779,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                                 if len(messages_to_persist) > 1
                                 else None
                             ),
+                                profile_id=request_context.active_profile_id,
                         )
                     except ConversationLimitExceeded:
                         self.send_error(413, "Conversation response exceeds the storage limit")

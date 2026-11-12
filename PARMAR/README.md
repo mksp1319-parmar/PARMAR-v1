@@ -306,7 +306,7 @@ Phone-awareness HTTP simulation is anonymous local-demo only; authenticated sess
 
 The Memory page distinguishes server-side storage from external disclosure: when a non-local provider is selected, it says that matched notes may be included only if that provider is authorized for the request. This is informational and does not grant provider authorization.
 
-## Vokki assistant layer
+## VOKKI assistant layer
 
 VOKKI is PARMAR's human-facing communication layer, not a safety or approval authority, proof of execution, or a separate action executor. Backend responses expose one versioned `voki_contract` with separate `lifecycle`, `request_review`, `enforcement`, `approval`, `provider`, `response_safety`, and `response_disposition` fields, plus message, request ID, timestamp, and source. Unknown fields remain `UNKNOWN`; the legacy request-review status `SAFE` does not mean a provider response passed response-safety validation.
 
@@ -316,6 +316,12 @@ Both `/api/analyze` and `/api/chat` create pending approvals through the same se
 
 Browser waiting and speech do not alter the backend lifecycle. VOKKI speech output uses browser speech synthesis and speaks only contract-confirmed released responses. Voice input checks browser Web Speech API availability only after the user presses Talk and proceeds only when on-device recognition is explicitly supported and the selected language pack is already installed. `processLocally` is required and checked; no language packs are downloaded by PARMAR and no cloud transcription fallback is used. The browser requests microphone access only after the user presses Talk, and recognition is single-utterance, cancellable, and stopped when VOKKI is hidden or the page leaves. Raw audio is not sent to a recognition service; the resulting transcript is submitted through the existing `/api/chat` flow like typed text. This experimental browser capability is unavailable on unsupported browsers or languages. Genuine VOKKI volume control is not supported and no volume control is represented as available.
 
+## Identity profile and workspace foundation
+
+Authenticated sessions use server-established user IDs. `GET` and `POST` `/api/identity/profiles` create and list personal profiles; `GET` and `POST` `/api/identity/workspaces` create and list workspaces. A workspace owner can explicitly associate one of their own profiles with that workspace using `POST /api/identity/workspaces/{workspace_id}/profiles/{profile_id}`; workspace members can list only profiles associated with a workspace they belong to. Client-supplied owner or user IDs are rejected, and inaccessible resources return not-found responses.
+
+The local SQLite directory is stored at `PARMAR_IDENTITY_DB_PATH` or defaults to `~/.local/share/parmar/identity.sqlite3`. Workspace membership currently includes only its creator; invitations, cross-user sharing, profile switching, and profile/workspace scoping of conversations or memory are not implemented. Existing development authentication remains explicitly unverified, no external login provider is configured, and this foundation is not production-ready authentication.
+
 ## Responsive interface design system
 
 The browser interface applies `interface/static/design-system.css` after the existing application styles. It refines the shared graphite-and-metallic accent tokens, surface hierarchy, focus states, touch targets, mobile safe-area spacing, settings navigation, and reduced-motion behavior without replacing the existing routes or request flows.
@@ -323,4 +329,3 @@ The browser interface applies `interface/static/design-system.css` after the exi
 The corresponding vector reference collections are `interface/static/reference/mobile-reference-board.svg` and `interface/static/reference/desktop-reference-board.svg`. Each board contains ten individually labeled screen specifications based on implemented PARMAR capabilities. They are design references, not screenshots of the running browser application.
 
 The canonical VOKKI portrait was restored byte-for-byte from the existing project history at `interface/static/assets/voki/default-avatar.png` and is used in both reference boards. The original metallic PARMAR knot-and-wordmark lockup was extracted only by cropping the central artwork in the root `Logo.jpg` source (1080 × 1605, crop coordinates x=190–890 and y=395–1125); the source image remains unchanged, and the resulting PNG preserves the decoded crop pixels exactly. Separate emblem and wordmark variants are likewise direct crops from that source for favicon and compact header use. The full lockup is used in the desktop sidebar, with the original wordmark and emblem crops used in compact/mobile placements. File and image uploads, image generation, executable plugins, and external connectors are not connected in this build and are not presented as working features. The three existing appearance choices are dark themes; a light theme is not currently available.
-

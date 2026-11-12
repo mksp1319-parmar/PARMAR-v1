@@ -6,12 +6,13 @@ PARMAR V1 is a human-controlled AI safety and guidance system. It is designed to
 
 ## Architecture
 
-The system separates responsibilities so the front-end, safety engine, simulator, and VOKI layer each do different jobs:
+The system separates responsibilities so the front-end, safety engine, simulator, and VOKKI layer each do different jobs:
 
 - Front-end: responsive governance dashboard and local interface
 - Safety engine: privacy, autonomy, emergency, and enforcement decisions
 - Simulation layer: local scenario tests without real-world effects
-- VOKI layer: presentation/state architecture only
+- VOKKI layer: PARMAR-governed communication and presentation; no authority
+  over authorization or execution
 - Chat architecture: provider-agnostic, local-demo first, with safety middleware always enforced
 
 ## Human-controlled safety model
@@ -22,7 +23,7 @@ HUMAN OVERSIGHT -> PARMAR -> AI / RULES / SIMULATOR -> INDEPENDENT SAFETY CHECKS
 
 This means PARMAR does not act as an unrestricted autonomous agent. It explains, evaluates, blocks, and requires explicit approval.
 
-## UI and VOKI
+## UI and VOKKI
 
 The interface is a serious governance dashboard with:
 
@@ -37,7 +38,9 @@ The interface is a serious governance dashboard with:
 - phone-awareness simulation
 - language-select architecture for English, Hindi, and Hinglish
 
-VOKI is visual/state-only and never controls authorization or execution.
+VOKKI is PARMAR's human-facing interface and never controls authorization or
+executes actions. The current interface is narrower than the approved product
+vision; the PRD distinguishes product direction from implemented capability.
 
 ## Phone awareness
 
@@ -119,10 +122,17 @@ Real:
 - privacy/autonomy/emergency checks
 - enforcement gate
 - local dashboard
+- PARMAR-governed VOKKI communication interface
 - audit logging
 
 Simulated:
 - phone awareness events
 - local AI demo provider
 - UI scenarios
-- VOKI presentation state
+
+## Product requirements and coordination
+
+- [VOKKI Master PRD](PARMAR/VOKKI-MASTER-PRD.md) — approved product directions,
+  architecture, requirements, and implementation gates.
+- [PARMAR Parallel Development Master Plan](PARMAR/PARALLEL-DEVELOPMENT-MASTER-PLAN.md) —
+  active AETHER and VOKKI tracks under PARMAR Core governance.

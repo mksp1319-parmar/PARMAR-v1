@@ -18,6 +18,7 @@ from PARMAR.conversations import (
     MAX_MESSAGES_PER_CONVERSATION,
 )
 from PARMAR.identity import LocalDemoPrincipalResolver
+from PARMAR.identity_store import SQLiteIdentityRepository
 from PARMAR.interface import futuristic_app
 from PARMAR.memories import InMemoryMemoryRepository
 from PARMAR.sessions import (
@@ -25,6 +26,7 @@ from PARMAR.sessions import (
     SESSION_COOKIE_NAME,
     SessionManager,
     SessionPolicy,
+    SessionCredentials,
     SQLiteSessionRepository,
 )
 
@@ -51,14 +53,23 @@ def memory_repository(monkeypatch):
 
 
 @pytest.fixture
-def authenticated_user(monkeypatch):
+def authenticated_user(monkeypatch, tmp_path):
     manager = SessionManager(
         InMemorySessionRepository(),
         SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900),
     )
     credentials = manager.create_authenticated_session(uuid4(), "conversation-http-test")
+    identity_repository = SQLiteIdentityRepository(tmp_path / "identity.sqlite3")
+    profile = identity_repository.create_profile(credentials.session.user_id, "Default")
+    selected = manager.select_profile(
+        credentials.session.session_id,
+        credentials.session.user_id,
+        profile.profile_id,
+    )
+    credentials = SessionCredentials(selected, credentials.session_token)
     monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    monkeypatch.setattr(futuristic_app, "IDENTITY_REPOSITORY", identity_repository)
     return manager, credentials
 
 
@@ -104,6 +115,31 @@ def send_get(path, *, authenticated=None):
     return request, response, errors
 
 
+def send_post(path, payload, *, authenticated):
+    response = {}
+    errors = []
+    manager, credentials = authenticated
+    body = json.dumps(payload).encode("utf-8")
+    request = SimpleNamespace(
+        path=path,
+        headers={
+            "Content-Length": str(len(body)),
+            "Cookie": f"{SESSION_COOKIE_NAME}={credentials.session_token}",
+            "X-CSRF-Token": manager.csrf_token(credentials.session.session_id),
+        },
+        rfile=io.BytesIO(body),
+        send_error=lambda status, message: errors.append((status, message)),
+        _send_json=lambda status, result: response.update(status=status, result=result),
+        _send_json_with_headers=lambda status, result, sent_headers: response.update(
+            status=status,
+            result=result,
+            headers=sent_headers,
+        ),
+    )
+    futuristic_app.PARMARRequestHandler.do_POST(request)
+    return response, errors
+
+
 def released_response(message):
     return {
         "message": message,
@@ -123,8 +159,9 @@ def test_authenticated_conversation_list_and_load_are_owned_and_include_released
     authenticated_user,
 ):
     owner_user_id = authenticated_user[1].session.user_id
-    empty = repositories.create(owner_user_id)
-    conversation = repositories.create(owner_user_id)
+    profile_id = authenticated_user[1].session.active_profile_id
+    empty = repositories.create(owner_user_id, profile_id)
+    conversation = repositories.create(owner_user_id, profile_id)
     repositories.append_owned(
         conversation.conversation_id,
         owner_user_id,
@@ -157,6 +194,125 @@ def test_authenticated_conversation_list_and_load_are_owned_and_include_released
         "The rollout is ready to review.",
     ]
     assert all(message["created_at"] and message["message_id"] for message in loaded["result"]["messages"])
+
+
+def test_conversation_endpoints_require_active_profile_and_deny_cross_profile_access(
+    monkeypatch,
+    repositories,
+    authenticated_user,
+):
+    manager, credentials = authenticated_user
+    owner_user_id = credentials.session.user_id
+    active_profile_id = credentials.session.active_profile_id
+    other_profile = futuristic_app.IDENTITY_REPOSITORY.create_profile(owner_user_id, "Second")
+    active_conversation = repositories.create(owner_user_id, active_profile_id)
+    other_conversation = repositories.create(owner_user_id, other_profile.profile_id)
+    legacy_conversation = repositories.create(owner_user_id)
+    for conversation, profile_id in (
+        (active_conversation, active_profile_id),
+        (other_conversation, other_profile.profile_id),
+    ):
+        repositories.append_owned(
+            conversation.conversation_id,
+            owner_user_id,
+            (("user", conversation.title or "Profile-specific history"),),
+            profile_id=profile_id,
+        )
+
+    _request, listed, errors = send_get("/api/conversations", authenticated=authenticated_user)
+    assert errors == []
+    assert [item["conversation_id"] for item in listed["result"]["conversations"]] == [
+        str(active_conversation.conversation_id),
+    ]
+    _request, _loaded, errors = send_get(
+        f"/api/conversations/{other_conversation.conversation_id}",
+        authenticated=authenticated_user,
+    )
+    assert errors == [(404, "Conversation not found")]
+    _request, _legacy, errors = send_get(
+        f"/api/conversations/{legacy_conversation.conversation_id}",
+        authenticated=authenticated_user,
+    )
+    assert errors == [(404, "Conversation not found")]
+
+    class UnexpectedChatService:
+        def __init__(self, external_authorization=None):
+            pass
+
+        def respond(self, *_args, **_kwargs):
+            pytest.fail("A cross-profile conversation reached chat processing")
+
+    monkeypatch.setattr(futuristic_app, "ChatService", UnexpectedChatService)
+    _request, _response, errors = send_chat(
+        monkeypatch,
+        {"message": "Cross-profile attempt", "conversation_id": str(other_conversation.conversation_id)},
+        authenticated=authenticated_user,
+    )
+    assert errors == [(404, "Conversation not found")]
+
+    unselected = manager.create_authenticated_session(uuid4(), "conversation-http-test")
+    _request, _listed, errors = send_get(
+        "/api/conversations",
+        authenticated=(manager, unselected),
+    )
+    assert errors == [(409, "An active profile is required")]
+
+
+def test_profile_switch_changes_authenticated_conversation_scope_over_http(
+    repositories,
+    authenticated_user,
+):
+    manager, credentials = authenticated_user
+    owner_user_id = credentials.session.user_id
+    first_profile_id = credentials.session.active_profile_id
+    second_profile = futuristic_app.IDENTITY_REPOSITORY.create_profile(owner_user_id, "Second")
+    first_conversation = repositories.create(owner_user_id, first_profile_id)
+    second_conversation = repositories.create(owner_user_id, second_profile.profile_id)
+    repositories.append_owned(
+        first_conversation.conversation_id,
+        owner_user_id,
+        (("user", "First profile private history"),),
+        profile_id=first_profile_id,
+    )
+    repositories.append_owned(
+        second_conversation.conversation_id,
+        owner_user_id,
+        (("user", "Second profile private history"),),
+        profile_id=second_profile.profile_id,
+    )
+
+    _request, first_list, errors = send_get("/api/conversations", authenticated=authenticated_user)
+    assert errors == []
+    assert [item["conversation_id"] for item in first_list["result"]["conversations"]] == [
+        str(first_conversation.conversation_id),
+    ]
+
+    response, errors = send_post(
+        "/api/session/profile",
+        {"profile_id": str(second_profile.profile_id)},
+        authenticated=authenticated_user,
+    )
+    assert errors == []
+    assert response["status"] == 200
+    assert response["result"]["active_profile"]["profile_id"] == str(second_profile.profile_id)
+    assert manager.resolve(credentials.session_token).active_profile_id == second_profile.profile_id
+
+    _request, second_list, errors = send_get("/api/conversations", authenticated=authenticated_user)
+    assert errors == []
+    assert [item["conversation_id"] for item in second_list["result"]["conversations"]] == [
+        str(second_conversation.conversation_id),
+    ]
+    _request, _first_load, errors = send_get(
+        f"/api/conversations/{first_conversation.conversation_id}",
+        authenticated=authenticated_user,
+    )
+    assert errors == [(404, "Conversation not found")]
+    _request, second_load, errors = send_get(
+        f"/api/conversations/{second_conversation.conversation_id}",
+        authenticated=authenticated_user,
+    )
+    assert errors == []
+    assert second_load["result"]["messages"][0]["content"] == "Second profile private history"
 
 
 def test_authenticated_chat_history_survives_repository_reinitialization(
@@ -212,9 +368,18 @@ def test_persistent_session_restart_restores_server_user_and_owned_conversation(
     session_policy = SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900)
     first_manager = SessionManager(sqlite_session_repository(session_path), session_policy)
     credentials = first_manager.create_authenticated_session(uuid4(), "trusted-test-auth")
+    identity_repository = SQLiteIdentityRepository(tmp_path / "identity.sqlite3")
+    profile = identity_repository.create_profile(credentials.session.user_id, "Primary")
+    selected_session = first_manager.select_profile(
+        credentials.session.session_id,
+        credentials.session.user_id,
+        profile.profile_id,
+    )
+    credentials = SessionCredentials(selected_session, credentials.session_token)
     first_conversations = SQLiteConversationRepository(conversation_path)
     monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", first_manager)
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    monkeypatch.setattr(futuristic_app, "IDENTITY_REPOSITORY", identity_repository)
     monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", first_conversations)
     monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", first_conversations)
 
@@ -258,6 +423,13 @@ def test_persistent_session_restart_restores_server_user_and_owned_conversation(
     ]
 
     other_credentials = restarted_manager.create_authenticated_session(uuid4(), "trusted-test-auth")
+    other_profile = identity_repository.create_profile(other_credentials.session.user_id, "Other")
+    other_session = restarted_manager.select_profile(
+        other_credentials.session.session_id,
+        other_credentials.session.user_id,
+        other_profile.profile_id,
+    )
+    other_credentials = SessionCredentials(other_session, other_credentials.session_token)
     _request, _loaded, errors = send_get(
         f"/api/conversations/{conversation_id}",
         authenticated=(restarted_manager, other_credentials),
@@ -593,8 +765,9 @@ def test_existing_conversation_remains_usable_when_user_conversation_quota_is_fu
     authenticated_user,
 ):
     owner_user_id = authenticated_user[1].session.user_id
+    profile_id = authenticated_user[1].session.active_profile_id
     conversations = [
-        repositories.create(owner_user_id)
+        repositories.create(owner_user_id, profile_id)
         for _ in range(MAX_CONVERSATIONS_PER_USER)
     ]
     conversation = conversations[0]
@@ -640,7 +813,10 @@ def test_authenticated_chat_uses_only_server_owned_recent_history(
     authenticated_user,
 ):
     _manager, credentials = authenticated_user
-    conversation = repositories.create(credentials.session.user_id)
+    conversation = repositories.create(
+        credentials.session.user_id,
+        credentials.session.active_profile_id,
+    )
     repositories.append_owned(
         conversation.conversation_id,
         credentials.session.user_id,
@@ -736,7 +912,10 @@ def test_authenticated_chat_retrieves_bounded_owned_memory_and_audits_metadata_o
     memory_repository.create_owned(owner_user_id, "Favorite color is blue.")
     memory_repository.set_consent(other_user_id, True)
     memory_repository.create_owned(other_user_id, "Project planning belongs to another user.")
-    conversation = repositories.create(owner_user_id)
+    conversation = repositories.create(
+        owner_user_id,
+        authenticated_user[1].session.active_profile_id,
+    )
     calls = []
 
     class CapturingChatService:
@@ -828,7 +1007,10 @@ def test_revoked_session_cannot_retrieve_memory_or_process_owned_conversation(
     owner_user_id = credentials.session.user_id
     memory_repository.set_consent(owner_user_id, True)
     memory_repository.create_owned(owner_user_id, "Project planning checklist.")
-    conversation = repositories.create(owner_user_id)
+    conversation = repositories.create(
+        owner_user_id,
+        credentials.session.active_profile_id,
+    )
     retrieval_calls = []
     original_retrieve = memory_repository.retrieve_owned
 
@@ -973,7 +1155,10 @@ def test_chat_rejects_when_per_conversation_message_quota_is_full(
     authenticated_user,
 ):
     owner_user_id = authenticated_user[1].session.user_id
-    conversation = repositories.create(owner_user_id)
+    conversation = repositories.create(
+        owner_user_id,
+        authenticated_user[1].session.active_profile_id,
+    )
     repositories.append_owned(
         conversation.conversation_id,
         owner_user_id,
@@ -1007,7 +1192,7 @@ def test_chat_enforces_per_user_conversation_quota_without_affecting_other_users
 ):
     owner_user_id = authenticated_user[1].session.user_id
     for _ in range(MAX_CONVERSATIONS_PER_USER):
-        repositories.create(owner_user_id)
+        repositories.create(owner_user_id, authenticated_user[1].session.active_profile_id)
 
     class UnexpectedChatService:
         def __init__(self, external_authorization=None):

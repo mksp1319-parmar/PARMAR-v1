@@ -426,9 +426,55 @@ def test_sqlite_repository_migrates_version_one_without_inventing_research(tmp_p
     assert messages is not None
     assert messages[0].content == "Old released message"
     assert messages[0].research is None
+    assert migrated.get_owned(conversation_id, owner_id).profile_id is None
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
         assert connection.execute("SELECT COUNT(*) FROM message_research").fetchone()[0] == 0
+
+
+def test_sqlite_repository_scopes_conversations_and_messages_to_profile(tmp_path):
+    repository = SQLiteConversationRepository(tmp_path / "profile-scoped.sqlite3")
+    owner_id = uuid4()
+    first_profile_id = uuid4()
+    second_profile_id = uuid4()
+    first = repository.create_for_message(owner_id, "First profile conversation", first_profile_id)
+    second = repository.create_for_message(owner_id, "Second profile conversation", second_profile_id)
+    repository.append_owned(
+        first.conversation_id,
+        owner_id,
+        (("user", "First profile message"),),
+        profile_id=first_profile_id,
+    )
+    repository.append_owned(
+        second.conversation_id,
+        owner_id,
+        (("user", "Second profile message"),),
+        profile_id=second_profile_id,
+    )
+
+    assert [item.conversation_id for item in repository.list_owned(owner_id, first_profile_id)] == [
+        first.conversation_id,
+    ]
+    assert repository.get_owned(first.conversation_id, owner_id, second_profile_id) is None
+    assert repository.recent_owned(first.conversation_id, owner_id, 12, second_profile_id) is None
+    assert repository.can_append_owned(
+        first.conversation_id,
+        owner_id,
+        "Cross-profile append",
+        second_profile_id,
+    ) is None
+    assert repository.append_owned(
+        first.conversation_id,
+        owner_id,
+        (("user", "Cross-profile append"),),
+        profile_id=second_profile_id,
+    ) is None
+    assert [message.content for message in repository.recent_owned(
+        first.conversation_id,
+        owner_id,
+        12,
+        first_profile_id,
+    )] == ["First profile message"]
 
 
 def test_failed_version_one_migration_rolls_back_schema_changes(tmp_path):

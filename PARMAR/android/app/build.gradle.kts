@@ -34,6 +34,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
 
     compileOptions {
@@ -62,5 +63,11 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.navigation.compose)
 
+    androidTestCompileOnly(
+        files(
+            "${android.sdkDirectory}/platforms/android-35/optional/android.test.base.jar",
+            "${android.sdkDirectory}/platforms/android-35/optional/android.test.runner.jar",
+        ),
+    )
     testImplementation(libs.junit)
 }

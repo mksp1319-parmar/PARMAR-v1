@@ -38,7 +38,8 @@ the Android application has been built or run.
   success-shaped empty state.
 - [`TabsScreen.kt`](app/src/main/kotlin/org/parmar/aether/ui/tabs/TabsScreen.kt)
   supports local creation, selection, pinning, reordering, and confirmed close.
-  A saved-URL tab displays metadata only and never opens a page.
+  Pinning stably groups pinned tabs first; movement is limited to the same pin
+  group. A saved-URL tab displays metadata only and never opens a page.
 
 ### History, Downloads, Settings, Privacy, and navigation
 
@@ -277,8 +278,9 @@ complete privacy; this design does not implement or verify those properties.
 
 ## 7. Remaining verification plan
 
-Source-level tests cover bookmark rules and tab selection behavior. The
-following database, lifecycle, UI, and runtime checks remain unverified:
+Source-level tests cover bookmark rules, tab selection, pin grouping, and
+within-group tab ordering. The following database, lifecycle, UI, and runtime
+checks remain unverified:
 
 1. **Repository persistence:** add and close the app/repository, reopen it,
    and verify bookmark URL/title/stable ID and tab metadata round-trip.

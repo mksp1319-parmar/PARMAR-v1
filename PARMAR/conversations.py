@@ -94,6 +94,7 @@ class Conversation:
     created_at: datetime
     updated_at: datetime
     title: str = ""
+    profile_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -110,15 +111,34 @@ class ConversationMessage:
 class ConversationRepository(Protocol):
     """Storage operations for server-owned conversations."""
 
-    def create(self, owner_user_id: UUID) -> Conversation: ...
+    def create(self, owner_user_id: UUID, profile_id: UUID | None = None) -> Conversation: ...
 
-    def create_for_message(self, owner_user_id: UUID, user_message: str) -> Conversation: ...
+    def create_for_message(
+        self,
+        owner_user_id: UUID,
+        user_message: str,
+        profile_id: UUID | None = None,
+    ) -> Conversation: ...
 
-    def get_owned(self, conversation_id: UUID, owner_user_id: UUID) -> Conversation | None: ...
+    def get_owned(
+        self,
+        conversation_id: UUID,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> Conversation | None: ...
 
-    def list_owned(self, owner_user_id: UUID) -> tuple[Conversation, ...]: ...
+    def list_owned(
+        self,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> tuple[Conversation, ...]: ...
 
-    def delete_owned(self, conversation_id: UUID, owner_user_id: UUID) -> bool: ...
+    def delete_owned(
+        self,
+        conversation_id: UUID,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> bool: ...
 
 
 class MessageRepository(Protocol):
@@ -129,6 +149,7 @@ class MessageRepository(Protocol):
         conversation_id: UUID,
         owner_user_id: UUID,
         limit: int,
+        profile_id: UUID | None = None,
     ) -> tuple[ConversationMessage, ...] | None: ...
 
     def can_append_owned(
@@ -136,6 +157,7 @@ class MessageRepository(Protocol):
         conversation_id: UUID,
         owner_user_id: UUID,
         user_message: str,
+        profile_id: UUID | None = None,
     ) -> bool | None: ...
 
     def append_owned(
@@ -145,6 +167,7 @@ class MessageRepository(Protocol):
         messages: tuple[tuple[str, str], ...],
         *,
         research: ResearchResult | None = None,
+        profile_id: UUID | None = None,
     ) -> tuple[ConversationMessage, ...] | None: ...
 
 
@@ -160,15 +183,24 @@ class InMemoryConversationRepository:
         self._conversation_characters: dict[UUID, int] = {}
         self._total_message_characters = 0
 
-    def create(self, owner_user_id: UUID) -> Conversation:
+    def create(self, owner_user_id: UUID, profile_id: UUID | None = None) -> Conversation:
         if not isinstance(owner_user_id, UUID):
             raise TypeError("Conversation owners must be server-established user IDs.")
+        if profile_id is not None and not isinstance(profile_id, UUID):
+            raise TypeError("Conversation profiles must be server-verified UUIDs.")
         with self._lock:
-            return self._create_locked(owner_user_id)
+            return self._create_locked(owner_user_id, profile_id)
 
-    def create_for_message(self, owner_user_id: UUID, user_message: str) -> Conversation:
+    def create_for_message(
+        self,
+        owner_user_id: UUID,
+        user_message: str,
+        profile_id: UUID | None = None,
+    ) -> Conversation:
         if not isinstance(owner_user_id, UUID):
             raise TypeError("Conversation owners must be server-established user IDs.")
+        if profile_id is not None and not isinstance(profile_id, UUID):
+            raise TypeError("Conversation profiles must be server-verified UUIDs.")
         if not isinstance(user_message, str):
             raise ValueError("A user message is required to create a conversation.")
         cleaned_message = sanitize_provider_text(user_message).strip()
@@ -180,9 +212,9 @@ class InMemoryConversationRepository:
                 > MAX_TOTAL_STORED_MESSAGE_CHARACTERS
             ):
                 raise ConversationLimitExceeded("The conversation storage limit has been reached.")
-            return self._create_locked(owner_user_id)
+            return self._create_locked(owner_user_id, profile_id)
 
-    def _create_locked(self, owner_user_id: UUID) -> Conversation:
+    def _create_locked(self, owner_user_id: UUID, profile_id: UUID | None = None) -> Conversation:
         owner_conversations = self._conversations_by_owner.get(owner_user_id, set())
         if len(owner_conversations) >= MAX_CONVERSATIONS_PER_USER:
             raise ConversationLimitExceeded("The user conversation limit has been reached.")
@@ -198,6 +230,7 @@ class InMemoryConversationRepository:
             created_at=now,
             updated_at=now,
             title="",
+            profile_id=profile_id,
         )
         self._conversations[conversation_id] = conversation
         self._messages[conversation_id] = []
@@ -206,16 +239,29 @@ class InMemoryConversationRepository:
         self._conversation_characters[conversation_id] = 0
         return conversation
 
-    def get_owned(self, conversation_id: UUID, owner_user_id: UUID) -> Conversation | None:
+    def get_owned(
+        self,
+        conversation_id: UUID,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> Conversation | None:
         if not isinstance(conversation_id, UUID) or not isinstance(owner_user_id, UUID):
             return None
         with self._lock:
             conversation = self._conversations.get(conversation_id)
-            if conversation is None or conversation.owner_user_id != owner_user_id:
+            if (
+                conversation is None
+                or conversation.owner_user_id != owner_user_id
+                or (profile_id is not None and conversation.profile_id != profile_id)
+            ):
                 return None
             return conversation
 
-    def list_owned(self, owner_user_id: UUID) -> tuple[Conversation, ...]:
+    def list_owned(
+        self,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> tuple[Conversation, ...]:
         if not isinstance(owner_user_id, UUID):
             return ()
         with self._lock:
@@ -223,15 +269,25 @@ class InMemoryConversationRepository:
                 self._conversations[conversation_id]
                 for conversation_id in self._conversations_by_owner.get(owner_user_id, set())
                 if self._conversations[conversation_id].title
+                and (profile_id is None or self._conversations[conversation_id].profile_id == profile_id)
             ]
             return tuple(sorted(conversations, key=lambda item: item.updated_at, reverse=True))
 
-    def delete_owned(self, conversation_id: UUID, owner_user_id: UUID) -> bool:
+    def delete_owned(
+        self,
+        conversation_id: UUID,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> bool:
         if not isinstance(conversation_id, UUID) or not isinstance(owner_user_id, UUID):
             return False
         with self._lock:
             conversation = self._conversations.get(conversation_id)
-            if conversation is None or conversation.owner_user_id != owner_user_id:
+            if (
+                conversation is None
+                or conversation.owner_user_id != owner_user_id
+                or (profile_id is not None and conversation.profile_id != profile_id)
+            ):
                 return False
             del self._conversations[conversation_id]
             del self._messages[conversation_id]
@@ -248,6 +304,7 @@ class InMemoryConversationRepository:
         conversation_id: UUID,
         owner_user_id: UUID,
         limit: int,
+        profile_id: UUID | None = None,
     ) -> tuple[ConversationMessage, ...] | None:
         if (
             not isinstance(conversation_id, UUID)
@@ -259,7 +316,11 @@ class InMemoryConversationRepository:
             return None
         with self._lock:
             conversation = self._conversations.get(conversation_id)
-            if conversation is None or conversation.owner_user_id != owner_user_id:
+            if (
+                conversation is None
+                or conversation.owner_user_id != owner_user_id
+                or (profile_id is not None and conversation.profile_id != profile_id)
+            ):
                 return None
             return tuple(self._messages[conversation_id][-limit:])
 
@@ -268,6 +329,7 @@ class InMemoryConversationRepository:
         conversation_id: UUID,
         owner_user_id: UUID,
         user_message: str,
+        profile_id: UUID | None = None,
     ) -> bool | None:
         if (
             not isinstance(conversation_id, UUID)
@@ -280,7 +342,11 @@ class InMemoryConversationRepository:
             return False
         with self._lock:
             conversation = self._conversations.get(conversation_id)
-            if conversation is None or conversation.owner_user_id != owner_user_id:
+            if (
+                conversation is None
+                or conversation.owner_user_id != owner_user_id
+                or (profile_id is not None and conversation.profile_id != profile_id)
+            ):
                 return None
             return (
                 self._message_counts[conversation_id] + 2 <= MAX_MESSAGES_PER_CONVERSATION
@@ -297,6 +363,7 @@ class InMemoryConversationRepository:
         messages: tuple[tuple[str, str], ...],
         *,
         research: ResearchResult | None = None,
+        profile_id: UUID | None = None,
     ) -> tuple[ConversationMessage, ...] | None:
         if (
             not isinstance(conversation_id, UUID)
@@ -335,7 +402,11 @@ class InMemoryConversationRepository:
 
         with self._lock:
             conversation = self._conversations.get(conversation_id)
-            if conversation is None or conversation.owner_user_id != owner_user_id:
+            if (
+                conversation is None
+                or conversation.owner_user_id != owner_user_id
+                or (profile_id is not None and conversation.profile_id != profile_id)
+            ):
                 return None
             added_characters = sum(len(content) for _, content in cleaned_messages)
             if (
@@ -381,6 +452,7 @@ class InMemoryConversationRepository:
                     conversation.title
                     or (generate_conversation_title(first_user_message) if first_user_message else "")
                 ),
+                profile_id=conversation.profile_id,
             )
             return records
 
@@ -388,7 +460,7 @@ class InMemoryConversationRepository:
 class SQLiteConversationRepository:
     """SQLite-backed conversation repository for local, offline persistence."""
 
-    _SCHEMA_VERSION = 2
+    _SCHEMA_VERSION = 3
 
     def __init__(self, database_path: str | Path) -> None:
         path = Path(database_path).expanduser()
@@ -435,6 +507,7 @@ class SQLiteConversationRepository:
                 created_at=cls._timestamp(row["created_at"]),
                 updated_at=cls._timestamp(row["updated_at"]),
                 title=title,
+                profile_id=UUID(row["profile_id"]) if row["profile_id"] else None,
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ConversationStorageUnavailable("Conversation storage is unavailable.") from error
@@ -536,6 +609,7 @@ class SQLiteConversationRepository:
         required_columns = {
             "conversations": {
                 "conversation_id", "owner_user_id", "created_at", "updated_at", "title",
+                "profile_id",
             },
             "messages": {
                 "message_id", "conversation_id", "role", "content", "created_at",
@@ -589,7 +663,7 @@ class SQLiteConversationRepository:
         if self._initialized:
             return
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, self._SCHEMA_VERSION):
+        if version not in (0, 1, 2, self._SCHEMA_VERSION):
             raise ConversationStorageUnavailable("Conversation storage is unavailable.")
         if version == 0:
             if not self._fresh_database:
@@ -668,7 +742,19 @@ class SQLiteConversationRepository:
                     "WHEN (SELECT role FROM messages WHERE message_id = NEW.message_id) <> 'assistant' "
                     "BEGIN SELECT RAISE(ABORT, 'research metadata requires assistant message'); END"
                 )
-                connection.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
+                connection.execute("PRAGMA user_version = 2")
+            if version in (0, 1, 2):
+                conversation_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(conversations)").fetchall()
+                }
+                if "profile_id" not in conversation_columns:
+                    connection.execute("ALTER TABLE conversations ADD COLUMN profile_id TEXT")
+                connection.execute(
+                    "CREATE INDEX conversations_owner_profile_updated "
+                    "ON conversations(owner_user_id, profile_id, updated_at DESC)"
+                )
+                connection.execute("PRAGMA user_version = 3")
             self._validate_schema(connection)
             connection.commit()
         except Exception:
@@ -719,7 +805,12 @@ class SQLiteConversationRepository:
             cleaned = pattern.sub("[REDACTED]", cleaned)
         return cleaned
 
-    def _create_locked(self, connection: sqlite3.Connection, owner_user_id: UUID) -> Conversation:
+    def _create_locked(
+        self,
+        connection: sqlite3.Connection,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> Conversation:
         owner_count = connection.execute(
             "SELECT COUNT(*) FROM conversations WHERE owner_user_id = ?",
             (str(owner_user_id),),
@@ -735,28 +826,39 @@ class SQLiteConversationRepository:
             owner_user_id=owner_user_id,
             created_at=now,
             updated_at=now,
+            profile_id=profile_id,
         )
         connection.execute(
-            "INSERT INTO conversations(conversation_id, owner_user_id, created_at, updated_at, title) "
-            "VALUES (?, ?, ?, ?, '')",
+            "INSERT INTO conversations(conversation_id, owner_user_id, created_at, updated_at, title, profile_id) "
+            "VALUES (?, ?, ?, ?, '', ?)",
             (
                 str(conversation.conversation_id),
                 str(owner_user_id),
                 now.isoformat(),
                 now.isoformat(),
+                str(profile_id) if profile_id is not None else None,
             ),
         )
         return conversation
 
-    def create(self, owner_user_id: UUID) -> Conversation:
+    def create(self, owner_user_id: UUID, profile_id: UUID | None = None) -> Conversation:
         if not isinstance(owner_user_id, UUID):
             raise TypeError("Conversation owners must be server-established user IDs.")
+        if profile_id is not None and not isinstance(profile_id, UUID):
+            raise TypeError("Conversation profiles must be server-verified UUIDs.")
         with self._connection(write=True) as connection:
-            return self._create_locked(connection, owner_user_id)
+            return self._create_locked(connection, owner_user_id, profile_id)
 
-    def create_for_message(self, owner_user_id: UUID, user_message: str) -> Conversation:
+    def create_for_message(
+        self,
+        owner_user_id: UUID,
+        user_message: str,
+        profile_id: UUID | None = None,
+    ) -> Conversation:
         if not isinstance(owner_user_id, UUID):
             raise TypeError("Conversation owners must be server-established user IDs.")
+        if profile_id is not None and not isinstance(profile_id, UUID):
+            raise TypeError("Conversation profiles must be server-verified UUIDs.")
         if not isinstance(user_message, str):
             raise ValueError("A user message is required to create a conversation.")
         cleaned_message = self._clean_message(user_message)
@@ -768,37 +870,57 @@ class SQLiteConversationRepository:
             ).fetchone()[0]
             if total_characters + len(cleaned_message) + MAX_MESSAGE_LENGTH > MAX_TOTAL_STORED_MESSAGE_CHARACTERS:
                 raise ConversationLimitExceeded("The conversation storage limit has been reached.")
-            return self._create_locked(connection, owner_user_id)
+            return self._create_locked(connection, owner_user_id, profile_id)
 
-    def get_owned(self, conversation_id: UUID, owner_user_id: UUID) -> Conversation | None:
+    def get_owned(
+        self,
+        conversation_id: UUID,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> Conversation | None:
         if not isinstance(conversation_id, UUID) or not isinstance(owner_user_id, UUID):
             return None
         with self._connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM conversations WHERE conversation_id = ? AND owner_user_id = ?",
-                (str(conversation_id), str(owner_user_id)),
-            ).fetchone()
+            query = "SELECT * FROM conversations WHERE conversation_id = ? AND owner_user_id = ?"
+            parameters: tuple[str, ...] = (str(conversation_id), str(owner_user_id))
+            if profile_id is not None:
+                query += " AND profile_id = ?"
+                parameters += (str(profile_id),)
+            row = connection.execute(query, parameters).fetchone()
             return self._conversation_from_row(row) if row is not None else None
 
-    def list_owned(self, owner_user_id: UUID) -> tuple[Conversation, ...]:
+    def list_owned(
+        self,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> tuple[Conversation, ...]:
         if not isinstance(owner_user_id, UUID):
             return ()
         with self._connection() as connection:
-            rows = connection.execute(
-                "SELECT * FROM conversations WHERE owner_user_id = ? AND title <> '' "
-                "ORDER BY updated_at DESC",
-                (str(owner_user_id),),
-            ).fetchall()
+            query = "SELECT * FROM conversations WHERE owner_user_id = ? AND title <> ''"
+            parameters: tuple[str, ...] = (str(owner_user_id),)
+            if profile_id is not None:
+                query += " AND profile_id = ?"
+                parameters += (str(profile_id),)
+            query += " ORDER BY updated_at DESC"
+            rows = connection.execute(query, parameters).fetchall()
             return tuple(self._conversation_from_row(row) for row in rows)
 
-    def delete_owned(self, conversation_id: UUID, owner_user_id: UUID) -> bool:
+    def delete_owned(
+        self,
+        conversation_id: UUID,
+        owner_user_id: UUID,
+        profile_id: UUID | None = None,
+    ) -> bool:
         if not isinstance(conversation_id, UUID) or not isinstance(owner_user_id, UUID):
             return False
         with self._connection(write=True) as connection:
-            cursor = connection.execute(
-                "DELETE FROM conversations WHERE conversation_id = ? AND owner_user_id = ?",
-                (str(conversation_id), str(owner_user_id)),
-            )
+            query = "DELETE FROM conversations WHERE conversation_id = ? AND owner_user_id = ?"
+            parameters: tuple[str, ...] = (str(conversation_id), str(owner_user_id))
+            if profile_id is not None:
+                query += " AND profile_id = ?"
+                parameters += (str(profile_id),)
+            cursor = connection.execute(query, parameters)
             return cursor.rowcount == 1
 
     def recent_owned(
@@ -806,6 +928,7 @@ class SQLiteConversationRepository:
         conversation_id: UUID,
         owner_user_id: UUID,
         limit: int,
+        profile_id: UUID | None = None,
     ) -> tuple[ConversationMessage, ...] | None:
         if (
             not isinstance(conversation_id, UUID)
@@ -816,10 +939,12 @@ class SQLiteConversationRepository:
         ):
             return None
         with self._connection() as connection:
-            owned = connection.execute(
-                "SELECT 1 FROM conversations WHERE conversation_id = ? AND owner_user_id = ?",
-                (str(conversation_id), str(owner_user_id)),
-            ).fetchone()
+            query = "SELECT 1 FROM conversations WHERE conversation_id = ? AND owner_user_id = ?"
+            parameters: tuple[str, ...] = (str(conversation_id), str(owner_user_id))
+            if profile_id is not None:
+                query += " AND profile_id = ?"
+                parameters += (str(profile_id),)
+            owned = connection.execute(query, parameters).fetchone()
             if owned is None:
                 return None
             rows = connection.execute(
@@ -839,6 +964,7 @@ class SQLiteConversationRepository:
         conversation_id: UUID,
         owner_user_id: UUID,
         user_message: str,
+        profile_id: UUID | None = None,
     ) -> bool | None:
         if (
             not isinstance(conversation_id, UUID)
@@ -850,10 +976,12 @@ class SQLiteConversationRepository:
         if not cleaned_message or len(cleaned_message) > MAX_MESSAGE_LENGTH:
             return False
         with self._connection() as connection:
-            conversation = connection.execute(
-                "SELECT 1 FROM conversations WHERE conversation_id = ? AND owner_user_id = ?",
-                (str(conversation_id), str(owner_user_id)),
-            ).fetchone()
+            query = "SELECT 1 FROM conversations WHERE conversation_id = ? AND owner_user_id = ?"
+            parameters: tuple[str, ...] = (str(conversation_id), str(owner_user_id))
+            if profile_id is not None:
+                query += " AND profile_id = ?"
+                parameters += (str(profile_id),)
+            conversation = connection.execute(query, parameters).fetchone()
             if conversation is None:
                 return None
             message_count, conversation_characters = connection.execute(
@@ -879,6 +1007,7 @@ class SQLiteConversationRepository:
         messages: tuple[tuple[str, str], ...],
         *,
         research: ResearchResult | None = None,
+        profile_id: UUID | None = None,
     ) -> tuple[ConversationMessage, ...] | None:
         if (
             not isinstance(conversation_id, UUID)
@@ -914,10 +1043,12 @@ class SQLiteConversationRepository:
             return None
 
         with self._connection(write=True) as connection:
-            row = connection.execute(
-                "SELECT * FROM conversations WHERE conversation_id = ? AND owner_user_id = ?",
-                (str(conversation_id), str(owner_user_id)),
-            ).fetchone()
+            query = "SELECT * FROM conversations WHERE conversation_id = ? AND owner_user_id = ?"
+            parameters: tuple[str, ...] = (str(conversation_id), str(owner_user_id))
+            if profile_id is not None:
+                query += " AND profile_id = ?"
+                parameters += (str(profile_id),)
+            row = connection.execute(query, parameters).fetchone()
             if row is None:
                 return None
             message_count, conversation_characters = connection.execute(

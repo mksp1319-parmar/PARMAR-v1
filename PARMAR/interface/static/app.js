@@ -12,6 +12,7 @@ const PANEL_TRANSITION_MS = 260;
 const PANEL_EDGE_ZONE = 24;
 const PANEL_DIRECTION_LOCK = 10;
 const PROVIDER_IDS = new Set(['local-demo', 'openai', 'gemini', 'claude', 'http-json']);
+const PROFILE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RESPONSE_SAFETY_STATES = new Set(['PASS', 'REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
 const SUPPRESSED_RESPONSE_SAFETY_STATES = new Set(['REVIEW', 'BLOCK', 'UNCERTAIN', 'NOT_CHECKED']);
 const responseSafetyLabels = {
@@ -406,6 +407,13 @@ const dom = {
   developmentAuthNote: document.getElementById('development-auth-note'),
   developmentLoginBtn: document.getElementById('development-login-btn'),
   refreshSessionBtn: document.getElementById('refresh-session-btn'),
+  profileControls: document.getElementById('profile-controls'),
+  activeProfileName: document.getElementById('active-profile-name'),
+  profileSelector: document.getElementById('profile-selector'),
+  profileCreateForm: document.getElementById('profile-create-form'),
+  profileNameInput: document.getElementById('profile-name-input'),
+  profileCreateButton: document.getElementById('profile-create-button'),
+  profileStatus: document.getElementById('profile-status'),
   chatModeLabel: document.getElementById('chat-mode-label'),
   phonePermissionToggle: document.getElementById('phone-permission-toggle'),
   simulatePhoneSafe: document.getElementById('simulate-phone-safe'),
@@ -431,6 +439,13 @@ const state = {
   authenticationState: 'LOCAL_DEMO',
   developmentAuthAvailable: false,
   csrfToken: null,
+  activeProfileId: null,
+  profiles: [],
+  profilesLoading: false,
+  profileSwitching: false,
+  profileError: false,
+  profileFeedback: '',
+  profileLoadGeneration: 0,
   authEpoch: 0,
   serverConversationIds: new Set(),
   historyLoading: false,
@@ -627,6 +642,7 @@ function invalidatePendingRequest() {
 
 function apiRequest(path, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
+  const { skipAuthenticationRefresh = false, ...requestOptions } = options;
   const headers = { ...(options.headers || {}) };
   if (state.authMode === 'authenticated' && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
     if (!state.csrfToken) {
@@ -634,8 +650,8 @@ function apiRequest(path, options = {}) {
     }
     headers['X-CSRF-Token'] = state.csrfToken;
   }
-  return fetch(path, { ...options, headers }).then(async (response) => {
-    if (state.authMode === 'authenticated' && [401, 403, 404].includes(response.status)) {
+  return fetch(path, { ...requestOptions, headers }).then(async (response) => {
+    if (!skipAuthenticationRefresh && state.authMode === 'authenticated' && response.status === 401) {
       await refreshAuthenticationState({ expired: true, broadcast: true });
     }
     return response;
@@ -655,6 +671,19 @@ function notifyOtherTabs(reason) {
   }
 }
 
+function notifyProfileSelection() {
+  const message = { type: 'profile-changed', timestamp: Date.now() };
+  if (state.authChannel) {
+    state.authChannel.postMessage(message);
+    return;
+  }
+  try {
+    localStorage.setItem('parmar-auth-notification', JSON.stringify(message));
+  } catch (_error) {
+    // The server session remains authoritative if cross-tab notification is unavailable.
+  }
+}
+
 function clearAuthenticatedState(message, { broadcast = false, navigateToChat = true } = {}) {
   if (state.authMode === 'authenticated' || state.authMode === 'checking') {
     invalidatePendingRequest();
@@ -662,6 +691,13 @@ function clearAuthenticatedState(message, { broadcast = false, navigateToChat = 
     state.authMode = 'anonymous';
     state.authenticationState = 'LOCAL_DEMO';
     state.csrfToken = null;
+    state.activeProfileId = null;
+    state.profiles = [];
+    state.profilesLoading = false;
+    state.profileSwitching = false;
+    state.profileError = false;
+    state.profileFeedback = '';
+    state.profileLoadGeneration += 1;
     state.conversationId = null;
     clearActiveConversationId();
     state.currentSessionId = null;
@@ -676,6 +712,7 @@ function clearAuthenticatedState(message, { broadcast = false, navigateToChat = 
     state.currentSessionId = state.sessions[0]?.id || null;
     state.audit = loadAudit();
     renderAuthenticationControls();
+    renderProfileControls();
     window.dispatchEvent(new CustomEvent('parmar-auth-state-changed'));
     publishConversationSelection(state.currentSessionId);
     if (dom.authStatus) {
@@ -700,7 +737,7 @@ function renderAuthenticationControls() {
       : authenticated && state.authenticationState === 'DEVELOPMENT_UNVERIFIED'
         ? 'Development session active. The identity is explicitly unverified and does not represent a production account.'
         : authenticated
-          ? 'An authenticated server session is active. Account profile and synchronization controls are not available here.'
+          ? 'An authenticated server session is active. Conversation history is scoped to the selected profile.'
           : 'Anonymous Local Demo is active. No production account is signed in.';
   }
   if (dom.authStateLabel) {
@@ -731,6 +768,278 @@ function renderAuthenticationControls() {
     dom.settingsLogoutBtn.disabled = Boolean(state.logoutInProgress);
   }
   if (dom.refreshSessionBtn) dom.refreshSessionBtn.hidden = !authenticated;
+  renderProfileControls();
+}
+
+function renderProfileControls() {
+  if (!dom.profileControls) return;
+  const authenticated = state.authMode === 'authenticated';
+  dom.profileControls.hidden = !authenticated;
+  if (!authenticated) return;
+
+  if (dom.profileSelector) {
+    dom.profileSelector.replaceChildren();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = state.profilesLoading ? 'Loading profiles…' : 'Select a profile';
+    dom.profileSelector.appendChild(placeholder);
+    const nameCounts = new Map();
+    state.profiles.forEach((profile) => {
+      nameCounts.set(profile.name, (nameCounts.get(profile.name) || 0) + 1);
+    });
+    state.profiles.forEach((profile) => {
+      const option = document.createElement('option');
+      option.value = profile.profile_id;
+      option.textContent = nameCounts.get(profile.name) > 1
+        ? `${profile.name} · ${profile.profile_id.slice(0, 8)}`
+        : profile.name;
+      dom.profileSelector.appendChild(option);
+    });
+    dom.profileSelector.value = state.profiles.some((profile) => profile.profile_id === state.activeProfileId)
+      ? state.activeProfileId
+      : '';
+    dom.profileSelector.disabled = state.profilesLoading || state.profileSwitching || state.profiles.length === 0;
+  }
+
+  const activeProfile = state.profiles.find((profile) => profile.profile_id === state.activeProfileId);
+  if (dom.activeProfileName) dom.activeProfileName.textContent = activeProfile?.name || 'No profile selected';
+  if (dom.profileNameInput) dom.profileNameInput.disabled = state.profilesLoading || state.profileSwitching;
+  if (dom.profileCreateButton) dom.profileCreateButton.disabled = state.profilesLoading || state.profileSwitching;
+  if (dom.profileStatus) {
+    dom.profileStatus.textContent = state.profileFeedback || (
+      state.profilesLoading
+        ? 'Loading profiles owned by this session…'
+        : activeProfile
+          ? `Conversations are scoped to ${activeProfile.name}.`
+          : state.profiles.length
+            ? 'Choose an owned profile to load its conversations.'
+            : 'Create a profile to start an isolated conversation history.'
+    );
+    dom.profileStatus.dataset.error = state.profileError ? 'true' : 'false';
+  }
+}
+
+function clearProfileConversationState() {
+  state.historyLoadGeneration += 1;
+  state.historySelectionGeneration += 1;
+  state.historySelectionId = null;
+  state.historyLoading = false;
+  state.historyError = false;
+  state.pendingApprovalId = null;
+  state.conversationId = null;
+  state.currentSessionId = null;
+  state.sessions = [];
+  state.serverConversationIds.clear();
+  clearActiveConversationId();
+  if (dom.chatInput) dom.chatInput.value = '';
+  renderHistory();
+  renderSessionMessages();
+  resetReviewState('Profile changed. No prior review is active.');
+  publishConversationSelection(null, true);
+}
+
+async function refreshAuthenticatedProfiles() {
+  if (state.authMode !== 'authenticated') return false;
+  const generation = ++state.profileLoadGeneration;
+  const authEpoch = state.authEpoch;
+  const previousProfileId = state.activeProfileId;
+  state.profilesLoading = true;
+  state.profileFeedback = '';
+  state.profileError = false;
+  renderProfileControls();
+  try {
+    const response = await apiRequest('/api/identity/profiles', {
+      cache: 'no-store',
+      skipAuthenticationRefresh: true,
+    });
+    if (response.status === 401) {
+      clearAuthenticatedState(
+        'Your authenticated session could not be verified. Sign in again to view profiles.',
+        { broadcast: true },
+      );
+      return false;
+    }
+    if (!response.ok) throw new Error('Profiles are unavailable');
+    const payload = await response.json();
+    if (
+      generation !== state.profileLoadGeneration
+      || authEpoch !== state.authEpoch
+      || state.authMode !== 'authenticated'
+    ) return false;
+    if (!Array.isArray(payload?.profiles)) throw new TypeError('Invalid profile list');
+    state.profiles = payload.profiles.filter((profile) => (
+      profile
+      && isProfileId(profile.profile_id)
+      && typeof profile.name === 'string'
+      && profile.name.trim()
+    )).map((profile) => ({
+      profile_id: profile.profile_id,
+      name: profile.name.trim(),
+      created_at: profile.created_at,
+    }));
+    state.activeProfileId = state.profiles.some((profile) => profile.profile_id === state.activeProfileId)
+      ? state.activeProfileId
+      : null;
+    if (previousProfileId !== state.activeProfileId) clearProfileConversationState();
+    if (previousProfileId && !state.activeProfileId) {
+      state.profileFeedback = 'The active profile is not available to this session. Choose an available profile.';
+      state.profileError = true;
+    }
+    return true;
+  } catch (_error) {
+    if (generation === state.profileLoadGeneration && authEpoch === state.authEpoch && state.authMode === 'authenticated') {
+      state.profiles = [];
+      state.activeProfileId = null;
+      state.profileFeedback = 'Profiles could not be loaded. Your conversation view was cleared; retry the session refresh.';
+      state.profileError = true;
+      if (previousProfileId) clearProfileConversationState();
+    }
+    return false;
+  } finally {
+    if (generation === state.profileLoadGeneration && authEpoch === state.authEpoch && state.authMode === 'authenticated') {
+      state.profilesLoading = false;
+      renderProfileControls();
+      renderHistory();
+    }
+  }
+}
+
+function isProfileId(value) {
+  return typeof value === 'string' && PROFILE_ID_PATTERN.test(value);
+}
+
+async function setActiveProfile(profileId) {
+  if (state.authMode !== 'authenticated' || state.profileSwitching) return false;
+  if (!isProfileId(profileId)) {
+    state.profileFeedback = 'Choose a profile from the available list.';
+    state.profileError = true;
+    renderProfileControls();
+    return false;
+  }
+  if (profileId === state.activeProfileId) return true;
+
+  const authEpoch = state.authEpoch;
+  state.profileSwitching = true;
+  state.profileFeedback = 'Switching profile and refreshing its conversations…';
+  state.profileError = false;
+  renderProfileControls();
+  try {
+    const response = await apiRequest('/api/session/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: profileId }),
+      cache: 'no-store',
+    });
+    if (state.authEpoch !== authEpoch || state.authMode !== 'authenticated') return false;
+    if (response.status === 404) {
+      state.profileFeedback = 'That profile is not available to this session. The active profile was not changed.';
+      state.profileError = true;
+      return false;
+    }
+    if (response.status === 403) {
+      state.profileFeedback = 'The profile change was rejected by the session security check. Refresh the session and try again.';
+      state.profileError = true;
+      return false;
+    }
+    if (!response.ok) throw new Error('Profile selection failed');
+    const payload = await response.json();
+    const selected = payload?.active_profile;
+    if (selected?.profile_id !== profileId || typeof selected.name !== 'string') {
+      throw new TypeError('Profile selection was not confirmed');
+    }
+    if (!state.profiles.some((profile) => profile.profile_id === profileId)) {
+      state.profiles.push({
+        profile_id: profileId,
+        name: selected.name.trim(),
+        created_at: selected.created_at,
+      });
+    }
+    state.activeProfileId = profileId;
+    state.profileFeedback = `Active profile: ${selected.name.trim()}.`;
+    state.profileError = false;
+    notifyProfileSelection();
+    clearProfileConversationState();
+    renderProfileControls();
+    await refreshServerConversationHistory({ navigateToChat: false });
+    if (state.authEpoch !== authEpoch || state.authMode !== 'authenticated') return false;
+    if (state.historyError) {
+      state.profileFeedback = `Profile changed to ${selected.name.trim()}, but its conversations could not be refreshed.`;
+      state.profileError = true;
+    } else {
+      state.profileFeedback = `Showing conversations for ${selected.name.trim()}.`;
+    }
+    return true;
+  } catch (_error) {
+    if (state.authEpoch === authEpoch && state.authMode === 'authenticated') {
+      state.profileFeedback = 'The profile could not be changed. Your current profile remains active.';
+      state.profileError = true;
+    }
+    return false;
+  } finally {
+    if (state.authEpoch === authEpoch && state.authMode === 'authenticated') {
+      state.profileSwitching = false;
+      renderProfileControls();
+    }
+  }
+}
+
+async function createAuthenticatedProfile(event) {
+  event.preventDefault();
+  if (state.authMode !== 'authenticated' || state.profilesLoading || state.profileSwitching) return;
+  const name = String(dom.profileNameInput?.value || '').trim();
+  if (!name || name.length > 80) {
+    state.profileFeedback = 'Profile names must contain 1 to 80 characters.';
+    state.profileError = true;
+    renderProfileControls();
+    dom.profileNameInput?.focus();
+    return;
+  }
+  const authEpoch = state.authEpoch;
+  state.profileSwitching = true;
+  state.profileFeedback = 'Creating profile…';
+  state.profileError = false;
+  renderProfileControls();
+  try {
+    const response = await apiRequest('/api/identity/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+      cache: 'no-store',
+    });
+    if (state.authEpoch !== authEpoch || state.authMode !== 'authenticated') return;
+    if (!response.ok) {
+      state.profileFeedback = response.status === 403
+        ? 'Profile creation was rejected by the session security check.'
+        : response.status === 400
+          ? 'The server rejected that profile name. Use 1 to 80 characters.'
+          : 'The profile could not be created. Try again.';
+      state.profileError = true;
+      return;
+    }
+    const profile = await response.json();
+    if (!isProfileId(profile?.profile_id) || typeof profile.name !== 'string') {
+      throw new TypeError('Profile creation was not confirmed');
+    }
+    state.profiles.push({
+      profile_id: profile.profile_id,
+      name: profile.name.trim(),
+      created_at: profile.created_at,
+    });
+    if (dom.profileNameInput) dom.profileNameInput.value = '';
+    state.profileSwitching = false;
+    renderProfileControls();
+    await setActiveProfile(profile.profile_id);
+  } catch (_error) {
+    if (state.authEpoch === authEpoch && state.authMode === 'authenticated') {
+      state.profileFeedback = 'The profile could not be created. Check the session and try again.';
+      state.profileError = true;
+    }
+  } finally {
+    if (state.authEpoch === authEpoch && state.authMode === 'authenticated') {
+      state.profileSwitching = false;
+      renderProfileControls();
+    }
+  }
 }
 
 async function refreshAuthenticationState({ expired = false, broadcast = false, navigateToChat = true } = {}) {
@@ -740,6 +1049,7 @@ async function refreshAuthenticationState({ expired = false, broadcast = false, 
     const payload = await response.json();
     if (payload?.authenticated === true && typeof payload.csrf_token === 'string') {
       const enteringAuthenticated = state.authMode !== 'authenticated';
+      const previousActiveProfileId = state.activeProfileId;
       const authenticatedSessionChanged = state.authMode === 'authenticated'
         && state.csrfToken !== null
         && state.csrfToken !== payload.csrf_token;
@@ -755,6 +1065,11 @@ async function refreshAuthenticationState({ expired = false, broadcast = false, 
         state.conversationId = null;
         state.pendingApprovalId = null;
         state.serverConversationIds.clear();
+        state.activeProfileId = null;
+        state.profiles = [];
+        state.profileFeedback = '';
+        state.profileError = false;
+        state.profileLoadGeneration += 1;
         state.audit = [];
         state.memories = [];
         state.memoryConsent = false;
@@ -766,12 +1081,20 @@ async function refreshAuthenticationState({ expired = false, broadcast = false, 
         : 'AUTHENTICATED';
       state.developmentAuthAvailable = payload.development_auth_available === true;
       state.csrfToken = payload.csrf_token;
+      state.activeProfileId = isProfileId(payload.active_profile_id) ? payload.active_profile_id : null;
+      if (
+        !enteringAuthenticated
+        && !authenticatedSessionChanged
+        && previousActiveProfileId !== state.activeProfileId
+      ) clearProfileConversationState();
       state.localDemoSessions = loadSessions();
       renderHistory();
       renderSessionMessages();
       renderAuditEntries();
       renderMemories();
       if (enteringAuthenticated) await refreshAuthenticatedMemories();
+      if (state.authMode !== 'authenticated') return false;
+      await refreshAuthenticatedProfiles();
       if (state.authMode !== 'authenticated') return false;
       await refreshServerConversationHistory({ navigateToChat });
       if (state.authMode !== 'authenticated') return false;
@@ -889,6 +1212,8 @@ function configureCrossTabAuthentication() {
     state.authChannel.addEventListener('message', (event) => {
       if (event.data?.type === 'authentication-ended') {
         refreshAuthenticationState({ expired: true });
+      } else if (event.data?.type === 'profile-changed') {
+        refreshAuthenticationState({ navigateToChat: false });
       }
     });
   }
@@ -902,6 +1227,8 @@ function configureCrossTabAuthentication() {
     }
     if (notification?.type === 'authentication-ended') {
       refreshAuthenticationState({ expired: true });
+    } else if (notification?.type === 'profile-changed') {
+      refreshAuthenticationState({ navigateToChat: false });
     }
   });
 }
@@ -2271,7 +2598,9 @@ function renderHistory() {
 
   if (dom.historyStatus) {
     const statusText = state.authMode === 'authenticated'
-      ? state.historySelectionId
+      ? !state.activeProfileId
+        ? 'Select an owned profile to view its conversations.'
+        : state.historySelectionId
         ? 'Loading conversation…'
         : state.historyLoading
           ? 'Loading conversation history…'
@@ -2292,7 +2621,11 @@ function renderHistory() {
     empty.textContent = query
       ? 'No loaded conversations match this filter.'
       : state.authMode === 'authenticated'
-      ? state.historyLoading
+      ? !state.activeProfileId
+        ? state.profiles.length
+          ? 'Select a profile to load its conversations.'
+          : 'Create a profile to start an isolated conversation history.'
+        : state.historyLoading
         ? 'Loading conversations…'
         : state.historyError
           ? 'No conversations are available right now.'
@@ -2581,6 +2914,11 @@ function renderHome() {
     if (state.authMode === 'checking' || (state.authMode === 'authenticated' && state.historyLoading)) {
       title.textContent = 'Loading your conversations';
       detail.textContent = 'Your server-backed history will appear here when available.';
+    } else if (state.authMode === 'authenticated' && !state.activeProfileId) {
+      title.textContent = state.profiles.length ? 'Select a profile' : 'Create a profile';
+      detail.textContent = state.profiles.length
+        ? 'Choose an owned profile in Chat to load its separate conversation history.'
+        : 'Create a profile in Chat before starting an authenticated conversation.';
     } else if (state.authMode === 'authenticated' && state.historyError) {
       title.textContent = 'History is unavailable';
       detail.textContent = 'PARMAR could not load your conversations. Try again from Chats / History.';
@@ -2787,6 +3125,19 @@ function sendHomeChatMessage(event) {
 
 async function refreshServerConversationHistory({ navigateToChat = true } = {}) {
   if (state.authMode !== 'authenticated') return;
+  if (!state.activeProfileId) {
+    state.historyLoadGeneration += 1;
+    state.historyLoading = false;
+    state.historyError = false;
+    state.sessions = [];
+    state.serverConversationIds.clear();
+    state.currentSessionId = null;
+    state.conversationId = null;
+    clearActiveConversationId();
+    renderHistory();
+    renderSessionMessages();
+    return;
+  }
   const generation = ++state.historyLoadGeneration;
   const authEpoch = state.authEpoch;
   state.historyLoading = true;
@@ -3655,6 +4006,15 @@ async function startDevelopmentSession() {
 async function submitChatMessage() {
   const text = (dom.chatInput?.value || '').trim();
   if (!text) return;
+  if (state.authMode === 'authenticated' && !state.activeProfileId) {
+    state.profileFeedback = state.profiles.length
+      ? 'Select a profile before starting an authenticated conversation.'
+      : 'Create a profile before starting an authenticated conversation.';
+    state.profileError = true;
+    renderProfileControls();
+    dom.profileSelector?.focus();
+    return;
+  }
   const researchRequested = Boolean(dom.researchMode?.checked);
   const requestId = beginRequest();
   if (requestId === null) return;
@@ -3954,8 +4314,14 @@ function bindEvents() {
       dom.authStatus.textContent = 'Authenticated session refreshed from the server.';
     }
   });
+  dom.profileSelector?.addEventListener('change', () => {
+    void setActiveProfile(dom.profileSelector.value);
+  });
+  dom.profileCreateForm?.addEventListener('submit', (event) => {
+    void createAuthenticatedProfile(event);
+  });
 
-  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .text-button[data-action], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section], .home-action[data-section], .home-action[data-action], .home-voki-action[data-section], .home-quick-grid [data-section], .home-quick-grid [data-action], .home-dashboard-card [data-section], .home-quote-card[data-section], .settings-workspace-link[data-section], .settings-workspace-link[data-action]').forEach((button) => {
+  document.querySelectorAll('.nav-item, .sidebar-brand[data-section], .text-button[data-section], .text-button[data-action], .workspace-launch[data-section], .capability-button[data-section], .capability-button[data-action], .capability-menu [data-section], .composer-voki[data-section], .home-action[data-section], .home-action[data-action], .home-voki-action[data-section], .home-quick-grid [data-section], .home-quick-grid [data-action], .home-dashboard-card [data-section], .home-quote-card[data-section], .settings-workspace-link[data-section], .settings-workspace-link[data-action], .voki-ecosystem-launcher[data-section]').forEach((button) => {
     button.addEventListener('click', () => navigateWorkspaceAction(button));
   });
   dom.settingsLogoutBtn?.addEventListener('click', () => dom.logoutBtn?.click());
@@ -4443,6 +4809,7 @@ function initialize() {
       getLanguage: () => dom.languageSelect?.value || state.settings.language,
       beginRequest,
       finishRequest,
+      ecosystemPresence: document.querySelectorAll('[data-voki-ecosystem-presence]'),
     });
   }
   bindEvents();

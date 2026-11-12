@@ -82,7 +82,7 @@ class Element {
   }
 }
 
-function makeInterface(request, speechAdapterFactory, voiceInputAdapterFactory) {
+function makeInterface(request, speechAdapterFactory, voiceInputAdapterFactory, ecosystemPresence = []) {
   const root = new Element();
   const presence = new Element();
   const avatar = new Element();
@@ -129,6 +129,7 @@ function makeInterface(request, speechAdapterFactory, voiceInputAdapterFactory) 
     finishRequest: (requestId) => completed.push(requestId),
     speechAdapterFactory,
     voiceInputAdapterFactory,
+    ecosystemPresence,
   });
   return { instance, root, completed };
 }
@@ -621,6 +622,28 @@ test('Home keeps the canonical VOKKI portrait and preserves optional local-refer
   assert.match(html, /<button class="nav-item" data-section="voki" aria-label="VOKKI interface"/);
   assert.match(app, /state\.homeVokiAvatar = new window\.PARMARVOKKIAvatar\.VOKKIAvatarPresentation/);
   assert.doesNotMatch(app, /classList\.add\('acknowledged'\)/);
+});
+
+test('PARMAR-wide VOKKI launcher opens its workspace and mirrors only lifecycle state', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'app.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(__dirname, '..', 'interface', 'static', 'premium.css'), 'utf8');
+  const launcher = new Element();
+  const state = new Element();
+  launcher.elements = { '[data-voki-ecosystem-state]': state };
+  const { instance } = makeInterface(async () => apiResponse({}), undefined, undefined, [launcher]);
+  instance.setPresence('WAITING_FOR_HUMAN');
+
+  assert.equal(launcher.dataset.presenceState, 'approval-required');
+  assert.equal(state.textContent, 'APPROVAL REQUIRED');
+  assert.equal(launcher.attributes['aria-label'], 'Open VOKKI workspace. PARMAR lifecycle: APPROVAL REQUIRED.');
+
+  assert.match(html, /class="voki-ecosystem-launcher"[^>]*data-section="voki"[^>]*data-voki-ecosystem-presence/);
+  assert.match(html, /PARMAR \/ VOKKI WORKSPACE/);
+  assert.match(app, /voki-ecosystem-launcher\[data-section\]/);
+  assert.match(app, /ecosystemPresence: document\.querySelectorAll\('\[data-voki-ecosystem-presence\]'\)/);
+  assert.match(styles, /body\[data-active-section="voki"\] \.voki-ecosystem-launcher\s*\{\s*display:\s*none;/);
+  assert.match(styles, /@media \(max-width: 760px\) \{\s*\.voki-ecosystem-launcher/);
 });
 
 test('VOKKI approval decisions stay scoped to VOKKI and use the approval backend', () => {

@@ -50,7 +50,7 @@ def test_session_creation_stores_only_token_hash_and_resolves_server_identity():
     assert set(credentials.session.__dataclass_fields__) == {
         "session_id", "user_id", "authentication_source", "created_at",
         "last_activity_at", "idle_expires_at", "absolute_expires_at",
-        "status", "revoked_at", "replaced_by",
+        "status", "revoked_at", "replaced_by", "active_profile_id",
     }
 
 
@@ -62,10 +62,22 @@ def test_invalid_random_session_token_is_anonymous():
 
 def test_idle_expiry_invalidates_session():
     manager, repository = make_manager(idle=5, absolute=30)
-    credentials = manager.create_authenticated_session(uuid4(), "test-auth", now=START)
+    user_id = uuid4()
+    credentials = manager.create_authenticated_session(user_id, "test-auth", now=START)
+    profile_id = uuid4()
+    selected = manager.select_profile(
+        credentials.session.session_id,
+        user_id,
+        profile_id,
+        now=START,
+    )
+    assert selected is not None
+    assert selected.active_profile_id == profile_id
 
     assert manager.resolve(credentials.session_token, now=START + timedelta(seconds=5)) is None
-    assert repository.get_by_session_id(credentials.session.session_id).status == "EXPIRED"
+    expired = repository.get_by_session_id(credentials.session.session_id)
+    assert expired.status == "EXPIRED"
+    assert expired.active_profile_id is None
 
 
 def test_activity_extends_idle_expiry_but_not_absolute_expiry():
@@ -86,6 +98,77 @@ def test_revocation_and_logout_immediately_invalidate_session():
 
     assert manager.logout(credentials.session_token, now=START + timedelta(seconds=1)) is True
     assert manager.resolve(credentials.session_token, now=START + timedelta(seconds=1)) is None
+
+
+def test_active_profile_is_bound_to_session_owner_and_cleared_on_logout():
+    manager, repository = make_manager()
+    user_id = uuid4()
+    credentials = manager.create_authenticated_session(user_id, "test-auth", now=START)
+    profile_id = uuid4()
+
+    assert manager.select_profile(
+        credentials.session.session_id,
+        uuid4(),
+        profile_id,
+        now=START,
+    ) is None
+    selected = manager.select_profile(
+        credentials.session.session_id,
+        user_id,
+        profile_id,
+        now=START,
+    )
+    assert selected is not None
+    assert selected.active_profile_id == profile_id
+
+    assert manager.logout(credentials.session_token, now=START + timedelta(seconds=1)) is True
+    revoked = repository.get_by_session_id(credentials.session.session_id)
+    assert revoked.status == "REVOKED"
+    assert revoked.active_profile_id is None
+
+
+def test_sqlite_active_profile_persists_and_logout_clears_profile_context(tmp_path):
+    database_path = tmp_path / "sessions.sqlite3"
+    policy = SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30)
+    manager = SessionManager(sqlite_repository(database_path), policy)
+    user_id = uuid4()
+    profile_id = uuid4()
+    credentials = manager.create_authenticated_session(user_id, "trusted-test-auth", now=START)
+
+    selected = manager.select_profile(
+        credentials.session.session_id,
+        user_id,
+        profile_id,
+        now=START,
+    )
+    assert selected is not None and selected.active_profile_id == profile_id
+    restarted = SessionManager(sqlite_repository(database_path), policy)
+    assert restarted.resolve(credentials.session_token, now=START + timedelta(seconds=1)).active_profile_id == profile_id
+
+    assert restarted.logout(credentials.session_token, now=START + timedelta(seconds=2)) is True
+    revoked = restarted.repository.get_by_session_id(credentials.session.session_id)
+    assert revoked.active_profile_id is None
+
+
+def test_sqlite_session_migrates_v1_without_invalidating_existing_session(tmp_path):
+    database_path = tmp_path / "legacy-sessions.sqlite3"
+    policy = SessionPolicy(idle_timeout_seconds=10, absolute_timeout_seconds=30)
+    manager = SessionManager(sqlite_repository(database_path), policy)
+    credentials = manager.create_authenticated_session(uuid4(), "trusted-test-auth", now=START)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE sessions DROP COLUMN active_profile_id")
+        connection.execute("PRAGMA user_version = 1")
+
+    migrated = SessionManager(sqlite_repository(database_path), policy)
+    restored = migrated.resolve(credentials.session_token, now=START + timedelta(seconds=1))
+
+    assert restored is not None
+    assert restored.active_profile_id is None
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert "active_profile_id" in {
+            row[1] for row in connection.execute("PRAGMA table_info(sessions)")
+        }
 
 
 def test_rotation_revokes_old_token_and_preserves_user_and_absolute_expiry():

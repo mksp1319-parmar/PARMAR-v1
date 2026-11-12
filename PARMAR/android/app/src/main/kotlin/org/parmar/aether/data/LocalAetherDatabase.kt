@@ -243,19 +243,9 @@ class LocalAetherDatabase(
     fun setTabPinned(id: String, pinned: Boolean): LocalTabsSession =
         storage("The tab pin state could not be saved.") {
             writeTransaction { db ->
-                val tab = findTab(db, id) ?: return@writeTransaction readTabSession(db)
-                if (tab.pinned != pinned) {
-                    db.update(
-                        "tabs",
-                        ContentValues().apply {
-                            put("pinned", if (pinned) 1 else 0)
-                            put("updated_at", checkedTimestamp(tab.updatedAt))
-                        },
-                        "id = ?",
-                        arrayOf(id),
-                    )
-                    normalizeTabOrder(db)
-                }
+                val current = readTabSession(db)
+                val updated = current.setPinned(id, pinned)
+                persistTabChanges(db, current, updated)
                 readTabSession(db)
             }
         }
@@ -264,27 +254,9 @@ class LocalAetherDatabase(
         require(direction == -1 || direction == 1) { "Tab movement must be one position." }
         return storage("The tab order could not be saved.") {
             writeTransaction { db ->
-                val session = readTabSession(db)
-                val index = session.tabs.indexOfFirst { it.id == id }
-                if (index < 0) return@writeTransaction session
-                val adjacent = index + direction
-                if (adjacent !in session.tabs.indices || session.tabs[adjacent].pinned != session.tabs[index].pinned) {
-                    return@writeTransaction session
-                }
-                val reordered = session.tabs.toMutableList().apply {
-                    add(adjacent, removeAt(index))
-                }
-                reordered.forEachIndexed { order, tab ->
-                    db.update(
-                        "tabs",
-                        ContentValues().apply {
-                            put("tab_order", order)
-                            put("updated_at", checkedTimestamp(tab.updatedAt))
-                        },
-                        "id = ?",
-                        arrayOf(tab.id),
-                    )
-                }
+                val current = readTabSession(db)
+                val updated = current.move(id, direction)
+                persistTabChanges(db, current, updated)
                 readTabSession(db)
             }
         }
@@ -356,18 +328,26 @@ class LocalAetherDatabase(
             arrayOf(id),
         ).use { cursor -> if (cursor.moveToFirst()) cursor.toLocalTab() else null }
 
-    private fun normalizeTabOrder(db: SQLiteDatabase) {
-        val tabs = readTabSession(db).tabs
-        tabs.forEachIndexed { order, tab ->
-            db.update(
-                "tabs",
-                ContentValues().apply {
-                    put("tab_order", order)
-                    put("updated_at", checkedTimestamp(tab.updatedAt))
-                },
-                "id = ?",
-                arrayOf(tab.id),
-            )
+    private fun persistTabChanges(
+        db: SQLiteDatabase,
+        previous: LocalTabsSession,
+        updated: LocalTabsSession,
+    ) {
+        val previousById = previous.tabs.associateBy(LocalTab::id)
+        updated.tabs.forEach { tab ->
+            val oldTab = previousById[tab.id] ?: return@forEach
+            if (oldTab.pinned != tab.pinned || oldTab.order != tab.order) {
+                db.update(
+                    "tabs",
+                    ContentValues().apply {
+                        put("pinned", if (tab.pinned) 1 else 0)
+                        put("tab_order", tab.order)
+                        put("updated_at", checkedTimestamp(oldTab.updatedAt))
+                    },
+                    "id = ?",
+                    arrayOf(tab.id),
+                )
+            }
         }
     }
 

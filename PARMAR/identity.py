@@ -59,10 +59,15 @@ class HTTPRequestContext:
 
     principal: Principal
     session_id: UUID | None = None
+    active_profile_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.principal.authenticated != isinstance(self.session_id, UUID):
             raise ValueError("Authenticated request contexts require an active server session.")
+        if self.active_profile_id is not None and (
+            not self.principal.authenticated or not isinstance(self.active_profile_id, UUID)
+        ):
+            raise ValueError("Active profiles require an authenticated server session.")
 
 
 class PrincipalResolver(Protocol):

@@ -55,6 +55,7 @@ class ServerSession:
     status: str = "ACTIVE"
     revoked_at: datetime | None = None
     replaced_by: UUID | None = None
+    active_profile_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,14 @@ class SessionRepository(Protocol):
     ) -> ServerSession | None: ...
 
     def revoke(self, session_id: UUID, now: datetime) -> bool: ...
+
+    def select_profile(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        profile_id: UUID,
+        now: datetime,
+    ) -> ServerSession | None: ...
 
     def rotate(
         self,
@@ -132,7 +141,11 @@ class InMemorySessionRepository:
             if session is None or session.status != "ACTIVE":
                 return None
             if now >= session.idle_expires_at or now >= session.absolute_expires_at:
-                self._sessions[session.session_id] = replace(session, status="EXPIRED")
+                self._sessions[session.session_id] = replace(
+                    session,
+                    status="EXPIRED",
+                    active_profile_id=None,
+                )
                 return None
             next_idle_expiry = min(
                 now + timedelta(seconds=idle_timeout_seconds),
@@ -155,8 +168,30 @@ class InMemorySessionRepository:
                 session,
                 status="REVOKED",
                 revoked_at=now,
+                active_profile_id=None,
             )
             return True
+
+    def select_profile(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        profile_id: UUID,
+        now: datetime,
+    ) -> ServerSession | None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if (
+                session is None
+                or session.user_id != user_id
+                or session.status != "ACTIVE"
+                or now >= session.idle_expires_at
+                or now >= session.absolute_expires_at
+            ):
+                return None
+            updated = replace(session, active_profile_id=profile_id)
+            self._sessions[session_id] = updated
+            return updated
 
     def rotate(
         self,
@@ -182,6 +217,7 @@ class InMemorySessionRepository:
                 status="REVOKED",
                 revoked_at=now,
                 replaced_by=replacement.session_id,
+                active_profile_id=None,
             )
             self._sessions[replacement.session_id] = replacement
             self._token_sessions[new_token_hash] = replacement.session_id
@@ -191,7 +227,7 @@ class InMemorySessionRepository:
 class SQLiteSessionRepository:
     """SQLite-backed local session store with atomic expiry and rotation."""
 
-    _SCHEMA_VERSION = 1
+    _SCHEMA_VERSION = 2
 
     def __init__(self, database_path: str | Path, *, integrity_key: bytes) -> None:
         path = Path(database_path).expanduser()
@@ -250,8 +286,13 @@ class SQLiteSessionRepository:
             session.revoked_at.isoformat() if session.revoked_at is not None else None,
             str(session.replaced_by) if session.replaced_by is not None else None,
         ]
+        if session.active_profile_id is None:
+            prefix = b"PARMAR-SESSION-RECORD-v1:"
+        else:
+            payload.append(str(session.active_profile_id))
+            prefix = b"PARMAR-SESSION-RECORD-v2:"
         message = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        return hmac.new(key, b"PARMAR-SESSION-RECORD-v1:" + message, hashlib.sha256).hexdigest()
+        return hmac.new(key, prefix + message, hashlib.sha256).hexdigest()
 
     def _session_from_row(self, row: sqlite3.Row) -> ServerSession:
         try:
@@ -280,6 +321,9 @@ class SQLiteSessionRepository:
                 status=status,
                 revoked_at=self._timestamp(row["revoked_at"]) if row["revoked_at"] else None,
                 replaced_by=UUID(row["replaced_by"]) if row["replaced_by"] else None,
+                active_profile_id=(
+                    UUID(row["active_profile_id"]) if row["active_profile_id"] else None
+                ),
             )
             if (
                 session.last_activity_at < session.created_at
@@ -291,6 +335,7 @@ class SQLiteSessionRepository:
                     session.status != "REVOKED"
                     and (session.revoked_at is not None or session.replaced_by is not None)
                 )
+                or (session.status != "ACTIVE" and session.active_profile_id is not None)
             ):
                 raise ValueError("Invalid stored session timestamps.")
             expected_tag = self._session_integrity_tag(session, token_hash, self._integrity_key)
@@ -330,7 +375,7 @@ class SQLiteSessionRepository:
         if self._initialized:
             return
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, self._SCHEMA_VERSION):
+        if version not in (0, 1, self._SCHEMA_VERSION):
             raise SessionStorageUnavailable("Authenticated session storage is unavailable.")
         if version == 0:
             if not self._fresh_database:
@@ -355,12 +400,22 @@ class SQLiteSessionRepository:
                     status TEXT NOT NULL CHECK(status IN ('ACTIVE', 'EXPIRED', 'REVOKED')),
                     revoked_at TEXT,
                     replaced_by TEXT,
+                    active_profile_id TEXT,
                     integrity_tag TEXT NOT NULL CHECK(length(integrity_tag) = 64)
                 );
                 CREATE INDEX sessions_expiry ON sessions(status, idle_expires_at, absolute_expires_at);
-                PRAGMA user_version = 1;
+                PRAGMA user_version = 2;
                 """
             )
+        elif version == 1:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute("ALTER TABLE sessions ADD COLUMN active_profile_id TEXT")
+                connection.execute("PRAGMA user_version = 2")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         integrity_result = connection.execute("PRAGMA quick_check").fetchone()
         if integrity_result is None or integrity_result[0] != "ok":
             raise SessionStorageUnavailable("Authenticated session storage is unavailable.")
@@ -388,6 +443,7 @@ class SQLiteSessionRepository:
             "status",
             "revoked_at",
             "replaced_by",
+            "active_profile_id",
             "integrity_tag",
         }.issubset(columns):
             raise SessionStorageUnavailable("Authenticated session storage is unavailable.")
@@ -435,6 +491,7 @@ class SQLiteSessionRepository:
             session.status,
             session.revoked_at.isoformat() if session.revoked_at is not None else None,
             str(session.replaced_by) if session.replaced_by is not None else None,
+            str(session.active_profile_id) if session.active_profile_id is not None else None,
         )
 
     def create(self, session: ServerSession, token_hash: str) -> None:
@@ -448,7 +505,8 @@ class SQLiteSessionRepository:
             connection.execute(
                 "INSERT INTO sessions(session_id, user_id, authentication_source, created_at, "
                 "last_activity_at, idle_expires_at, absolute_expires_at, status, revoked_at, "
-                "replaced_by, token_hash, integrity_tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "replaced_by, active_profile_id, token_hash, integrity_tag) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     *self._session_values(session),
                     token_hash,
@@ -495,9 +553,10 @@ class SQLiteSessionRepository:
             if session.status != "ACTIVE":
                 return None
             if now >= session.idle_expires_at or now >= session.absolute_expires_at:
-                expired = replace(session, status="EXPIRED")
+                expired = replace(session, status="EXPIRED", active_profile_id=None)
                 connection.execute(
-                    "UPDATE sessions SET status = 'EXPIRED', integrity_tag = ? WHERE session_id = ?",
+                    "UPDATE sessions SET status = 'EXPIRED', active_profile_id = NULL, integrity_tag = ? "
+                    "WHERE session_id = ?",
                     (
                         self._session_integrity_tag(expired, row["token_hash"], self._integrity_key),
                         str(session.session_id),
@@ -545,9 +604,9 @@ class SQLiteSessionRepository:
             session = self._session_from_row(row)
             if session.status != "ACTIVE":
                 return False
-            revoked = replace(session, status="REVOKED", revoked_at=now)
+            revoked = replace(session, status="REVOKED", revoked_at=now, active_profile_id=None)
             cursor = connection.execute(
-                "UPDATE sessions SET status = 'REVOKED', revoked_at = ?, integrity_tag = ? "
+                "UPDATE sessions SET status = 'REVOKED', revoked_at = ?, active_profile_id = NULL, integrity_tag = ? "
                 "WHERE session_id = ? AND status = 'ACTIVE'",
                 (
                     now.isoformat(),
@@ -556,6 +615,42 @@ class SQLiteSessionRepository:
                 ),
             )
             return cursor.rowcount == 1
+
+    def select_profile(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        profile_id: UUID,
+        now: datetime,
+    ) -> ServerSession | None:
+        if not all(isinstance(value, UUID) for value in (session_id, user_id, profile_id)):
+            return None
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ?",
+                (str(session_id),),
+            ).fetchone()
+            if row is None:
+                return None
+            session = self._session_from_row(row)
+            if (
+                session.user_id != user_id
+                or session.status != "ACTIVE"
+                or now >= session.idle_expires_at
+                or now >= session.absolute_expires_at
+            ):
+                return None
+            updated = replace(session, active_profile_id=profile_id)
+            connection.execute(
+                "UPDATE sessions SET active_profile_id = ?, integrity_tag = ? "
+                "WHERE session_id = ? AND status = 'ACTIVE'",
+                (
+                    str(profile_id),
+                    self._session_integrity_tag(updated, row["token_hash"], self._integrity_key),
+                    str(session_id),
+                ),
+            )
+            return updated
 
     def rotate(
         self,
@@ -595,9 +690,11 @@ class SQLiteSessionRepository:
                 status="REVOKED",
                 revoked_at=now,
                 replaced_by=replacement.session_id,
+                active_profile_id=None,
             )
             cursor = connection.execute(
-                "UPDATE sessions SET status = 'REVOKED', revoked_at = ?, replaced_by = ?, integrity_tag = ? "
+                "UPDATE sessions SET status = 'REVOKED', revoked_at = ?, replaced_by = ?, "
+                "active_profile_id = NULL, integrity_tag = ? "
                 "WHERE session_id = ? AND status = 'ACTIVE'",
                 (
                     now.isoformat(),
@@ -611,7 +708,8 @@ class SQLiteSessionRepository:
             connection.execute(
                 "INSERT INTO sessions(session_id, user_id, authentication_source, created_at, "
                 "last_activity_at, idle_expires_at, absolute_expires_at, status, revoked_at, "
-                "replaced_by, token_hash, integrity_tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "replaced_by, active_profile_id, token_hash, integrity_tag) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     *self._session_values(replacement),
                     new_token_hash,
@@ -637,6 +735,7 @@ class SessionManager:
             "get_by_session_id",
             "resolve_and_touch",
             "revoke",
+            "select_profile",
             "rotate",
         )
         if any(not callable(getattr(repository, name, None)) for name in required_methods):
@@ -741,6 +840,16 @@ class SessionManager:
 
     def revoke(self, session_id: UUID, *, now: datetime | None = None) -> bool:
         return self.repository.revoke(session_id, self._now(now))
+
+    def select_profile(
+        self,
+        session_id: UUID,
+        user_id: UUID,
+        profile_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> ServerSession | None:
+        return self.repository.select_profile(session_id, user_id, profile_id, self._now(now))
 
     def logout(self, token: object, *, now: datetime | None = None) -> bool:
         token_hash = self._token_hash(token)

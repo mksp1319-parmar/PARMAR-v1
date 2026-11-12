@@ -9,12 +9,14 @@ import pytest
 
 from PARMAR.conversations import InMemoryConversationRepository
 from PARMAR.identity import LocalDemoPrincipalResolver
+from PARMAR.identity_store import SQLiteIdentityRepository
 from PARMAR.interface import futuristic_app
 from PARMAR.sessions import (
     InMemorySessionRepository,
     SESSION_COOKIE_NAME,
     SessionManager,
     SessionPolicy,
+    SessionCredentials,
     SQLiteSessionRepository,
 )
 
@@ -26,14 +28,23 @@ def sqlite_repository(path):
 
 
 @pytest.fixture
-def authenticated_session(monkeypatch):
+def authenticated_session(monkeypatch, tmp_path):
     manager = SessionManager(
         InMemorySessionRepository(),
         SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900),
     )
     credentials = manager.create_authenticated_session(uuid4(), "http-test")
+    identity_repository = SQLiteIdentityRepository(tmp_path / "identity.sqlite3")
+    profile = identity_repository.create_profile(credentials.session.user_id, "Default")
+    selected = manager.select_profile(
+        credentials.session.session_id,
+        credentials.session.user_id,
+        profile.profile_id,
+    )
+    credentials = SessionCredentials(selected, credentials.session_token)
     monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
+    monkeypatch.setattr(futuristic_app, "IDENTITY_REPOSITORY", identity_repository)
     conversations = InMemoryConversationRepository()
     monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", conversations)
     monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", conversations)

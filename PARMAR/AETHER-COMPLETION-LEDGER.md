@@ -295,3 +295,19 @@ phase in the master roadmap that has not passed its complete exit criteria on
 an identified ref/artifact. All **85 of 85 phase acceptances remain unverified**
 at this snapshot: phases with partial source, historical tests, blocked
 runtime/device work, or NO-GO status do not count as fully verified.
+
+## Focused download-safety regression — 2026-11-11
+
+- **Working-tree base:** `main` / `69527f6b39d0521746eb91cd96b5fa44fc48348c`;
+  implementation and test changes were uncommitted in the worktree.
+- **Scope:** `PARMAR/desktop/download-utils.cjs` removes Unicode bidirectional
+  format controls from suggested download filenames and rejects stored
+  download records containing those controls. Ordinary Unicode filenames
+  remain accepted by the focused test.
+- **Test:** from `PARMAR/desktop`, `node --test test/download-utils.test.cjs`
+  — **2 passed, 0 failed, 0 skipped**.
+- **Additional check:** `git diff --check` — passed.
+- **Boundary:** this is unit-level filename/record validation only. No
+  Electron runtime, actual download dialog, packaged application, platform
+  behavior, network containment, or production isolation was tested. It does
+  not change any phase acceptance or security gate status.

@@ -1174,8 +1174,93 @@ textarea::placeholder {
 
 .auth-control-row {
   min-height: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px 12px;
   color: #88877f;
   font-size: 0.700rem;
+}
+
+.profile-control-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 9px 12px;
+  padding: 10px 0 11px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.profile-active-summary {
+  display: grid;
+  min-width: 132px;
+  gap: 3px;
+  margin-right: auto;
+}
+
+.profile-active-summary span {
+  color: #a78c69;
+  font-size: 0.625rem;
+  line-height: 1.2;
+}
+
+.profile-active-summary strong {
+  max-width: 260px;
+  overflow: hidden;
+  color: #e6dfd4;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-select-label {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.profile-control-row select,
+.profile-create-form input {
+  min-width: 150px;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid var(--line-mid);
+  border-radius: var(--radius-control);
+  background: #0c0e0f;
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.profile-create-form {
+  display: flex;
+  min-width: min(100%, 260px);
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-create-form input {
+  width: min(180px, 42vw);
+  min-width: 110px;
+}
+
+.profile-create-form .new-session-btn {
+  min-height: 34px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.profile-status {
+  flex: 1 0 100%;
+  min-height: 1em;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.profile-status[data-error="true"] {
+  color: var(--danger);
 }
 
 .chat-thread {
@@ -3045,5 +3130,113 @@ textarea::placeholder {
   .voki-presence-stage {
     height: clamp(250px, 50svh, 360px);
     min-height: clamp(250px, 50svh, 360px);
+  }
+}
+
+.voki-ecosystem-launcher {
+  position: fixed;
+  z-index: 30;
+  right: max(20px, env(safe-area-inset-right));
+  bottom: max(20px, env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 64px;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 9px 16px 9px 10px;
+  border: 1px solid rgba(181, 207, 240, 0.3);
+  border-radius: 999px;
+  color: #f5f8ff;
+  background: rgba(15, 23, 39, 0.96);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.34);
+  cursor: pointer;
+  text-align: left;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+.voki-ecosystem-launcher:hover {
+  border-color: rgba(181, 207, 240, 0.62);
+  background: #17233a;
+}
+
+.voki-ecosystem-launcher:focus-visible {
+  outline: 3px solid #a9cdfb;
+  outline-offset: 3px;
+}
+
+.voki-ecosystem-launcher > img {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border: 1px solid rgba(196, 218, 247, 0.48);
+  border-radius: 50%;
+  background: #202b40;
+  object-fit: contain;
+}
+
+.voki-ecosystem-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 90px;
+}
+
+.voki-ecosystem-copy strong {
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+}
+
+.voki-ecosystem-copy > span,
+.voki-ecosystem-state {
+  color: #bac8dc;
+  font-size: 0.7rem;
+}
+
+.voki-ecosystem-state {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body[data-active-section="voki"] .voki-ecosystem-launcher {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .voki-ecosystem-launcher {
+    right: 12px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    min-height: 56px;
+    gap: 8px;
+    padding: 7px 12px 7px 8px;
+  }
+
+  .voki-ecosystem-launcher > img {
+    width: 38px;
+    height: 38px;
+    flex-basis: 38px;
+  }
+}
+
+@media (max-width: 480px) {
+  .voki-ecosystem-launcher {
+    width: 54px;
+    min-width: 54px;
+    height: 54px;
+    min-height: 54px;
+    justify-content: center;
+    padding: 7px;
+  }
+
+  .voki-ecosystem-copy,
+  .voki-ecosystem-state {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voki-ecosystem-launcher {
+    transition: none;
   }
 }

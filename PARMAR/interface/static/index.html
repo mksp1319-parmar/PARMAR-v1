@@ -225,7 +225,7 @@
           </section>
 
           <section class="section-view" data-section="voki" id="section-voki" aria-labelledby="voki-interface-title">
-            <div class="view-heading voki-view-heading"><div><span class="eyebrow">PARMAR / PRIVATE SESSION</span><h1 id="voki-interface-title">VOKKI</h1></div><p>VOKKI communicates PARMAR’s result. PARMAR’s review, enforcement, approval, and response checks remain authoritative.</p><button class="text-button voki-exit" type="button" data-section="home" aria-label="Return to PARMAR workspace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7M8 12h12" /></svg><span>Workspace</span></button></div>
+            <div class="view-heading voki-view-heading"><div><span class="eyebrow">PARMAR / VOKKI WORKSPACE</span><h1 id="voki-interface-title">VOKKI</h1></div><p>VOKKI communicates PARMAR’s result. PARMAR’s review, enforcement, approval, and response checks remain authoritative.</p><button class="text-button voki-exit" type="button" data-section="home" aria-label="Return to PARMAR workspace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7M8 12h12" /></svg><span>Workspace</span></button></div>
             <section class="voki-interface-surface" data-voki-interface data-presence-state="unknown" aria-label="VOKKI interaction">
               <div class="voki-presence-stage" aria-hidden="true">
                 <div class="voki-presence" data-voki-presence data-presence-state="unknown" data-lifecycle-state="UNKNOWN">
@@ -363,6 +363,22 @@
                   <span id="development-auth-note" class="development-auth-note" hidden>Development only — NOT identity verification.</span>
                   <button class="new-session-btn" id="development-login-btn" type="button" hidden>Start Local Development Session</button>
                   <button class="new-session-btn" id="refresh-session-btn" type="button" hidden>Refresh session</button>
+                </div>
+                <div class="profile-control-row" id="profile-controls" role="group" aria-label="Conversation profile" hidden>
+                  <div class="profile-active-summary" aria-live="polite">
+                    <span>ACTIVE PROFILE</span>
+                    <strong id="active-profile-name">No profile selected</strong>
+                  </div>
+                  <label class="profile-select-label" for="profile-selector">Switch profile</label>
+                  <select id="profile-selector" aria-label="Switch active profile" disabled>
+                    <option value="">Select a profile</option>
+                  </select>
+                  <form class="profile-create-form" id="profile-create-form">
+                    <label class="sr-only" for="profile-name-input">New profile name</label>
+                    <input id="profile-name-input" type="text" maxlength="80" autocomplete="off" placeholder="New profile name" />
+                    <button class="new-session-btn" id="profile-create-button" type="submit">Create profile</button>
+                  </form>
+                  <p class="profile-status" id="profile-status" role="status" aria-live="polite"></p>
                 </div>
                 <p class="history-status" id="auth-status" role="status" aria-live="polite" hidden></p>
                 <div class="chat-thread" id="chat-thread" aria-live="polite" aria-relevant="additions"></div>
@@ -578,7 +594,7 @@
 
                 <section class="settings-panel" id="settings-panel-account" data-settings-panel="account" data-settings-group="account" data-settings-search-terms="account session logout sign out" hidden>
                   <div class="settings-panel-heading"><div><span class="settings-kicker">IDENTITY</span><h2>Account</h2><p>PARMAR currently starts in anonymous Local Demo mode. This build does not provide production account registration or identity verification.</p></div><span class="settings-status status-limited">LIMITED</span></div>
-                  <div class="settings-detail-card"><strong>Current session</strong><p id="settings-account-state" aria-live="polite">Checking the current server session.</p><p>Profile, billing, and server-backed personal preferences require a production trusted identity provider, which is not configured. The optional development session uses one shared, explicitly unverified identity and is not used to store per-person Settings.</p><button class="settings-workspace-link" type="button" data-section="chat">Open Chat session controls <span aria-hidden="true">↗</span></button></div>
+                  <div class="settings-detail-card"><strong>Current session</strong><p id="settings-account-state" aria-live="polite">Checking the current server session.</p><p>Conversation profiles are scoped to this server session. Billing and production identity verification require a trusted identity provider, which is not configured. The optional development session uses one shared, explicitly unverified identity.</p><button class="settings-workspace-link" type="button" data-section="chat">Open Chat session controls <span aria-hidden="true">↗</span></button></div>
                   <button class="settings-danger-button" id="settings-logout-btn" type="button" hidden>Logout</button>
                 </section>
 
@@ -719,6 +735,11 @@
         </main>
         <footer class="workspace-footer"><span>PARMAR</span><span>Safety review, never automatic authority.</span><span id="outcome-footer">Human-led</span></footer>
       </div>
+      <button class="voki-ecosystem-launcher" type="button" data-section="voki" data-voki-ecosystem-presence data-presence-state="unknown" aria-label="Open VOKKI workspace. PARMAR lifecycle: STATE UNAVAILABLE.">
+        <img src="/static/assets/voki/default-avatar.png" alt="" aria-hidden="true" />
+        <span class="voki-ecosystem-copy"><strong>VOKKI</strong><span>Open workspace</span></span>
+        <span class="voki-ecosystem-state" data-voki-ecosystem-state aria-live="polite">State unavailable</span>
+      </button>
       <nav class="mobile-bottom-nav" aria-label="Primary navigation">
         <button class="nav-item mobile-bottom-item" type="button" data-section="home" data-nav-key="home" aria-label="Home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4.5 11 7.5-6.5 7.5 6.5v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1Z" /><path d="M9.5 20v-6h5v6" /></svg><span>Home</span></button>
         <button class="nav-item mobile-bottom-item" type="button" data-section="chat" data-nav-key="chat" aria-label="Chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.75h14a1.25 1.25 0 0 1 1.25 1.25v8A1.25 1.25 0 0 1 19 16.25H10l-4.5 3v-3.1A1.25 1.25 0 0 1 4.25 15V7A1.25 1.25 0 0 1 5.5 5.75Z" /></svg><span>Chat</span></button>
