@@ -185,6 +185,35 @@ def test_authenticated_state_never_persists_chat_or_audit_history_to_local_stora
     assert "csrfToken" not in storage_keys
 
 
+def test_core_activity_list_has_its_own_render_target():
+    static_dir = Path(__file__).parents[1] / "interface" / "static"
+    html_source = (static_dir / "index.html").read_text(encoding="utf-8")
+    app_source = (static_dir / "app.js").read_text(encoding="utf-8")
+
+    assert len(re.findall(r'\bid="audit-list"', html_source)) == 1
+    assert len(re.findall(r'\bid="audit-list-core"', html_source)) == 1
+    assert "auditListCore: document.getElementById('audit-list-core')" in app_source
+    assert "if (dom.auditListCore) dom.auditListCore.innerHTML = markup" in app_source
+
+
+def test_phone_awareness_controls_fail_closed_outside_anonymous_demo():
+    app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
+    phone_controls = re.search(r"function renderPhoneAvailability\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    phone_status = re.search(r"function renderPhoneStatus\(\) \{(.*?)\n\}", app_source, re.DOTALL)
+    phone_toggle = re.search(r"async function togglePhonePermission\(enabled\) \{(.*?)\n\}", app_source, re.DOTALL)
+    phone_simulation = re.search(r"async function runPhoneSimulation\(mode\) \{(.*?)\n\}", app_source, re.DOTALL)
+
+    assert phone_controls and phone_status and phone_toggle and phone_simulation
+    assert "const available = anonymousDemo && state.phoneStatusAvailable" in phone_controls.group(1)
+    assert "control.disabled = !available || state.phoneRequestInProgress" in phone_controls.group(1)
+    assert "Unavailable in authenticated sessions" in phone_controls.group(1)
+    assert "if (state.authMode !== 'anonymous')" in phone_status.group(1)
+    assert "if (!response.ok)" in phone_toggle.group(1)
+    assert "Permission could not be updated or verified" in phone_toggle.group(1)
+    assert "state.authMode !== 'anonymous' || !state.phoneStatusAvailable" in phone_toggle.group(1)
+    assert "state.authMode !== 'anonymous' || !state.phoneStatusAvailable" in phone_simulation.group(1)
+
+
 def test_session_expiry_logout_and_cross_tab_notifications_clear_authenticated_state():
     app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
     clear = re.search(r"function clearAuthenticatedState\([^)]*\) \{(.*?)\n\}", app_source, re.DOTALL)
@@ -210,12 +239,26 @@ def test_authenticated_posts_use_csrf_and_server_history_is_not_faked_in_sidebar
     assert "state.csrfToken" in api_request.group(1)
     assert "headers['X-CSRF-Token']" in api_request.group(1)
     assert "authenticated" in api_request.group(1)
-    assert "[401, 403, 404].includes(response.status)" in api_request.group(1)
+    assert "response.status === 401" in api_request.group(1)
     assert "No conversations yet." in app_source
     assert re.search(r"async function refreshServerConversationHistory\([^)]*\)", app_source)
     assert re.search(r"async function selectServerConversation\([^)]*\)", app_source)
     assert "apiRequest('/api/conversations'" in app_source
     assert "apiRequest(`/api/conversations/${encodeURIComponent(conversationId)}`" in app_source
+
+
+def test_api_request_refreshes_only_for_unauthorized_sessions():
+    app_source = (Path(__file__).parents[1] / "interface" / "static" / "app.js").read_text(encoding="utf-8")
+    api_request = re.search(r"function apiRequest\(path, options = \{\}\) \{(.*?)\n\}", app_source, re.DOTALL)
+    assert api_request is not None
+    request_source = api_request.group(1)
+
+    assert re.search(
+        r"if \(!skipAuthenticationRefresh && state\.authMode === 'authenticated' && response\.status === 401\)\s*\{\s*await refreshAuthenticationState\(",
+        request_source,
+    )
+    assert "response.status === 403" not in request_source
+    assert "response.status === 404" not in request_source
 
 
 def test_voki_and_chat_share_server_selected_conversation_without_history_replay():

@@ -6,6 +6,17 @@ from typing import Any
 from uuid import uuid4
 
 from PARMAR.audit.decision_logs import DecisionLogManager
+from PARMAR.identity_contracts import (
+    ActionApprovalBinding,
+    AuthenticatedPrincipal,
+    AuthorizationContext,
+    AuthorizationReason,
+    ResourceAction,
+    ResourceDescriptor,
+    ResourcePermission,
+    ResourceScope,
+    authorize_resource_action,
+)
 
 
 class EnforcementState:
@@ -26,15 +37,100 @@ class ActionBoundary:
     def __init__(self):
         self.started = True
 
-    def can_execute(self, enforcement_result: dict[str, Any]) -> bool:
-        return bool(enforcement_result.get("execution_allowed", False))
+    def can_execute(self, enforcement_result: object) -> bool:
+        return (
+            isinstance(enforcement_result, dict)
+            and enforcement_result.get("execution_allowed") is True
+        )
 
-    def evaluate(self, enforcement_result: dict[str, Any]) -> dict[str, Any]:
+    def evaluate(self, enforcement_result: object) -> dict[str, Any]:
+        if not isinstance(enforcement_result, dict):
+            return {
+                "execution_allowed": False,
+                "status": "ACTION_BOUNDARY_DENIED",
+                "decision_id": None,
+                "reason": "The enforcement result is invalid.",
+            }
         return {
             "execution_allowed": self.can_execute(enforcement_result),
             "status": "ACTION_BOUNDARY_OK" if self.can_execute(enforcement_result) else "ACTION_BOUNDARY_DENIED",
             "decision_id": enforcement_result.get("decision_id"),
             "reason": enforcement_result.get("reason"),
+        }
+
+    def evaluate_authorized_action(
+        self,
+        enforcement_result: object,
+        authorization_context: object,
+        resource: object,
+        action: object,
+        permission_scope: object,
+        *,
+        approved_binding: object,
+        expected_binding: object,
+    ) -> dict[str, Any]:
+        denial_reason = "ENFORCEMENT_DENIED"
+        allowed = False
+        decision_id = None
+        authorization = authorize_resource_action(
+            authorization_context,
+            resource,
+            action,
+            permission_scope,
+        )
+        if isinstance(enforcement_result, dict):
+            decision_id = enforcement_result.get("decision_id")
+            approval_required = enforcement_result.get("human_approval_required")
+            enforcement_ready = (
+                enforcement_result.get("status") == EnforcementState.READY_FOR_ACTION
+                and enforcement_result.get("execution_allowed") is True
+                and type(approval_required) is bool
+                and isinstance(enforcement_result.get("decision_id"), str)
+                and bool(enforcement_result["decision_id"])
+            )
+            authorization_ready = (
+                type(authorization.allowed) is bool
+                and authorization.allowed is True
+                and type(authorization.reason) is AuthorizationReason
+            )
+            binding_scope_matches = (
+                type(authorization_context) is AuthorizationContext
+                and type(authorization_context.principal) is AuthenticatedPrincipal
+                and type(resource) is ResourceDescriptor
+                and type(resource.scope) is ResourceScope
+                and type(action) is ResourceAction
+                and type(permission_scope) is ResourcePermission
+                and type(expected_binding) is ActionApprovalBinding
+                and expected_binding.actor_id == authorization_context.principal.account_identity.value
+                and expected_binding.action == action.value
+                and expected_binding.resource_id == str(resource.resource_id)
+                and expected_binding.resource_scope == resource.scope.value
+                and expected_binding.permission_scope == permission_scope.value
+            )
+            if not enforcement_ready:
+                denial_reason = "ENFORCEMENT_DENIED"
+            elif not authorization_ready:
+                denial_reason = "AUTHORIZATION_DENIED"
+            elif approval_required and (
+                type(approved_binding) is not ActionApprovalBinding
+                or type(expected_binding) is not ActionApprovalBinding
+                or approved_binding != expected_binding
+                or not binding_scope_matches
+            ):
+                denial_reason = "APPROVAL_INVALID"
+            elif not approval_required and (
+                approved_binding is not None or expected_binding is not None
+            ):
+                denial_reason = "UNEXPECTED_APPROVAL"
+            else:
+                allowed = True
+                denial_reason = ""
+        return {
+            "execution_allowed": allowed,
+            "status": "ACTION_BOUNDARY_OK" if allowed else "ACTION_BOUNDARY_DENIED",
+            "decision_id": decision_id,
+            "reason_code": denial_reason or None,
+            "authorization_reason": authorization.reason.value,
         }
 
 

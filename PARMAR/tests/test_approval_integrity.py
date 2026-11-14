@@ -1,5 +1,6 @@
 import io
 import json
+import sqlite3
 from copy import deepcopy
 from dataclasses import replace
 from hashlib import sha256
@@ -16,8 +17,9 @@ from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.service import ChatService
 from PARMAR.conversations import InMemoryConversationRepository
 from PARMAR.identity import LocalDemoPrincipalResolver
+from PARMAR.identity_store import IdentityStorageUnavailable, SQLiteIdentityRepository
 from PARMAR.interface import futuristic_app
-from PARMAR.interface.approvals import PendingApprovalStore
+from PARMAR.interface.approvals import PendingApprovalStore, approval_binding_for_pending
 from PARMAR.interface.dashboard import TerminalDashboard
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
 from PARMAR.research.service import SearchService
@@ -32,11 +34,12 @@ from PARMAR.sessions import (
 _DEFAULT_SESSION = object()
 _TEST_SESSION = None
 _TEST_SESSION_MANAGER = None
+_TEST_IDENTITY_REPOSITORY = None
 
 
 @pytest.fixture(autouse=True)
 def isolate_audit_log(monkeypatch, tmp_path):
-    global _TEST_SESSION, _TEST_SESSION_MANAGER
+    global _TEST_SESSION, _TEST_SESSION_MANAGER, _TEST_IDENTITY_REPOSITORY
     original_init = DecisionLogManager.__init__
 
     def isolated_init(self, log_path=None):
@@ -49,8 +52,17 @@ def isolate_audit_log(monkeypatch, tmp_path):
         SessionPolicy(idle_timeout_seconds=600, absolute_timeout_seconds=1800),
     )
     _TEST_SESSION = manager.create_authenticated_session(uuid4(), "approval-test")
+    identity_repository = SQLiteIdentityRepository(tmp_path / "approval-identity.sqlite3")
+    profile = identity_repository.create_profile(_TEST_SESSION.session.user_id, "Approval test")
+    manager.select_profile(
+        _TEST_SESSION.session.session_id,
+        _TEST_SESSION.session.user_id,
+        profile.profile_id,
+    )
+    _TEST_IDENTITY_REPOSITORY = identity_repository
     _TEST_SESSION_MANAGER = manager
     monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
+    monkeypatch.setattr(futuristic_app, "IDENTITY_REPOSITORY", identity_repository)
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
 
 
@@ -89,6 +101,105 @@ def create_pending_review(request="Purchase a $500 software license"):
     assert response["result"]["status"] == "APPROVAL_REQUIRED"
     assert response["result"]["approval_id"]
     return response["result"]
+
+
+def test_authenticated_session_uses_a_legitimately_selected_owned_profile():
+    selected = _TEST_SESSION_MANAGER.resolve(_TEST_SESSION.session_token)
+    assert selected is not None
+    assert selected.active_profile_id is not None
+    assert _TEST_IDENTITY_REPOSITORY.get_owned_profile(
+        selected.user_id,
+        selected.active_profile_id,
+    ) is not None
+
+    pending = _start_chat_approval()
+    record = futuristic_app.PENDING_APPROVALS.inspect(
+        pending["approval_id"],
+        user_id=selected.user_id,
+        session_id=selected.session_id,
+    )
+    assert record is not None
+    assert record.execution_context["profile_id"] == str(selected.active_profile_id)
+
+
+def test_missing_active_profile_cannot_create_or_redeem_approval():
+    session = _TEST_SESSION_MANAGER.create_authenticated_session(uuid4(), "approval-test")
+
+    creation = post("/api/analyze", {"request": "Purchase a $500 software license"}, session=session)
+    assert creation["status"] == 409
+    assert creation["result"]["message"] == "An active profile is required"
+
+    pending = create_pending_review()
+    selected = _TEST_SESSION_MANAGER.resolve(_TEST_SESSION.session_token)
+    assert selected is not None
+    _TEST_SESSION_MANAGER.repository._sessions[selected.session_id] = replace(
+        selected,
+        active_profile_id=None,
+    )
+    blocked = post(
+        "/api/approval",
+        {"approval_id": pending["approval_id"], "decision": "APPROVE"},
+    )
+    assert blocked["status"] == 409
+    assert blocked["result"]["message"] == "An active profile is required"
+    still_pending = futuristic_app.PENDING_APPROVALS.inspect(
+        pending["approval_id"],
+        user_id=_TEST_SESSION.session.user_id,
+        session_id=_TEST_SESSION.session.session_id,
+    )
+    assert still_pending is not None
+
+
+def test_deleted_active_profile_blocks_approval_without_consuming_record():
+    pending = create_pending_review()
+    selected = _TEST_SESSION_MANAGER.resolve(_TEST_SESSION.session_token)
+    assert selected is not None and selected.active_profile_id is not None
+    with sqlite3.connect(_TEST_IDENTITY_REPOSITORY.database_path) as connection:
+        connection.execute(
+            "DELETE FROM profiles WHERE profile_id = ?",
+            (str(selected.active_profile_id),),
+        )
+
+    blocked = post(
+        "/api/approval",
+        {"approval_id": pending["approval_id"], "decision": "APPROVE"},
+    )
+    assert blocked["status"] == 409
+    assert blocked["result"]["message"] == "An active profile is required"
+    assert futuristic_app.PENDING_APPROVALS.inspect(
+        pending["approval_id"],
+        user_id=selected.user_id,
+        session_id=selected.session_id,
+    ) is not None
+
+
+def test_foreign_active_profile_cannot_create_chat_approval():
+    foreign_user = uuid4()
+    foreign_profile = _TEST_IDENTITY_REPOSITORY.create_profile(foreign_user, "Foreign")
+    selected = _TEST_SESSION_MANAGER.select_profile(
+        _TEST_SESSION.session.session_id,
+        _TEST_SESSION.session.user_id,
+        foreign_profile.profile_id,
+    )
+    assert selected is not None
+
+    response = post("/api/chat", {"message": "Purchase a $500 software license"})
+    assert response["status"] == 409
+    assert response["result"]["message"] == "An active profile is required"
+    assert futuristic_app.PENDING_APPROVALS._pending == {}
+
+
+def test_unavailable_identity_storage_blocks_profile_dependent_approval(monkeypatch):
+    class UnavailableIdentityRepository:
+        def get_owned_profile(self, _user_id, _profile_id):
+            raise IdentityStorageUnavailable("Identity storage is unavailable.")
+
+    monkeypatch.setattr(futuristic_app, "IDENTITY_REPOSITORY", UnavailableIdentityRepository())
+
+    response = post("/api/chat", {"message": "Purchase a $500 software license"})
+    assert response["status"] == 503
+    assert response["result"]["message"] == "Identity storage is unavailable"
+    assert futuristic_app.PENDING_APPROVALS._pending == {}
 
 
 def test_approval_is_bound_to_original_request_and_consumed_once():
@@ -162,9 +273,12 @@ def test_approved_research_continues_from_the_server_record_through_search_and_r
     conversation_repository = InMemoryConversationRepository()
     monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", conversation_repository)
     monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", conversation_repository)
+    active_profile = _TEST_SESSION_MANAGER.resolve(_TEST_SESSION.session_token)
+    assert active_profile is not None and active_profile.active_profile_id is not None
     conversation = conversation_repository.create_for_message(
         _TEST_SESSION.session.user_id,
         request_text,
+        active_profile.active_profile_id,
     )
 
     class Search:
@@ -399,6 +513,15 @@ def test_development_auth_browser_path_runs_chat_through_human_approval(monkeypa
         session=_TEST_SESSION_MANAGER.resolve(token),
     )
     assert development_session.session.user_id == futuristic_app.DEVELOPMENT_AUTH_USER_ID
+    development_profile = _TEST_IDENTITY_REPOSITORY.create_profile(
+        development_session.session.user_id,
+        "Development approval",
+    )
+    development_session.session = _TEST_SESSION_MANAGER.select_profile(
+        development_session.session.session_id,
+        development_session.session.user_id,
+        development_profile.profile_id,
+    )
 
     message = "Purchase a $500 software license"
     pending = post("/api/chat", {"message": message}, session=development_session)
@@ -703,6 +826,11 @@ def test_missing_and_expired_approval_ids_are_denied():
         user_id=_TEST_SESSION.session.user_id,
         session_id=_TEST_SESSION.session.session_id,
         decision_id="request-decision",
+        approval_binding=approval_binding_for_pending(
+            _TEST_SESSION.session.user_id,
+            "request-decision",
+            None,
+        ),
         now=0,
     )
     monkeypatch_store = futuristic_app.PENDING_APPROVALS
@@ -714,6 +842,11 @@ def test_missing_and_expired_approval_ids_are_denied():
         user_id=_TEST_SESSION.session.user_id,
         session_id=_TEST_SESSION.session.session_id,
         decision_id="expired-decision",
+        approval_binding=approval_binding_for_pending(
+            _TEST_SESSION.session.user_id,
+            "expired-decision",
+            None,
+        ),
         now=0,
     )
     assert store.consume(
@@ -753,6 +886,11 @@ def test_pending_approval_applies_to_stored_review_not_new_text():
         user_id=_TEST_SESSION.session.user_id,
         session_id=_TEST_SESSION.session.session_id,
         decision_id=summary["enforcement"]["decision_id"],
+        approval_binding=approval_binding_for_pending(
+            _TEST_SESSION.session.user_id,
+            summary["enforcement"]["decision_id"],
+            None,
+        ),
     )
     record = futuristic_app.PENDING_APPROVALS.inspect(
         pending,
@@ -817,6 +955,28 @@ def test_revoked_session_cannot_redeem_its_pending_approval():
     assert response["status"] == 403
 
 
+def test_expired_session_cannot_redeem_its_pending_approval():
+    pending = create_pending_review()
+    session = _TEST_SESSION_MANAGER.resolve(_TEST_SESSION.session_token)
+    assert session is not None
+    assert _TEST_SESSION_MANAGER.resolve(
+        _TEST_SESSION.session_token,
+        now=session.idle_expires_at,
+    ) is None
+
+    response = post("/api/approval", {
+        "approval_id": pending["approval_id"],
+        "decision": "APPROVE",
+    })
+
+    assert response["status"] == 403
+    assert futuristic_app.PENDING_APPROVALS.inspect(
+        pending["approval_id"],
+        user_id=session.user_id,
+        session_id=session.session_id,
+    ) is not None
+
+
 def test_unbound_legacy_approval_is_not_inspectable_or_consumable():
     pending = create_pending_review()
     token = pending["approval_id"]
@@ -847,12 +1007,21 @@ def test_concurrent_approval_consumption_succeeds_only_once():
 
     pending = create_pending_review()
     token = pending["approval_id"]
+    record = futuristic_app.PENDING_APPROVALS.inspect(
+        token,
+        user_id=_TEST_SESSION.session.user_id,
+        session_id=_TEST_SESSION.session.session_id,
+    )
+    assert record is not None
+    assert record.approval_binding is not None
 
     def consume():
         return futuristic_app.PENDING_APPROVALS.consume(
             token,
             user_id=_TEST_SESSION.session.user_id,
             session_id=_TEST_SESSION.session.session_id,
+            decision="APPROVE",
+            approval_binding=record.approval_binding,
         )
 
     with ThreadPoolExecutor(max_workers=8) as executor:

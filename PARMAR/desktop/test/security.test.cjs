@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const {
   MAX_ADDRESS_LENGTH,
   REMOTE_BROWSING_ENABLED,
@@ -19,6 +22,33 @@ test('AETHER remote navigation remains disabled without verified OS enforcement'
     allowed: false,
     reason: 'Remote browsing is disabled because this installation has no verified operating-system network boundary.',
   });
+});
+
+test('AETHER browser content has no PARMAR identity API and remote navigation stays denied', () => {
+  const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'browser-preload.cjs'), 'utf8');
+  const exposed = {};
+  const context = {
+    require(moduleName) {
+      assert.equal(moduleName, 'electron');
+      return {
+        contextBridge: {
+          exposeInMainWorld(name, api) {
+            exposed[name] = api;
+          },
+        },
+        ipcRenderer: { invoke: async (channel) => ({ channel }) },
+      };
+    },
+  };
+
+  vm.runInNewContext(preloadSource, context);
+
+  assert.ok(exposed.aetherDesktop);
+  assert.equal(
+    Object.keys(exposed.aetherDesktop).some((name) => /account|identity|auth|token|session/i.test(name)),
+    false,
+  );
+  assert.equal(navigationPolicy('https://example.com/').allowed, false);
 });
 
 test('address input distinguishes HTTPS destinations from search text', () => {

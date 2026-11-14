@@ -13,17 +13,20 @@ from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.service import ChatService
 from PARMAR.conversations import InMemoryConversationRepository
 from PARMAR.identity import LocalDemoPrincipalResolver
+from PARMAR.identity_store import SQLiteIdentityRepository
 from PARMAR.interface import futuristic_app
 from PARMAR.memories import SQLiteMemoryRepository
 from PARMAR.interface.approvals import (
     ApprovalStorageUnavailable,
     SQLitePendingApprovalStore,
     UnavailablePendingApprovalStore,
+    approval_binding_for_pending,
 )
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
 from PARMAR.sessions import (
     InMemorySessionRepository,
     SESSION_COOKIE_NAME,
+    SessionCredentials,
     SessionManager,
     SessionPolicy,
 )
@@ -39,9 +42,19 @@ def approval_environment(monkeypatch, tmp_path):
         SessionPolicy(idle_timeout_seconds=600, absolute_timeout_seconds=1800),
     )
     credentials = manager.create_authenticated_session(uuid4(), "approval-persistence-test")
+    identity_repository = SQLiteIdentityRepository(tmp_path / "identity.sqlite3")
+    profile = identity_repository.create_profile(credentials.session.user_id, "Approval persistence")
+    selected = manager.select_profile(
+        credentials.session.session_id,
+        credentials.session.user_id,
+        profile.profile_id,
+    )
+    assert selected is not None
+    credentials = SessionCredentials(selected, credentials.session_token)
     conversations = InMemoryConversationRepository()
     monkeypatch.setattr(futuristic_app, "PENDING_APPROVALS", store)
     monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
+    monkeypatch.setattr(futuristic_app, "IDENTITY_REPOSITORY", identity_repository)
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())
     monkeypatch.setattr(futuristic_app, "CONVERSATION_REPOSITORY", conversations)
     monkeypatch.setattr(futuristic_app, "MESSAGE_REPOSITORY", conversations)
@@ -91,6 +104,11 @@ def test_pending_approval_survives_store_restart_and_continues(approval_environm
     assert restored is not None
     assert restored.request_text == "Purchase a $500 software license"
     assert restored.summary["enforcement"]["status"] == "HUMAN_APPROVAL_REQUIRED"
+    assert restored.approval_binding == approval_binding_for_pending(
+        credentials.session.user_id,
+        restored.decision_id,
+        restored.execution_context,
+    )
 
     result = post(
         "/api/approval",
@@ -101,6 +119,13 @@ def test_pending_approval_survives_store_restart_and_continues(approval_environm
     assert result["status"] == 200
     assert result["result"]["status"] == "APPROVED"
     assert result["result"]["enforcement"]["execution_allowed"] is True
+    replay = post(
+        "/api/approval",
+        {"approval_id": token, "decision": "APPROVE"},
+        manager,
+        credentials,
+    )
+    assert replay["status"] == 410
 
 
 def test_chat_approval_context_rehydrates_and_provider_runs_after_restart(
@@ -137,6 +162,13 @@ def test_chat_approval_context_rehydrates_and_provider_runs_after_restart(
         "PENDING_APPROVALS",
         SQLitePendingApprovalStore(database, key),
     )
+    restored = futuristic_app.PENDING_APPROVALS.inspect(
+        token,
+        user_id=credentials.session.user_id,
+        session_id=credentials.session.session_id,
+    )
+    assert restored is not None
+    assert restored.execution_context["profile_id"] == str(credentials.session.active_profile_id)
     result = post(
         "/api/approval",
         {"approval_id": token, "decision": "APPROVE"},
@@ -232,6 +264,11 @@ def _create_direct(store, *, ttl=300):
         user_id=user_id,
         session_id=session_id,
         decision_id=summary["enforcement"]["decision_id"],
+        approval_binding=approval_binding_for_pending(
+            user_id,
+            summary["enforcement"]["decision_id"],
+            None,
+        ),
     )
     return token, user_id, session_id
 
@@ -242,9 +279,16 @@ def test_consumed_and_rejected_approvals_remain_terminal_after_restart(tmp_path)
     store = SQLitePendingApprovalStore(database, key)
     consumed_token, user_id, session_id = _create_direct(store)
     rejected_token, rejected_user_id, rejected_session_id = _create_direct(store)
+    consumed = store.inspect(consumed_token, user_id=user_id, session_id=session_id)
+    assert consumed is not None
+    assert consumed.approval_binding is not None
 
     assert store.consume(
-        consumed_token, user_id=user_id, session_id=session_id, decision="APPROVE",
+        consumed_token,
+        user_id=user_id,
+        session_id=session_id,
+        decision="APPROVE",
+        approval_binding=consumed.approval_binding,
     )[1] == "OK"
     rejected = store.inspect(
         rejected_token,
@@ -252,11 +296,13 @@ def test_consumed_and_rejected_approvals_remain_terminal_after_restart(tmp_path)
         session_id=rejected_session_id,
     )
     assert rejected is not None
+    assert rejected.approval_binding is not None
     assert store.consume(
         rejected_token,
         user_id=rejected.user_id,
         session_id=rejected.session_id,
         decision="REJECT",
+        approval_binding=rejected.approval_binding,
     )[1] == "OK"
 
     restarted = SQLitePendingApprovalStore(database, key)

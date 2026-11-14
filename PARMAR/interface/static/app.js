@@ -288,6 +288,7 @@ const dom = {
   approvalStateTag: document.getElementById('approval-state-tag'),
   approvalActions: document.querySelector('.approval-actions'),
   auditList: document.getElementById('audit-list'),
+  auditListCore: document.getElementById('audit-list-core'),
   auditListSecondary: document.getElementById('audit-list-secondary'),
   phoneBox: document.getElementById('phone-box'),
   parmarCore: document.getElementById('parmar-core'),
@@ -436,6 +437,8 @@ const state = {
   historyQuery: '',
   conversationId: null,
   authMode: 'checking',
+  phoneStatusAvailable: false,
+  phoneRequestInProgress: false,
   authenticationState: 'LOCAL_DEMO',
   developmentAuthAvailable: false,
   csrfToken: null,
@@ -768,7 +771,52 @@ function renderAuthenticationControls() {
     dom.settingsLogoutBtn.disabled = Boolean(state.logoutInProgress);
   }
   if (dom.refreshSessionBtn) dom.refreshSessionBtn.hidden = !authenticated;
+  renderPhoneStatus();
   renderProfileControls();
+}
+
+function renderPhoneAvailability() {
+  const anonymousDemo = state.authMode === 'anonymous';
+  const available = anonymousDemo && state.phoneStatusAvailable;
+  const statusText = state.authMode === 'authenticated'
+    ? 'Unavailable'
+    : state.authMode === 'checking'
+      ? 'Checking session'
+      : available
+        ? (state.settings.phonePermission ? 'Enabled' : 'Permission-gated')
+        : 'Unavailable';
+
+  [dom.phonePermissionToggle, dom.settingsPhoneToggle, dom.simulatePhoneSafe, dom.simulatePhoneRisk]
+    .filter(Boolean)
+    .forEach((control) => {
+      control.disabled = !available || state.phoneRequestInProgress;
+    });
+  if (!available) {
+    if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = false;
+    if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = false;
+  }
+  if (dom.phoneStatusLabel) dom.phoneStatusLabel.textContent = statusText;
+  if (dom.phonePolicyLabel) {
+    dom.phonePolicyLabel.textContent = state.authMode === 'authenticated'
+      ? 'Available only in Anonymous Local Demo. No real device access is used.'
+      : state.authMode === 'checking'
+        ? 'Confirming session and simulation availability.'
+        : available
+          ? (state.settings.phonePermission
+            ? 'Only simulated, privacy-safe events are allowed.'
+            : 'Blocked until permission is granted.')
+          : 'Simulation status is unavailable. Controls remain disabled.';
+  }
+  if (!available) {
+    renderPhoneCards(dom.phoneBox, [[
+      'Phone awareness',
+      state.authMode === 'authenticated'
+        ? 'Unavailable in authenticated sessions; only Anonymous Local Demo supports simulated events.'
+        : state.authMode === 'checking'
+          ? 'Checking session and simulation availability.'
+          : 'Simulation status could not be verified. Reload the page to retry.',
+    ]]);
+  }
 }
 
 function renderProfileControls() {
@@ -3576,6 +3624,7 @@ function renderAuditEntries() {
   }).join('');
 
   if (dom.auditList) dom.auditList.innerHTML = markup || '<div class="audit-item"><strong>NO RECORDS</strong><span>No governance activity captured yet.</span></div>';
+  if (dom.auditListCore) dom.auditListCore.innerHTML = markup || '<div class="audit-item"><strong>NO RECORDS</strong><span>No governance activity captured yet.</span></div>';
   if (dom.auditListSecondary) dom.auditListSecondary.innerHTML = markup || '<div class="audit-item"><strong>NO RECORDS</strong><span>No governance activity captured yet.</span></div>';
   renderHome();
 }
@@ -3724,26 +3773,49 @@ function renderPhoneCards(container, rows) {
 }
 
 function renderPhoneStatus() {
-  fetch('/api/phone')
-    .then((response) => response.json())
+  if (state.authMode !== 'anonymous') {
+    state.phoneStatusAvailable = false;
+    renderPhoneAvailability();
+    return;
+  }
+  state.phoneStatusAvailable = false;
+  renderPhoneAvailability();
+  const authEpoch = state.authEpoch;
+  fetch('/api/phone', { cache: 'no-store' })
+    .then((response) => {
+      if (!response.ok) throw new Error('Phone simulation status is unavailable');
+      return response.json();
+    })
     .then((status) => {
-      if (!status || typeof status !== 'object' || Array.isArray(status)) throw new TypeError('Invalid phone status response');
-      const enabled = Boolean(status.enabled);
+      if (
+        state.authMode !== 'anonymous'
+        || state.authEpoch !== authEpoch
+      ) return;
+      if (
+        !status
+        || typeof status !== 'object'
+        || Array.isArray(status)
+        || typeof status.enabled !== 'boolean'
+      ) throw new TypeError('Invalid phone status response');
+      state.settings.phonePermission = status.enabled;
+      state.phoneStatusAvailable = true;
       renderPhoneCards(dom.phoneBox, [
         ['Permission', status.permission],
         ['Current event', status.current_event],
         ['Policy', status.policy_decision],
         ['Note', status.message],
       ]);
-      if (dom.phoneStatusLabel) dom.phoneStatusLabel.textContent = enabled ? 'Enabled' : 'Permission-gated';
-      if (dom.phonePolicyLabel) dom.phonePolicyLabel.textContent = enabled ? 'Only simulated, privacy-safe events are allowed' : 'Blocked until permission is granted';
-      if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = enabled;
-      if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = enabled;
-      state.settings.phonePermission = enabled;
-      persistSettings();
+      if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = status.enabled;
+      if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = status.enabled;
+      if (dom.phoneStatusLabel) dom.phoneStatusLabel.textContent = status.enabled ? 'Enabled' : 'Permission-gated';
+      if (dom.phonePolicyLabel) dom.phonePolicyLabel.textContent = status.enabled ? 'Only simulated, privacy-safe events are allowed' : 'Blocked until permission is granted';
+      renderPhoneAvailability();
     })
     .catch(() => {
-      if (dom.phoneBox) dom.phoneBox.innerHTML = '<div class="phone-card"><strong>Phone awareness:</strong> offline</div>';
+      if (state.authMode !== 'anonymous' || state.authEpoch !== authEpoch) return;
+      state.phoneStatusAvailable = false;
+      renderPhoneAvailability();
+      renderPhoneCards(dom.phoneBox, [['Phone awareness', 'Could not verify simulation status. Controls remain disabled.']]);
     });
 }
 
@@ -4186,31 +4258,49 @@ async function evaluateScenario(select) {
 }
 
 async function togglePhonePermission(enabled) {
-  state.settings.phonePermission = enabled;
-  persistSettings();
+  if (state.authMode !== 'anonymous' || !state.phoneStatusAvailable || state.phoneRequestInProgress) return;
+  state.phoneRequestInProgress = true;
+  renderPhoneAvailability();
+  let phoneStatus = null;
   try {
     const response = await apiRequest('/api/phone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'toggle_permission', enabled }),
     });
+    if (!response.ok) throw new Error('Phone permission update was rejected');
     const result = await response.json();
-    if (dom.phoneBox) {
-      dom.phoneBox.innerHTML = `
-        <div class="phone-card"><strong>Permission:</strong> ${result.status.permission}</div>
-        <div class="phone-card"><strong>Current event:</strong> ${result.status.current_event}</div>
-        <div class="phone-card"><strong>Policy:</strong> ${result.status.policy_decision}</div>
-        <div class="phone-card"><strong>Note:</strong> ${result.status.message}</div>
-      `;
+    if (!result?.status || typeof result.status.enabled !== 'boolean') {
+      throw new TypeError('Invalid phone permission response');
     }
-    if (dom.phoneStatusLabel) dom.phoneStatusLabel.textContent = enabled ? 'Enabled' : 'Permission-gated';
-    if (dom.phonePolicyLabel) dom.phonePolicyLabel.textContent = enabled ? 'Only simulated, privacy-safe events are allowed' : 'Blocked until permission is granted';
-  } catch (_error) {
-    console.error(_error);
+    phoneStatus = result.status;
+  } catch {
+    state.phoneStatusAvailable = false;
+    renderPhoneCards(dom.phoneBox, [['Phone awareness', 'Permission could not be updated or verified. Controls remain disabled.']]);
+  } finally {
+    state.phoneRequestInProgress = false;
   }
+  if (!phoneStatus) {
+    renderPhoneAvailability();
+    return;
+  }
+  state.settings.phonePermission = phoneStatus.enabled;
+  persistSettings();
+  renderPhoneCards(dom.phoneBox, [
+    ['Permission', phoneStatus.permission],
+    ['Current event', phoneStatus.current_event],
+    ['Policy', phoneStatus.policy_decision],
+    ['Note', phoneStatus.message],
+  ]);
+  if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = phoneStatus.enabled;
+  if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = phoneStatus.enabled;
+  if (dom.phoneStatusLabel) dom.phoneStatusLabel.textContent = phoneStatus.enabled ? 'Enabled' : 'Permission-gated';
+  if (dom.phonePolicyLabel) dom.phonePolicyLabel.textContent = phoneStatus.enabled ? 'Only simulated, privacy-safe events are allowed' : 'Blocked until permission is granted';
+  renderPhoneAvailability();
 }
 
 async function runPhoneSimulation(mode) {
+  if (state.authMode !== 'anonymous' || !state.phoneStatusAvailable) return;
   const payload = mode === 'risk'
     ? { event_type: 'read_private_messages', source: 'simulated', permission_required: true, permission_granted: true, requested_data: ['messages', 'photos', 'contacts'] }
     : { event_type: 'battery_low', source: 'simulated', permission_required: false, permission_granted: true, requested_data: ['battery_level'] };

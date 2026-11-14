@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import socket
 import ssl
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,6 +49,7 @@ from PARMAR.interface.approvals import (
     ApprovalStorageUnavailable,
     PendingApprovalStore,
     UnavailablePendingApprovalStore,
+    approval_binding_for_pending,
     pending_approval_store_from_environment,
 )
 from PARMAR.interface.voki_contract import attach_voki_contract
@@ -86,6 +88,10 @@ CONVERSATION_REPOSITORY: ConversationRepository = _PERSISTENT_CONVERSATIONS
 MESSAGE_REPOSITORY: MessageRepository = _PERSISTENT_CONVERSATIONS
 MEMORY_REPOSITORY: MemoryRepository = SQLiteMemoryRepository.from_environment()
 IDENTITY_REPOSITORY = SQLiteIdentityRepository.from_environment()
+
+
+class _IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
 
 
 def _validate_development_auth_configuration(
@@ -140,6 +146,153 @@ def _validate_development_auth_configuration(
     if isinstance(PENDING_APPROVALS, UnavailablePendingApprovalStore):
         raise ValueError("Development authentication requires configured persistent approval storage.")
     return origin
+
+
+def _is_loopback_listener(host: str) -> bool:
+    if host.casefold() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback
+
+
+def _load_server_tls_context(
+    certfile: str,
+    keyfile: str,
+    *,
+    required: bool,
+) -> ssl.SSLContext | None:
+    if bool(certfile) != bool(keyfile):
+        raise ValueError("Configure both PARMAR_UI_TLS_CERTFILE and PARMAR_UI_TLS_KEYFILE.")
+    if required and not certfile:
+        raise ValueError(
+            "Production and externally reachable listeners require a valid TLS certificate and private key."
+        )
+    if not certfile:
+        return None
+
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    try:
+        tls_context.load_cert_chain(certfile, keyfile)
+    except (OSError, ssl.SSLError, ValueError):
+        raise ValueError("Configured TLS certificate and private key could not be loaded.") from None
+    return tls_context
+
+
+def _validate_ui_origin_matches_listener(
+    origin: str | None,
+    host: str,
+    port: int,
+    *,
+    tls_enabled: bool,
+) -> None:
+    if origin is None:
+        return
+
+    parsed_origin = urlsplit(origin)
+    origin_host = parsed_origin.hostname or ""
+    origin_port = parsed_origin.port or (443 if parsed_origin.scheme == "https" else 80)
+    same_host = origin_host.casefold() == host.casefold() or (
+        _is_loopback_listener(origin_host) and _is_loopback_listener(host)
+    )
+    expected_scheme = "https" if tls_enabled else "http"
+    if not same_host or origin_port != port or parsed_origin.scheme != expected_scheme:
+        raise ValueError("PARMAR_UI_ORIGIN must match the configured listener host, scheme, and port.")
+
+
+def _validate_startup_configuration(
+    environ: dict[str, str] | None = None,
+) -> tuple[str, int, ssl.SSLContext | None]:
+    settings = os.environ if environ is None else environ
+    host = settings.get("PARMAR_UI_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = UI_PORT
+    environment = settings.get("PARMAR_ENVIRONMENT", "").strip().casefold()
+    development_auth = settings.get("PARMAR_DEVELOPMENT_AUTH_ENABLED", "false").strip().casefold()
+
+    if environment not in {"", "development", "test", "production", "prod"}:
+        raise ValueError(
+            "Unsupported PARMAR_ENVIRONMENT; use development, test, or production."
+        )
+    if environment in {"production", "prod"} and development_auth == "true":
+        raise ValueError(
+            "Production startup is disabled: development authentication is unverified "
+            "and is not production authentication."
+        )
+
+    development_auth_origin = _validate_development_auth_configuration(
+        settings,
+        host=host,
+        port=port,
+    )
+    production = environment in {"production", "prod"}
+    external_listener = not _is_loopback_listener(host)
+    certfile = settings.get("PARMAR_UI_TLS_CERTFILE", "").strip()
+    keyfile = settings.get("PARMAR_UI_TLS_KEYFILE", "").strip()
+    tls_context = _load_server_tls_context(
+        certfile,
+        keyfile,
+        required=production or external_listener or development_auth_origin is not None,
+    )
+
+    ui_origin = _configured_ui_origin(
+        settings,
+        host=host,
+        port=port,
+        scheme="https" if tls_context is not None else "http",
+    )
+
+    if ui_origin is not None and not _is_loopback_listener(urlsplit(ui_origin).hostname or ""):
+        raise ValueError(
+            "Externally reachable PARMAR_UI_ORIGIN is disabled until authentication, "
+            "trusted PARMAR Account ID resolution, and complete route authorization "
+            "are implemented and independently verified."
+        )
+    _validate_ui_origin_matches_listener(
+        ui_origin,
+        host,
+        port,
+        tls_enabled=tls_context is not None,
+    )
+    if external_listener:
+        raise ValueError(
+            "Externally reachable listener startup is disabled until authentication, "
+            "trusted PARMAR Account ID resolution, and complete route authorization "
+            "are implemented and independently verified."
+        )
+    if production:
+        raise ValueError(
+            "Production startup is disabled: production authentication, trusted PARMAR "
+            "Account ID resolution, and complete route authorization are not implemented. "
+            "Development authentication and Local Demo do not satisfy these requirements."
+        )
+    if development_auth_origin is not None and tls_context is None:
+        raise ValueError("Development authentication requires an HTTPS listener.")
+    return host, port, tls_context
+
+
+def _create_ui_server() -> tuple[ThreadingHTTPServer, str, str, int]:
+    host, port, tls_context = _validate_startup_configuration()
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    server_class = (
+        _IPv6ThreadingHTTPServer
+        if isinstance(address, ipaddress.IPv6Address)
+        else ThreadingHTTPServer
+    )
+    server = server_class((host, port), PARMARRequestHandler)
+    scheme = "http"
+    try:
+        if tls_context is not None:
+            server.socket = tls_context.wrap_socket(server.socket, server_side=True)
+            scheme = "https"
+    except (OSError, ssl.SSLError, ValueError):
+        server.server_close()
+        raise ValueError("The configured HTTPS listener could not be initialized.") from None
+    return server, scheme, host, port
 
 
 def _request_is_tls(request: object) -> bool:
@@ -284,6 +437,10 @@ def _create_pending_approval(
         )
         return False
 
+    if not _require_owned_active_profile(request, context):
+        request._approval_profile_unavailable = True
+        return False
+
     decision_id = summary.get("enforcement", {}).get("decision_id")
     if not isinstance(decision_id, str) or not decision_id:
         attach_voki_contract(
@@ -312,6 +469,11 @@ def _create_pending_approval(
             user_id=context.principal.user_id,
             session_id=context.session_id,
             decision_id=decision_id,
+            approval_binding=approval_binding_for_pending(
+                context.principal.user_id,
+                decision_id,
+                execution_context,
+            ),
             execution_context=execution_context,
         )
     except ApprovalStorageUnavailable:
@@ -329,6 +491,11 @@ def _create_pending_approval(
     return True
 
 _CLIENT_IDENTITY_FIELDS = frozenset({
+    "account",
+    "account_id",
+    "accountid",
+    "parmar_account_id",
+    "parmaraccountid",
     "user_id",
     "userid",
     "owner_id",
@@ -345,6 +512,8 @@ _CLIENT_IDENTITY_FIELDS = frozenset({
 })
 _CLIENT_IDENTITY_HEADERS = frozenset({
     "authorization",
+    "x-account",
+    "x-account-id",
     "x-authenticated-user",
     "x-authenticated-user-id",
     "x-authenticated-subject",
@@ -352,13 +521,16 @@ _CLIENT_IDENTITY_HEADERS = frozenset({
     "x-remote-user",
     "x-user",
     "x-owner",
+    "x-parmar-account-id",
     "x-session",
     "x-principal",
     "x-identity",
 })
 _CLIENT_IDENTITY_HEADER_PREFIXES = (
+    "x-account-id",
     "x-user-id",
     "x-owner-id",
+    "x-parmar-account-id",
     "x-session-id",
     "x-principal-id",
     "x-identity-",
@@ -542,6 +714,28 @@ def _conversation_storage_error(request: object) -> None:
 
 def _identity_storage_error(request: object) -> None:
     request.send_error(503, "Identity storage is unavailable")
+
+
+def _require_owned_active_profile(request: object, context: HTTPRequestContext) -> bool:
+    if (
+        not context.principal.authenticated
+        or context.principal.user_id is None
+        or context.active_profile_id is None
+    ):
+        request.send_error(409, "An active profile is required")
+        return False
+    try:
+        profile = IDENTITY_REPOSITORY.get_owned_profile(
+            context.principal.user_id,
+            context.active_profile_id,
+        )
+    except IdentityStorageUnavailable:
+        _identity_storage_error(request)
+        return False
+    if profile is None:
+        request.send_error(409, "An active profile is required")
+        return False
+    return True
 
 
 def _is_authoritatively_released(response: object) -> bool:
@@ -812,8 +1006,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             ):
                 self.send_error(401, "An authenticated session is required")
                 return
-            if context.active_profile_id is None:
-                self.send_error(409, "An active profile is required")
+            if not _require_owned_active_profile(self, context):
                 return
             try:
                 conversations = CONVERSATION_REPOSITORY.list_owned(
@@ -839,8 +1032,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             ):
                 self.send_error(401, "An authenticated session is required")
                 return
-            if context.active_profile_id is None:
-                self.send_error(409, "An active profile is required")
+            if not _require_owned_active_profile(self, context):
                 return
             conversation_id_value = parsed.path.removeprefix("/api/conversations/")
             try:
@@ -1325,7 +1517,10 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                     summary,
                     source="PARMARRequestHandler./api/analyze",
                 )
-                if getattr(self, "_approval_storage_unavailable", False):
+                if (
+                    getattr(self, "_approval_storage_unavailable", False)
+                    or getattr(self, "_approval_profile_unavailable", False)
+                ):
                     return
             self._send_json(200, result)
             return
@@ -1423,12 +1618,33 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                     "message": "The pending approval is missing, expired, or already used.",
                 })
                 return
+            try:
+                expected_binding = approval_binding_for_pending(
+                    context.principal.user_id,
+                    pending.decision_id,
+                    pending.execution_context,
+                )
+            except ApprovalStorageUnavailable:
+                self.send_error(503, "Pending approval storage is unavailable")
+                return
+            if pending.approval_binding != expected_binding:
+                self._send_json(410, {
+                    "status": "APPROVAL_INVALID",
+                    "safe": False,
+                    "message": "The pending approval is missing, expired, mismatched, or already used.",
+                })
+                return
+            if not _require_owned_active_profile(self, context):
+                return
             pending_profile_id = (
                 pending.execution_context.get("profile_id")
                 if pending.execution_context is not None
                 else None
             )
-            if pending_profile_id is not None and pending_profile_id != str(context.active_profile_id):
+            if pending.execution_context is not None and (
+                pending_profile_id is None
+                or pending_profile_id != str(context.active_profile_id)
+            ):
                 self.send_error(404, "Approval not found")
                 return
             if request_text is not None and request_text.strip() != pending.request_text:
@@ -1455,6 +1671,7 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                     session_id=context.session_id,
                     request_text=request_text.strip() if request_text is not None else None,
                     decision=decision,
+                    approval_binding=expected_binding,
                 )
             except ApprovalStorageUnavailable:
                 self.send_error(503, "Pending approval storage is unavailable")
@@ -1595,10 +1812,9 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                 if owner_user_id is None:
                     self.send_error(401, "A valid server-side session is required")
                     return
-                profile_id = request_context.active_profile_id
-                if profile_id is None:
-                    self.send_error(409, "An active profile is required")
+                if not _require_owned_active_profile(self, request_context):
                     return
+                profile_id = request_context.active_profile_id
                 created_for_message = conversation_id_value is None
                 if created_for_message:
                     try:
@@ -1731,7 +1947,10 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                         ),
                     },
                 )
-                if getattr(self, "_approval_storage_unavailable", False):
+                if (
+                    getattr(self, "_approval_storage_unavailable", False)
+                    or getattr(self, "_approval_profile_unavailable", False)
+                ):
                     return
             else:
                 service = ChatService(external_authorization=EXTERNAL_AUTHORIZATION)
@@ -1897,28 +2116,8 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    host = os.environ.get("PARMAR_UI_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    port = UI_PORT
-    development_auth_origin = _validate_development_auth_configuration(host=host, port=port)
-    certfile = os.environ.get("PARMAR_UI_TLS_CERTFILE", "").strip()
-    keyfile = os.environ.get("PARMAR_UI_TLS_KEYFILE", "").strip()
-    if bool(certfile) != bool(keyfile):
-        raise ValueError("Configure both PARMAR_UI_TLS_CERTFILE and PARMAR_UI_TLS_KEYFILE.")
-    _configured_ui_origin(
-        host=host,
-        port=port,
-        scheme="https" if certfile and keyfile else "http",
-    )
-    server = ThreadingHTTPServer((host, port), PARMARRequestHandler)
+    server, scheme, host, port = _create_ui_server()
     try:
-        scheme = "http"
-        if certfile and keyfile:
-            tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            tls_context.load_cert_chain(certfile, keyfile)
-            server.socket = tls_context.wrap_socket(server.socket, server_side=True)
-            scheme = "https"
-        if development_auth_origin is not None and scheme != "https":
-            raise ValueError("Development authentication requires an HTTPS listener.")
         print(f"PARMAR UI is running at {scheme}://{host}:{port}")
         server.serve_forever()
     except KeyboardInterrupt:

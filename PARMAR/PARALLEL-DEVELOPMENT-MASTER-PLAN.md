@@ -4,7 +4,7 @@
 under PARMAR Core product governance. This plan does not itself authorize
 implementation; each work item retains its own scope and acceptance gates.
 **Repository baseline:** `main` at
-`69527f6b39d0521746eb91cd96b5fa44fc48348c`.
+`b9788207187ab54146865abddf16af873e49c449`.
 **Scope:** AETHER and VOKKI are independent workstreams under PARMAR Core
 governance. Core contracts and services are shared runtime dependencies only
 where explicitly approved and verified.
@@ -46,6 +46,15 @@ The user supplied the approved D-01–D-13 directions and confirmed
 in [VOKKI-MASTER-PRD.md](./VOKKI-MASTER-PRD.md) §11. The source establishes
 approved product direction, not implementation, technical/vendor selection,
 security acceptance, or production readiness.
+
+The 15 explicitly approved VOKKI identity/tenancy requirements are recorded
+as IT-01–IT-15 in the [final identity ADR](./VOKKI-IDENTITY-TENANCY-ADR.md)
+and mapped to requirements, implementation evidence, gaps, and follow-up
+gates in its [traceability matrix](./VOKKI-IDENTITY-TENANCY-TRACEABILITY.md).
+The D-02 wording is reconciled in the PRD: family/team and multiple-profile
+modes are approved eventual scope, while detailed policy and enablement remain
+separately gated. PARMAR-wide SSO does not select a provider or grant
+product-specific authority.
 
 **Task 23 documentation integration is VERIFIED.** This review checked that
 the PRD and this plan consistently record all 13 approved directions and
@@ -282,9 +291,9 @@ are accepted.
 
 | ID | Milestone | Bounded work | Independent exit evidence |
 |---|---|---|---|
-| V0 | Verify decision documentation | Compare all 13 approved directions and Dedicated Workspace + PARMAR-wide Presence across the PRD and this plan; preserve the distinction between product direction and implementation/release approval. Status: VERIFIED in this review. | PRD §11 and this plan's D-01–D-13 register agree; PARMAR Core governance and both workstream boundaries are explicit. Technical decisions and release gates remain open. |
+| V0 | Verify decision documentation | Compare all 13 approved directions, Dedicated Workspace + PARMAR-wide Presence, and the 15 approved identity/tenancy requirements across the PRD, final ADR, traceability matrix, and this plan; preserve the distinction between requirements and implementation/release approval. Task 23 and Task 31 documentation integration are VERIFIED. | PRD §11 and this plan's D-01–D-13 register agree; ADR and matrix cover IT-01–IT-15; PARMAR Core governance and both workstream boundaries are explicit. Technical decisions and release gates remain open. |
 | V1 | Web and repo baseline | Map UI/API/source behavior to each approved PRD capability; separate IMPLEMENTED, PARTIAL, SIMULATED, DOCUMENTED ONLY, MISSING and UNVERIFIED. Identify exact route, data-store, test and UI owners. | Evidence-linked capability matrix; no test execution claim; approved web-first product direction, with web implementation scope still bounded by security gates. |
-| V2 | Production identity and route perimeter | Select identity/recovery/tenant model and deployment perimeter; inventory every route/method; close P13-01/02 with server-side identity and route authorization. Keep demo explicitly separate. | Two-user/two-workspace access matrix across protected data/actions; fail-closed deployment, session/revocation and CSRF/origin evidence; independent review. |
+| V2 | Production identity and route perimeter | Define the PARMAR-wide single-account/SSO and provider-neutral identity contract; document requirements and compare authentication providers, with security approval before selection or integration; resolve recovery/session policy and deployment perimeter; inventory every route/method; close P13-01/02 with server-side identity and route authorization. Keep demo explicitly separate. | Two-user/two-workspace access matrix across protected data/actions; fail-closed deployment, session/revocation and CSRF/origin evidence; provider selection only after comparison and security approval; independent review. |
 | V3 | Consent and data lifecycle | Approve data classes, provider consent, memory revocation, camera-still retention, deletion/export/account closure, backups, encryption/keys, and provider deletion limits. Implement only explicitly approved scopes. | Data-flow/retention map; per-user consent/revocation and zero-future-egress evidence; verified deletion/export/restore/key evidence; truthful UI. |
 | V4 | Governed conversation and provider egress | Keep provider behavior behind PARMAR. Establish approved provider, context minimization, transport, limits, cancellation, no silent fallback and response release; retain Local Demo labeling. | Fake transport and negative egress tests; approved real test deployment only after V2–V3 and TLS/security gates; request/response provenance and release evidence. |
 | V5 | Memory, research and files | Deliver one data class/capability at a time with owner isolation, provenance, source validation, prompt-injection boundaries and lifecycle controls. | Per-capability authorization, consent, isolation, deletion, adversarial, recovery and quality-evaluation evidence; no unsupported “verified” claims. |
@@ -303,7 +312,7 @@ separate gates; the PRD §11 retains the full dependency and safe-state map.
 | Decision | Approved direction | Still gated |
 |---|---|---|
 | D-01 | Web-first; Desktop/Android/iOS are future independently gated platforms. | Each future platform's support and release evidence. |
-| D-02 | Independent PARMAR accounts, optional secure login linking, personal/multiple-profile/family-team modes with strict isolation. | Identity provider/recovery, roles, implementation and isolation proof. |
+| D-02 | One PARMAR-wide account/SSO boundary with immutable internal account IDs; optional future login linking with fresh proof; personal/multiple-profile/family-team modes as approved eventual scope, with strict isolation. No separate VOKKI or AETHER login. | Provider comparison/security approval before selection; recovery/session details, profile/workspace policies, implementation and isolation proof; release enablement. See the [final identity ADR](./VOKKI-IDENTITY-TENANCY-ADR.md) and [traceability matrix](./VOKKI-IDENTITY-TENANCY-TRACEABILITY.md). |
 | D-03 | Hybrid local/external AI, task-appropriate routing, explicit consent before external transfer, no silent fallback. | Specific models/providers, retention, cost and egress implementation. |
 | D-04 | Automatic memory with user review/edit/delete/export/reset controls. | Consent semantics, categories, retention/deletion, key/backup/sync lifecycle; no implied model training. |
 | D-05 | Camera understanding only with explicit permission and user-initiated capture; no hidden/background recording. | Processing, storage/retention and per-platform acceptance. |
@@ -327,10 +336,12 @@ not share direct database access, implicit identity, model authority, or
 unreviewed cross-product calls.
 
 1. **Identity/account ownership:** resolve a verified server-side principal,
-   account/workspace, session and revocation state. Ignore caller-supplied
-   identity/role/owner fields. AETHER browser-local profiles remain separate
-   unless separately approved; VOKKI identity must not grant AETHER browsing
-   authority.
+   PARMAR account, workspace, session and revocation state. Use one
+   PARMAR-wide account/SSO boundary; do not introduce separate VOKKI or AETHER
+   logins. AETHER browser-local profiles remain local browser data, not
+   separate PARMAR accounts. Ignore caller-supplied identity/role/owner
+   fields. Shared PARMAR sign-on does not grant AETHER browsing or other
+   product-specific authority.
 2. **Permissions and consent:** distinguish identity authentication,
    resource authorization, capability permission, and data-processing
    consent. Bind each to principal, purpose, data/capability, recipient,

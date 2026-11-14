@@ -20,11 +20,99 @@ from uuid import UUID
 
 from PARMAR.chat.context import ChatContext
 from PARMAR.interface.dashboard import TerminalDashboard
+from PARMAR.identity_contracts import ActionApprovalBinding
 from PARMAR.state import LifecycleState
 
 
 class ApprovalStorageUnavailable(RuntimeError):
     """Raised when persistent approval data cannot be safely accessed."""
+
+
+def _valid_approval_binding(binding: object, actor_id: UUID | None = None) -> bool:
+    if type(binding) is not ActionApprovalBinding or type(binding.actor_id) is not UUID:
+        return False
+    if actor_id is not None and binding.actor_id != actor_id:
+        return False
+    for value, limit in (
+        (binding.action, 128),
+        (binding.resource_id, 256),
+        (binding.resource_scope, 128),
+        (binding.permission_scope, 128),
+    ):
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or len(value) > limit
+            or not value.isprintable()
+        ):
+            return False
+    return (
+        isinstance(binding.scope_fingerprint, str)
+        and len(binding.scope_fingerprint) == 64
+        and all(character in "0123456789abcdef" for character in binding.scope_fingerprint)
+    )
+
+
+def approval_binding_for_pending(
+    actor_id: UUID,
+    decision_id: str,
+    execution_context: dict[str, Any] | None,
+) -> ActionApprovalBinding:
+    if not isinstance(actor_id, UUID) or not isinstance(decision_id, str) or not decision_id:
+        raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+    if execution_context is None:
+        action = "proposal.review"
+        resource_id = decision_id
+        resource_scope = "decision"
+        permission_scope = "parmar:proposal:review"
+        scope_material: dict[str, Any] = {"decision_id": decision_id}
+    else:
+        if not isinstance(execution_context, dict):
+            raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+        conversation_id = execution_context.get("conversation_id")
+        has_conversation = isinstance(conversation_id, str) and bool(conversation_id)
+        action = "chat.respond"
+        resource_id = conversation_id if has_conversation else decision_id
+        resource_scope = "conversation" if has_conversation else "chat-request"
+        permission_scope = "parmar:chat:respond"
+        chat_context = execution_context.get("context")
+        serialized_context = (
+            {field.name: getattr(chat_context, field.name) for field in fields(ChatContext)}
+            if isinstance(chat_context, ChatContext)
+            else chat_context
+        )
+        scope_material = {
+            "decision_id": decision_id,
+            "context": serialized_context,
+            "selected_provider": execution_context.get("selected_provider"),
+            "orchestration_mode": execution_context.get("orchestration_mode"),
+            "recent_messages": execution_context.get("recent_messages"),
+            "research": execution_context.get("research", False),
+            "conversation_id": conversation_id,
+            "profile_id": execution_context.get("profile_id"),
+        }
+    try:
+        scope_payload = json.dumps(
+            scope_material,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ApprovalStorageUnavailable("Approval storage is unavailable.") from error
+    binding = ActionApprovalBinding(
+        actor_id=actor_id,
+        action=action,
+        resource_id=resource_id,
+        resource_scope=resource_scope,
+        permission_scope=permission_scope,
+        scope_fingerprint=hashlib.sha256(scope_payload).hexdigest(),
+    )
+    if not _valid_approval_binding(binding, actor_id):
+        raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+    return binding
 
 
 @dataclass(frozen=True)
@@ -39,6 +127,7 @@ class PendingApproval:
     decision_id: str | None
     request_fingerprint: str | None
     execution_context: dict[str, Any] | None
+    approval_binding: ActionApprovalBinding | None = None
 
 
 class PendingApprovalStore:
@@ -59,6 +148,7 @@ class PendingApprovalStore:
         user_id: UUID,
         session_id: UUID,
         decision_id: str,
+        approval_binding: ActionApprovalBinding,
         execution_context: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> str:
@@ -66,6 +156,8 @@ class PendingApprovalStore:
             raise ValueError("Pending approvals require authenticated user and session IDs.")
         if not isinstance(decision_id, str) or not decision_id:
             raise ValueError("Pending approvals require their originating decision ID.")
+        if not _valid_approval_binding(approval_binding, user_id):
+            raise ValueError("Pending approvals require an exact actor and action binding.")
         token = secrets.token_urlsafe(32)
         expiry = (time.monotonic() if now is None else now) + self._ttl_seconds
         token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
@@ -82,6 +174,7 @@ class PendingApprovalStore:
                 decision_id=decision_id,
                 request_fingerprint=request_fingerprint,
                 execution_context=deepcopy(execution_context),
+                approval_binding=approval_binding,
             )
         return token
 
@@ -104,6 +197,7 @@ class PendingApprovalStore:
             or pending.request_fingerprint is None
             or pending.user_id != user_id
             or pending.session_id != session_id
+            or not _valid_approval_binding(pending.approval_binding, user_id)
             or hashlib.sha256(pending.request_text.encode("utf-8")).hexdigest() != pending.request_fingerprint
         ):
             return False
@@ -163,6 +257,7 @@ class PendingApprovalStore:
         session_id: object,
         request_text: object = None,
         decision: str | None = None,
+        approval_binding: ActionApprovalBinding | None = None,
         now: float | None = None,
     ) -> tuple[PendingApproval | None, str]:
         token_hash = self._token_hash(token)
@@ -180,6 +275,12 @@ class PendingApprovalStore:
                 return None, "OWNER_MISMATCH"
             if request_text is not None and request_text != pending.request_text:
                 return None, "REQUEST_MISMATCH"
+            if decision not in {"APPROVE", "APPROVED", "REJECT", "REJECTED"}:
+                return None, "INVALID_DECISION"
+            if type(approval_binding) is not ActionApprovalBinding:
+                return None, "BINDING_MISSING"
+            if approval_binding != pending.approval_binding:
+                return None, "BINDING_MISMATCH"
             del self._pending[token_hash]
             return pending, "OK"
 
@@ -352,6 +453,7 @@ class SQLitePendingApprovalStore:
             or not isinstance(pending.request_text, str)
             or not isinstance(pending.response, dict)
             or not isinstance(pending.summary, dict)
+            or not _valid_approval_binding(pending.approval_binding, pending.user_id)
         ):
             raise ApprovalStorageUnavailable("Approval storage is unavailable.")
         enforcement = pending.summary.get("enforcement")
@@ -380,6 +482,13 @@ class SQLitePendingApprovalStore:
             if not isinstance(context, dict) or not isinstance(context.get("context"), ChatContext):
                 raise ApprovalStorageUnavailable("Approval storage is unavailable.")
             chat_context = context["context"]
+            profile_id = context.get("profile_id")
+            if profile_id is not None:
+                try:
+                    if not isinstance(profile_id, str) or str(UUID(profile_id)) != profile_id:
+                        raise ValueError
+                except ValueError as error:
+                    raise ApprovalStorageUnavailable("Approval storage is unavailable.") from error
             context = {
                 "context": {
                     field.name: getattr(chat_context, field.name)
@@ -390,6 +499,7 @@ class SQLitePendingApprovalStore:
                 "recent_messages": context.get("recent_messages"),
                 "research": context.get("research", False),
                 "conversation_id": context.get("conversation_id"),
+                "profile_id": profile_id,
             }
         return {
             "request_text": pending.request_text,
@@ -400,6 +510,14 @@ class SQLitePendingApprovalStore:
             "decision_id": pending.decision_id,
             "request_fingerprint": pending.request_fingerprint,
             "execution_context": context,
+            "approval_binding": {
+                "actor_id": str(pending.approval_binding.actor_id),
+                "action": pending.approval_binding.action,
+                "resource_id": pending.approval_binding.resource_id,
+                "resource_scope": pending.approval_binding.resource_scope,
+                "permission_scope": pending.approval_binding.permission_scope,
+                "scope_fingerprint": pending.approval_binding.scope_fingerprint,
+            },
         }
 
     @staticmethod
@@ -495,7 +613,28 @@ class SQLitePendingApprovalStore:
                 if "research" in execution and not isinstance(execution["research"], bool):
                     raise ValueError("Invalid approval research mode.")
                 execution.setdefault("research", False)
+                profile_id = execution.get("profile_id")
+                if profile_id is not None and (
+                    not isinstance(profile_id, str)
+                    or str(UUID(profile_id)) != profile_id
+                ):
+                    raise ValueError("Invalid approval profile binding.")
                 execution["context"] = ChatContext(**execution["context"])
+            raw_binding = raw.get("approval_binding")
+            approval_binding = None
+            if raw_binding is not None:
+                if not isinstance(raw_binding, dict):
+                    raise ValueError("Invalid approval action binding.")
+                approval_binding = ActionApprovalBinding(
+                    actor_id=UUID(raw_binding["actor_id"]),
+                    action=raw_binding["action"],
+                    resource_id=raw_binding["resource_id"],
+                    resource_scope=raw_binding["resource_scope"],
+                    permission_scope=raw_binding["permission_scope"],
+                    scope_fingerprint=raw_binding["scope_fingerprint"],
+                )
+                if not _valid_approval_binding(approval_binding, user_id):
+                    raise ValueError("Invalid approval action binding.")
             expiry = datetime.fromisoformat(expires_at)
             if expiry.tzinfo is None or expiry.utcoffset() is None:
                 raise ValueError("Invalid approval expiry.")
@@ -511,6 +650,7 @@ class SQLitePendingApprovalStore:
                 decision_id=decision_id,
                 request_fingerprint=request_fingerprint,
                 execution_context=execution,
+                approval_binding=approval_binding,
             )
         except ApprovalStorageUnavailable:
             raise
@@ -575,6 +715,7 @@ class SQLitePendingApprovalStore:
         user_id: UUID,
         session_id: UUID,
         decision_id: str,
+        approval_binding: ActionApprovalBinding,
         execution_context: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> str:
@@ -582,6 +723,8 @@ class SQLitePendingApprovalStore:
             raise ValueError("Pending approvals require authenticated user and session IDs.")
         if not isinstance(decision_id, str) or not decision_id:
             raise ValueError("Pending approvals require their originating decision ID.")
+        if not _valid_approval_binding(approval_binding, user_id):
+            raise ValueError("Pending approvals require an exact actor and action binding.")
         if (
             not isinstance(request_text, str)
             or not isinstance(response, dict)
@@ -604,6 +747,7 @@ class SQLitePendingApprovalStore:
             decision_id=decision_id,
             request_fingerprint=request_fingerprint,
             execution_context=deepcopy(execution_context),
+            approval_binding=approval_binding,
         )
         payload = self._canonical(self._encode_pending(pending))
         expiry = datetime.now(timezone.utc) + timedelta(seconds=self._ttl_seconds)
@@ -642,6 +786,7 @@ class SQLitePendingApprovalStore:
         session_id: object,
         request_text: object = None,
         decision: str | None = None,
+        approval_binding: ActionApprovalBinding | None = None,
         now: float | None = None,
     ) -> tuple[PendingApproval | None, str]:
         token_hash = self._token_hash(token)
@@ -657,6 +802,12 @@ class SQLitePendingApprovalStore:
                 return None, "OWNER_MISMATCH"
             if request_text is not None and request_text != pending.request_text:
                 return None, "REQUEST_MISMATCH"
+            if decision not in {"APPROVE", "APPROVED", "REJECT", "REJECTED"}:
+                return None, "INVALID_DECISION"
+            if type(approval_binding) is not ActionApprovalBinding:
+                return None, "BINDING_MISSING"
+            if approval_binding != pending.approval_binding:
+                return None, "BINDING_MISMATCH"
             state = "REJECTED" if decision in {"REJECT", "REJECTED"} else "CONSUMED"
             expiry = row["expires_at"]
             payload = row["payload"]

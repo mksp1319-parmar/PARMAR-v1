@@ -219,6 +219,45 @@ def test_authenticated_session_can_switch_owned_profiles_and_rejects_foreign_pro
     assert selected.active_profile_id == second_profile.profile_id
 
 
+def test_home_session_and_profile_context_are_server_resolved_not_account_id_input(identity_api):
+    manager, repository = identity_api
+    session = credentials(manager)
+    profile = repository.create_profile(session.session.user_id, "Home profile")
+    selected = manager.select_profile(
+        session.session.session_id,
+        session.session.user_id,
+        profile.profile_id,
+    )
+    assert selected is not None
+
+    response, errors = request_for(manager, "/api/session", method="GET", session=session)
+
+    assert errors == []
+    assert response["result"]["authenticated"] is True
+    assert response["result"]["active_profile_id"] == str(profile.profile_id)
+    assert "account_id" not in response["result"]
+
+    profiles, errors = request_for(
+        manager,
+        "/api/identity/profiles",
+        method="GET",
+        session=session,
+    )
+    assert errors == []
+    assert [item["profile_id"] for item in profiles["result"]["profiles"]] == [
+        str(profile.profile_id),
+    ]
+
+    forged, errors = request_for(
+        manager,
+        "/api/session?account_id=attacker",
+        method="GET",
+        session=session,
+    )
+    assert forged == {}
+    assert errors == [(400, "Client-supplied identity is not accepted")]
+
+
 def test_logout_clears_active_profile_from_server_session(identity_api):
     manager, repository = identity_api
     session = credentials(manager)

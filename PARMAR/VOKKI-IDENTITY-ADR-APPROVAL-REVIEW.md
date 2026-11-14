@@ -2,18 +2,20 @@
 
 | Field | Value |
 |---|---|
-| Status | Review and user decision sheet; **not an approved ADR or implementation authorization** |
+| Status | Historical review sheet; superseded by the final ADR for the 15 approved requirements; not implementation authorization |
 | Date | 2026-11-11 |
-| Reviewed document | [VOKKI-IDENTITY-TENANCY-ADR-DRAFT.md](./VOKKI-IDENTITY-TENANCY-ADR-DRAFT.md) |
-| Authority | [VOKKI-MASTER-PRD.md](./VOKKI-MASTER-PRD.md) remains authoritative for approved product directions |
-| Scope | Extract approvals, resolve the D-02 wording ambiguity as a proposed clarification, and order the next identity milestone |
-| Restrictions observed | Documentation/review only; no implementation, schema/memory/conversation changes, provider integration, production login, or authoritative-document edits |
+| Reviewed document | [VOKKI-IDENTITY-TENANCY-ADR.md](./VOKKI-IDENTITY-TENANCY-ADR.md) |
+| Authority | [VOKKI-IDENTITY-TENANCY-ADR.md](./VOKKI-IDENTITY-TENANCY-ADR.md) records the approved identity/tenancy requirements; [VOKKI-MASTER-PRD.md](./VOKKI-MASTER-PRD.md) remains authoritative for broader product directions |
+| Scope | Historical extraction and decision questionnaire; superseded for the 15 identity/tenancy requirements by the final ADR |
+| Restrictions observed | Documentation-only update; no implementation, schema/memory/conversation changes, provider integration, production login, or release approval |
+
+> **Supersession notice (2026-11-12):** The user explicitly approved the 15 identity/tenancy requirements recorded as IT-01–IT-15 in the [final ADR](./VOKKI-IDENTITY-TENANCY-ADR.md). This historical questionnaire's blank response fields and “proposed” labels are not the current decision record. The final ADR's deferred-choice and production-gate sections remain authoritative for what is still unresolved. No provider or production implementation was approved.
 
 ## 1. Executive outcome
 
-The Master PRD records approved **product directions**, not completed implementation choices or release approval. In particular, D-02 approves the direction of independent PARMAR accounts, optional securely linked login methods, personal/multiple-profile/family/team modes, and strict isolation. It does not settle authentication provider, detailed account-linking and recovery policy, family/team permissions, workspace ownership, or rollout gates.
+The Master PRD records approved **product directions**, not completed implementation choices or release approval. D-02 now records one PARMAR-wide account/SSO boundary, optional future login-method linking, personal/multiple-profile/family-team eventual scope, and strict isolation. It does not select an authentication provider or settle detailed account-linking, recovery, family/team permissions, workspace policy, or rollout gates.
 
-The ADR's recommendations for internal immutable account IDs, provider-neutral authentication, per-device sessions, account-owned profiles with explicit workspace grants, retaining user-scoped memory, and per-request external-provider consent are proposals. They require approvals identified below before the affected capability is implemented. No provider or authentication method is selected here.
+The final ADR records the approved requirements for internal immutable account IDs, provider-neutral PARMAR-wide identity, per-device sessions, owner-controlled profiles with explicit grants, user-scoped memory, and scoped external-provider consent. The provider, technical designs, detailed policy, and release evidence remain open as identified in that record. No provider or authentication method is selected.
 
 **Production authentication remains blocked.** A design/route contract and test plan can be completed without choosing a provider, but implementation of a production sign-in path requires approval of the first authentication method and account mapping, recovery/assurance baseline, session policy, and protected-route authorization boundary.
 
@@ -26,7 +28,7 @@ These are not reopened by this review. Their exact wording is in the authoritati
 | Decision | Approved direction | What remains unapproved / unproven |
 |---|---|---|
 | D-01 | Web-first; Desktop, Android, and iOS are future independently gated platforms. | Native session/storage implementation, platform schedules, sync behavior, and each release's evidence. |
-| D-02 | Independent PARMAR accounts; optional securely linked login methods; personal, multiple-profile, family/team modes with strict isolation. | Provider/method selection; identity mapping; linking/merge/recovery rules; detailed family/team semantics, permissions, invitation model, and release gates. §3.1 wording conflict is addressed in §3 below. |
+| D-02 | One PARMAR-wide account/SSO boundary; optional future login linking with fresh proof; personal, multiple-profile, family/team modes as approved eventual scope, with strict isolation. | Provider/method selection; account mapping; linking/recovery implementation; detailed family/team policies, permissions, invitations, and release gates. |
 | D-03 | Hybrid local/external AI, task-appropriate routing, explicit consent before external transfer, no silent fallback. | Provider/model/runtime selection, consent granularity and UX, retention terms, provider regions, routing, and egress evidence. |
 | D-04 | Automatic memory with user review/edit/delete/export/reset controls. | Memory scope, capture/retention details, consent versioning, deletion timelines, backup/replica treatment, and implementation evidence. Existing memory remains user-scoped. |
 | D-05 | Camera understanding only with explicit permission and user-initiated capture; no hidden/background recording. | Per-platform storage/cleanup, processing, and lifecycle acceptance. |
@@ -44,30 +46,30 @@ These are not reopened by this review. Their exact wording is in the authoritati
 ### Verified current implementation (not production acceptance)
 
 - [identity.py](./identity.py#L17) defines the server-established principal contract and anonymous Local Demo resolver; no production credential verifier is established by this contract.
-- [identity_store.py](./identity_store.py#L183) creates profile/workspace/membership/profile-association tables. The current schema has owner IDs and OWNER/ADMIN/MEMBER roles, but no account table, invitation flow, or complete multi-user authorization model.
+- [identity_store.py](./identity_store.py) creates profile/workspace/membership/profile-association tables and, under the separately authorized Task 37, an internal account-registry foundation. The registry is not connected to authentication or legacy owner IDs; invitation flow and complete multi-user authorization remain absent.
 - [futuristic_app.py](./interface/futuristic_app.py#L91) constrains the optional development login to an explicit development configuration; it is not production identity. Profile selection checks ownership at [futuristic_app.py](./interface/futuristic_app.py#L1069).
 - [sessions.py](./sessions.py#L230) contains the server-side session store; session rotation/revocation exist, but the reviewed HTTP surface has no user-facing production authentication or device-management flow.
 - [conversations.py](./conversations.py#L746) adds nullable profile association without assigning legacy records. This review does not authorize reassignment.
 - [memories.py](./memories.py#L265) stores consent and memory by user ID, not profile/workspace. No scope change is proposed.
 - The [Part 13 governance report](./VOKKI-PART13-PRIVACY-SECURITY-GOVERNANCE-REPORT.md#L28) records production identity, data lifecycle, encryption, and provider-consent gaps. Source inspection does not establish deployed runtime behavior.
 
-## 3. Proposed D-02 wording clarification
+## 3. Resolved D-02 wording clarification
 
 ### The inconsistency
 
-- **PRD §3.1** says: “Support one personal profile initially; family/team profiles, shared workspaces, profile switching, and owner/admin/member roles require explicit product approval.”
+- **Historical wording in PRD §3.1:** “Support one personal profile initially; family/team profiles, shared workspaces, profile switching, and owner/admin/member roles require explicit product approval.” The PRD wording has since been reconciled: those modes are approved eventual scope; their detailed policies and enablement remain separately gated.
 - **Approved D-02 in PRD §11** includes “personal, multiple-profile, family/team modes with strict isolation.”
-- Elsewhere, the PRD describes family/team multi-user workspaces as approved directions while stating that technical and security decisions remain open.
+- The PRD's D-02 register approves eventual product scope while leaving technical and security decisions open.
 
-### Proposed interpretation for user approval
+### Approved clarification
 
-Interpret D-02 as approving the **product direction and eventual capability scope** for multiple profiles and family/team modes. Interpret §3.1's “require explicit product approval” as requiring approval of **detailed semantics, implementation, and release enablement**, not as revoking the already-recorded D-02 direction.
+The approved D-02 product direction includes personal, multiple-profile, and family/team modes as eventual product scope. PRD §3.1 requires separate approval of **detailed semantics, implementation, and release enablement**, not re-approval of that direction.
 
-Suggested clarification if approved in a future authoritative PRD edit:
+The following clarification is now recorded in the authoritative PRD and final ADR:
 
-> “The approved D-02 product direction includes multiple profiles and family/team workspace capabilities. Initial implementation and release remain gated on explicit approval of workspace semantics, membership and role permissions, profile-sharing rules, and security acceptance. Until those gates pass, expose only the approved and verified personal-account/profile scope.”
+> “The approved D-02 product direction includes personal, multiple-profile, and family/team modes as eventual product scope. Initial implementation and release remain gated on explicit approval of workspace semantics, membership and role permissions, profile-sharing rules, and security acceptance. Until those gates pass, expose only the approved and verified scope.”
 
-This review **does not edit the PRD** and does not treat the suggested text as approved. It does not infer that family/team support, invitations, sharing, or cross-user access may be enabled now.
+The D-02 clarification is recorded in the PRD and final ADR. It does not authorize family/team implementation, invitations, sharing, or cross-user access before their separate policy and security gates pass.
 
 ## 4. Numbered user approval sheet
 
@@ -308,16 +310,17 @@ flowchart TD
 
 ## 7. Recommended next task
 
-**Task 31 — Obtain decisions on items 1–8 of the approval sheet and produce the implementation-ready Identity Contract and Route Authorization Matrix.**
+**Task 31 — Finalize the VOKKI identity and tenancy decision record and traceability.**
 
-The first implementation milestone should be scoped to personal-account authentication only, with profile sharing, workspaces, external provider egress, profile-scoped memory, and offline sync explicitly excluded until their decisions are approved. Before implementing even that first authentication path, obtain an approved provider/method, account-mapping rule, recovery/assurance baseline, session policy, route inventory, ingress/TLS requirements, and a synthetic-data HTTP acceptance plan.
+The Task 31 documentation deliverables are the [final ADR](./VOKKI-IDENTITY-TENANCY-ADR.md), the [traceability matrix](./VOKKI-IDENTITY-TENANCY-TRACEABILITY.md), and the reconciled PRD wording. They do not authorize an authentication implementation. A later production identity milestone must first satisfy the provider-comparison/security-approval, account mapping, recovery/assurance, session/device, route inventory, ingress/TLS, data-protection, and synthetic-data acceptance gates.
 
 ## 8. Evidence and limits
 
 ### Repository and decision evidence
 
-- [VOKKI-IDENTITY-TENANCY-ADR-DRAFT.md](./VOKKI-IDENTITY-TENANCY-ADR-DRAFT.md) — proposed architecture, decision records, security criteria, and approval list; none of its proposals is presumed approved.
-- [VOKKI-MASTER-PRD.md §3.1](./VOKKI-MASTER-PRD.md#L100) — identity requirements and the family/team wording requiring approval.
+- [VOKKI-IDENTITY-TENANCY-ADR.md](./VOKKI-IDENTITY-TENANCY-ADR.md) — final decision record for approved identity/tenancy requirements, deferred technical choices, and production gates.
+- [VOKKI-IDENTITY-TENANCY-TRACEABILITY.md](./VOKKI-IDENTITY-TENANCY-TRACEABILITY.md) — requirement-to-PRD/current-evidence/gap/future-task matrix.
+- [VOKKI-MASTER-PRD.md](./VOKKI-MASTER-PRD.md#31-identity-onboarding-accounts-and-profiles) — PARMAR-wide identity/SSO requirements and clarified D-02 scope.
 - [VOKKI-MASTER-PRD.md §11](./VOKKI-MASTER-PRD.md#L1065) — approved D-01–D-13 directions and safe-behavior/dependency gates.
 - [identity.py](./identity.py#L17) — server principal contract and anonymous Local Demo resolver.
 - [identity_store.py](./identity_store.py#L48) — profile/workspace store; schema version and existing owner/member/grant structure.

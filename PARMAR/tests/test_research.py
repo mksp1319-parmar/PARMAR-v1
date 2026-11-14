@@ -18,9 +18,10 @@ from PARMAR.chat.router import ChatRouter
 from PARMAR.chat.service import ChatService
 from PARMAR.conversations import InMemoryConversationRepository, SQLiteConversationRepository
 from PARMAR.identity import LocalDemoPrincipalResolver
+from PARMAR.identity_store import SQLiteIdentityRepository
 from PARMAR.interface.ui_adapter import PARMARUIAdapter
 from PARMAR.chat.context import ChatContext
-from PARMAR.interface.approvals import SQLitePendingApprovalStore
+from PARMAR.interface.approvals import SQLitePendingApprovalStore, approval_binding_for_pending
 from PARMAR.memories import InMemoryMemoryRepository
 from PARMAR.sessions import (
     InMemorySessionRepository,
@@ -414,6 +415,12 @@ def test_pending_research_mode_survives_approval_store_restart(tmp_path):
     database = tmp_path / "research-approvals.sqlite3"
     store = SQLitePendingApprovalStore(database, key)
     user_id, session_id = uuid4(), uuid4()
+    decision_id = summary["enforcement"]["decision_id"]
+    execution_context = {
+        "context": ChatContext(),
+        "orchestration_mode": "SINGLE_PROVIDER",
+        "research": True,
+    }
     token = store.create(
         request,
         review,
@@ -421,12 +428,13 @@ def test_pending_research_mode_survives_approval_store_restart(tmp_path):
         summary,
         user_id=user_id,
         session_id=session_id,
-        decision_id=summary["enforcement"]["decision_id"],
-        execution_context={
-            "context": ChatContext(),
-            "orchestration_mode": "SINGLE_PROVIDER",
-            "research": True,
-        },
+        decision_id=decision_id,
+        approval_binding=approval_binding_for_pending(
+            user_id,
+            decision_id,
+            execution_context,
+        ),
+        execution_context=execution_context,
     )
 
     restored = SQLitePendingApprovalStore(database, key).inspect(
@@ -437,6 +445,11 @@ def test_pending_research_mode_survives_approval_store_restart(tmp_path):
 
     assert restored is not None
     assert restored.execution_context["research"] is True
+    assert restored.approval_binding == approval_binding_for_pending(
+        user_id,
+        restored.decision_id,
+        restored.execution_context,
+    )
 
 
 def test_research_chat_failure_is_separate_from_chat_provider_failure():
@@ -538,8 +551,17 @@ def test_research_sources_persist_with_released_history_across_repository_restar
         SessionPolicy(idle_timeout_seconds=300, absolute_timeout_seconds=900),
     )
     credentials = manager.create_authenticated_session(uuid4(), "research-conversation-test")
+    identity_repository = SQLiteIdentityRepository(tmp_path / "research-identity.sqlite3")
+    profile = identity_repository.create_profile(credentials.session.user_id, "Research history")
+    selected = manager.select_profile(
+        credentials.session.session_id,
+        credentials.session.user_id,
+        profile.profile_id,
+    )
+    assert selected is not None
     repository = SQLiteConversationRepository(tmp_path / "research-history.sqlite3")
     memory_repository = InMemoryMemoryRepository()
+    monkeypatch.setattr(futuristic_app, "IDENTITY_REPOSITORY", identity_repository)
     monkeypatch.setattr(futuristic_app, "MEMORY_REPOSITORY", memory_repository)
     monkeypatch.setattr(futuristic_app, "SESSION_MANAGER", manager)
     monkeypatch.setattr(futuristic_app, "PRINCIPAL_RESOLVER", LocalDemoPrincipalResolver())

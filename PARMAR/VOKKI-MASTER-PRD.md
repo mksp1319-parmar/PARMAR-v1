@@ -5,14 +5,16 @@
 | Document field | Value |
 |---|---|
 | Version | 1.0 draft for product, security, and technical review |
-| Date | 2026-11-11 |
+| Date | 2026-11-12 |
 | Product | VOKKI, within the PARMAR ecosystem |
 | Mode | Documentation and planning; no implementation authorized by this document |
-| Evidence basis | Available product vision, Parts 8–16 summaries, and current repository inspection |
+| Evidence basis | Available product vision, Parts 8–16 summaries, current repository inspection, and Task 31 identity/tenancy decisions |
 | Outstanding evidence | Detailed Part 1–7 reports are not present in the repository/session evidence. The final source-and-test-inventory Part 13 report is [VOKKI-PART13-PRIVACY-SECURITY-GOVERNANCE-REPORT.md](./VOKKI-PART13-PRIVACY-SECURITY-GOVERNANCE-REPORT.md); production verification and test execution remain outstanding. |
 | Parallel development | [PARALLEL-DEVELOPMENT-MASTER-PLAN.md](./PARALLEL-DEVELOPMENT-MASTER-PLAN.md) coordinates the active AETHER and VOKKI tracks under PARMAR Core governance. |
 
 > **Decision status:** The user supplied and confirmed the approved D-01–D-13 product directions, plus **Dedicated Workspace + PARMAR-wide Presence**, on 2026-11-11. Their exact wording is reconciled in §11. Task 23 documentation integration was verified against this request. This confirms documentation traceability only; it does not imply a separate acceptance artifact, implementation, technical/vendor selection, production security acceptance, or release approval. Numeric budgets remain proposals until the relevant product/platform owners approve measurement criteria.
+
+> **Identity and tenancy decision status:** The user explicitly approved the 15 identity/tenancy requirements recorded as IT-01–IT-15 in [VOKKI-IDENTITY-TENANCY-ADR.md](./VOKKI-IDENTITY-TENANCY-ADR.md). The ADR and its [traceability matrix](./VOKKI-IDENTITY-TENANCY-TRACEABILITY.md) distinguish those approved requirements from unresolved provider/technical choices and production gates. These approvals do not authorize implementation, production authentication, provider integration, or release.
 
 ## 1. Executive product vision
 
@@ -81,7 +83,7 @@ Readiness classifications used in this document:
 
 ### Repository evidence snapshot
 
-The current checkout is `main` at `69527f6b39d0521746eb91cd96b5fa44fc48348c`, with a clean worktree before authoring this document. Current evidence includes:
+The repository source baseline reviewed for Task 31 was `main` at `b9788207187ab54146865abddf16af873e49c449`, before the documentation updates in this record. Current evidence includes:
 
 - A web VOKKI surface in [interface/static/index.html](./interface/static/index.html) and its browser controller [interface/static/voki-interface.js](./interface/static/voki-interface.js).
 - A dedicated VOKKI workspace, permanent primary-navigation entry, and PARMAR-wide floating workspace launcher are product requirements. The launcher reports only the PARMAR lifecycle state already received by the VOKKI interface; it does not initiate a request or access audio/video. This implementation is source-level evidence, not accessibility or runtime acceptance.
@@ -100,20 +102,30 @@ Parts 1–7 detailed reports were not available as repository artifacts or in th
 
 **Purpose:** establish an understandable, verified user identity and isolate data and authority by user and workspace.
 
+**PARMAR-wide identity requirement**
+
+- Use one PARMAR account and PARMAR-wide sign-on across PARMAR products and surfaces, including VOKKI and authenticated AETHER surfaces. Do not introduce a separate VOKKI or AETHER login, credential set, or account identity.
+- The authentication provider and protocol remain unselected; compare candidates against documented requirements and obtain security approval before selection or integration. PARMAR Core establishes identity; each product still enforces its own authorization and capability boundaries.
+- Local-only product functionality does not create a second PARMAR account. AETHER-local browser profiles are not separate PARMAR accounts, and PARMAR sign-on does not grant AETHER browsing authority.
+
 **User-facing behavior**
 
 - Offer transparent onboarding that explains VOKKI's AI identity, capabilities, limitations, data flow, and available controls before sensitive features are used.
-- Support sign-in, sign-out, session expiry, account recovery, and a visible account/session state.
-- Support one personal profile initially; family/team profiles, shared workspaces, profile switching, and owner/admin/member roles require explicit product approval.
+- Support sign-in, sign-out, session expiry, secure account recovery, and a visible account/session/device state through PARMAR-wide sign-on.
+- Personal, multiple-profile, and family/team modes are approved eventual product scope. Detailed family/team policies, implementation, and release enablement remain separately gated; only the currently approved and verified scope may be exposed.
+- Profiles remain owner-controlled. Sharing requires an explicit, revocable View/Edit/Manage grant; workspace membership alone does not grant personal-content access.
 - Never imply development/demo identity is a verified account.
 
 **Functional/technical requirements**
 
 - Identity must be established server-side through an approved production identity provider; the client may not supply a user ID, role, owner, or permission.
-- Resolve each request to a server-issued session and identity; bind approvals, memory, conversation, workspace, and audit ownership to that identity and workspace.
+- Each PARMAR account uses an immutable internal PARMAR account ID; authentication provider selection is deferred until requirements comparison and security approval.
+- Optional future login-method linking requires fresh proof of control. Never automatically link or merge accounts.
+- Provide passkey support, additional verification, login-attempt limits, lost-device protection, secure per-device sessions, a device inventory, individual/all-device remote logout, and step-up verification. Exact methods and policy thresholds remain decision-gated.
+- Resolve each request to a server-issued session and identity; bind approvals, memory, conversation, workspace, and audit ownership to that identity and applicable scope.
 - Specify role-based authorization separately from authentication and PARMAR policy.
 - Profile switching must invalidate client state and prevent old in-flight responses or local content from crossing profiles.
-- Provide account recovery, session revocation, key rotation, and administrator recovery procedures without weakening approval controls.
+- Provide secure account recovery, session/approval revocation, and key lifecycle/recovery procedures without weakening authorization or approval controls.
 
 **Data/security requirements**
 
@@ -1080,7 +1092,7 @@ These are separate gates, not a mandated delivery order. Web is a proposed first
 | R-05 / P0 | AETHER security boundary | AETHER remote browsing is NO-GO and disabled. | Keep separate; no dependency or flag change absent independent gates and explicit authorization. |
 | R-06 / P1 | Initial product and platform scope | Web-first is approved; Desktop, Android and iOS are future independently gated platforms. Android screen remains informational and iOS is not started. | Implement web scope first; do not claim or release any future client without its independent platform gate. |
 | R-07 / P1 | Real inference and provider economics | Hybrid local/external provider routing, task-appropriate selection, consent before external transfer and no silent fallback are approved. Local Demo is not a model; production providers/models are not selected or configured. | Select and evaluate specific providers/models, cost/reliability limits, locality, retention and transport only after consent and security gates. |
-| R-08 / P1 | Profile and team model | Independent PARMAR accounts, optional securely linked login methods, personal/multiple-profile/family-team modes and strict isolation are approved directions; production profiles and full isolation are not established. | Decide identity provider/recovery, profile/workspace roles and linking mechanics; prove cross-account/workspace isolation before enabling. |
+| R-08 / P1 | PARMAR identity and profile/team model | One PARMAR account and PARMAR-wide sign-on, immutable internal account ID, optional fresh-proof login-method linking, personal/multiple-profile/family-team eventual scope, and strict isolation are approved requirements. Provider, recovery details, workspace policy, implementation, and release remain open. | Compare providers and obtain security approval before selection; define recovery/session/grant semantics; prove cross-account/workspace isolation before enabling. No separate VOKKI or AETHER login. |
 | R-09 / P1 | Camera reference retention | Session-scope change does not itself delete IndexedDB record. | Decide logout/expiry/deletion cleanup and verify local storage removal; see Part 13 report. |
 | R-10 / P1 | Task modes and autonomy | Guide, Execute and Orchestrate modes under PARMAR Core governance, authorization, approval and verification are approved; current approval continuation is not a general executor. | Specify action categories and implement authorization, approval binding, least-privilege execution, independent verification, cancellation, audit and emergency-stop gates before real side effects. |
 | R-11 / P2 | Digital-human quality and licensing | High-quality 3D, photorealistic-premium and cinematic directions are approved; current source has a static portrait only and no selected renderer/rig or rights/device evidence. | Preserve all three directions; evaluate renderer, tier, assets, rights, hardware and measured quality before selection/claim. |
@@ -1120,7 +1132,7 @@ technical choices, implementation, and acceptance evidence remain incomplete.
 | Approved decision | Dependent capabilities | Remaining release gate | Safe behavior until implementation/evidence |
 |---|---|---|---|
 | D-01: Web-first; Desktop/Android/iOS are future independently gated platforms | Web initial scope and separate client feature/release claims | Each client must pass its own §10 platform gate | Implement/release only web scope with evidence; no parity or future-client claims. |
-| D-02: Independent PARMAR accounts; optional securely linked login methods; personal, multiple-profile, family/team modes with strict isolation | Sign-in/recovery, profiles, roles, sharing, cross-user/workspace isolation | Phase 1 identity, route authorization and cross-account/workspace acceptance | No production identity or multi-profile/team access until verified; Local Demo is not production identity. |
+| D-02: One PARMAR-wide account/SSO boundary with immutable internal account IDs; optional future login linking with fresh proof; personal, multiple-profile, family/team modes as approved eventual scope, with strict isolation | Sign-in/recovery, profiles, roles, explicit owner-controlled grants, sharing, cross-user/workspace isolation | Phase 1 identity/route authorization; detailed family/team policy and release enablement; cross-account/workspace acceptance | No provider selection before requirements comparison/security approval; no separate VOKKI/AETHER login; no production identity or sharing until verified; Local Demo is not production identity. See [final identity ADR](./VOKKI-IDENTITY-TENANCY-ADR.md) and [traceability matrix](./VOKKI-IDENTITY-TENANCY-TRACEABILITY.md). |
 | D-03: Hybrid local/external AI, task-appropriate routing, explicit consent before external transfer, no silent fallback | Inference, research egress, routing and fallback | Phase 2 consent/egress gate, provider evaluation and security acceptance | No external egress absent per-user authorization; no silent fallback or unsupported local-AI claim. |
 | D-04: Automatic memory with user review/edit/delete/export/reset controls | Memory capture/retrieval, conversation context and account lifecycle | Phase 5 consent, identity, data-lifecycle and user-control acceptance | Do not capture/retrieve memory before explicit memory consent; do not assume retention/deletion timelines or model-training permission. |
 | D-05: Camera understanding only with explicit permission and user-initiated capture; no hidden/background recording | Camera capture, image analysis and persisted stills | Per-platform camera/media permission, data-lifecycle and processing gate | No hidden/background capture; no capture/storage until the bounded operation and lifecycle pass. |
