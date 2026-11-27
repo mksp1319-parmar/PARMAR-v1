@@ -2,21 +2,7 @@ name: PARMAR visual acceptance
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/parmar-visual-acceptance.yml"
-      - "PARMAR/interface/**"
-      - "PARMAR/chat/**"
-      - "PARMAR/research/**"
-      - "PARMAR/safety/**"
-      - "PARMAR/tests/test_voki_interface.js"
   push:
-    paths:
-      - ".github/workflows/parmar-visual-acceptance.yml"
-      - "PARMAR/interface/**"
-      - "PARMAR/chat/**"
-      - "PARMAR/research/**"
-      - "PARMAR/safety/**"
-      - "PARMAR/tests/test_voki_interface.js"
   workflow_dispatch:
 
 permissions:

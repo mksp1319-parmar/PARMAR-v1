@@ -410,6 +410,9 @@ class SQLiteMemoryRepository:
                 )
                 connection.row_factory = sqlite3.Row
                 try:
+                    connection.execute("PRAGMA foreign_keys=ON")
+                    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                        raise MemoryStorageUnavailable("Memory storage is unavailable.")
                     self._initialize(connection)
                     if write:
                         connection.execute("BEGIN IMMEDIATE")

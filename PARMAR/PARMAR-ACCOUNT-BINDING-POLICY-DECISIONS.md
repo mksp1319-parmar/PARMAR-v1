@@ -46,6 +46,16 @@ failure ordering and specialist reviews remain open. These decisions do not
 approve the proposed mechanisms below, B2 schema, implementation, migration,
 provider selection or release. D1–D16 and APR-01–APR-20 are unchanged.
 
+### 2.2 PO-13 product-packaging question
+
+The exact historical phrase “fully primium type” is withdrawn as a
+non-operative phrase. PO-13 is **APPROVED — Option A** by the Product Owner
+with decision date 2026-11-26. This does not interpret the phrase as paid
+entitlement, cancel or define PARMAR Premium, or authorize subscription,
+billing, pricing or access-control changes. The decision record is in the
+[consolidated PO-13 decision brief](./ACCOUNT-BINDING-CONSOLIDATED-APPROVAL-PACKET.md#po-13-decision-brief)
+and [Product Owner decision framework](./ACCOUNT-BINDING-PRODUCT-OWNER-DECISION-FRAMEWORK.md) §D.
+
 ## 3. Decision matrix
 
 The detailed defaults below remain proposals except where a governing record explicitly approves the same bounded policy direction. APR-01–APR-20 approval does not approve unlisted details or technical mechanisms. Product Owner approval is required only for residual product choices not already settled within D1–D16 or the APR baseline; specialist and implementation gates remain separate.

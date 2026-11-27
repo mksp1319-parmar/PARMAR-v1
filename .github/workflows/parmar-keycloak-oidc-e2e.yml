@@ -2,23 +2,55 @@ name: PARMAR Keycloak OIDC E2E infrastructure
 
 on:
   workflow_dispatch:
+    inputs:
+      live-e2e-confirmation:
+        description: "Type RUN-LIVE-E2E to authorize the disposable Keycloak run"
+        required: true
+        type: choice
+        options:
+          - CANCEL
+          - RUN-LIVE-E2E
+        default: CANCEL
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   keycloak-oidc-infrastructure:
     name: Isolated Keycloak OIDC infrastructure
+    environment: parmar-keycloak-e2e
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
       PARMAR_E2E_RUN_ID: ${{ github.run_id }}
       PARMAR_E2E_RUN_ATTEMPT: ${{ github.run_attempt }}
-      # Pinned immutable linux/amd64 child digest; selection approval/provenance are not evidenced here.
-      PARMAR_KEYCLOAK_IMAGE: "quay.io/keycloak/keycloak@sha256:75b5c435a83b530caba5923922f93d47b2e3f8b4ad9e79200581122996653e55"
+      # Deliberately unset until provider/image selection, provenance and Gate 6 approval are recorded.
+      PARMAR_KEYCLOAK_IMAGE: ""
     steps:
+      - name: Require the protected main workflow branch
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: |
+          printf '::error::Live Keycloak E2E must only dispatch from protected main.\n' >&2
+          exit 1
+
+      - name: Require explicit live-E2E confirmation
+        if: ${{ inputs.live-e2e-confirmation != 'RUN-LIVE-E2E' }}
+        run: |
+          printf '::error::Live Keycloak E2E requires the RUN-LIVE-E2E dispatch confirmation.\n' >&2
+          exit 1
+
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Require formal Gate 6 specialist approvals
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/validate-specialist-approvals.py \
+            --stage gate6 \
+            --commit "${{ github.sha }}" \
+            --author-login "${{ github.actor }}"
 
       - name: Validate GitHub Actions workflow syntax
         timeout-minutes: 3
@@ -45,7 +77,7 @@ jobs:
         timeout-minutes: 3
         run: python3 -m PARMAR.tests.keycloak_e2e_bootstrap prepare
 
-      - name: Pull pinned immutable Keycloak image
+      - name: Pull approved immutable Keycloak image
         timeout-minutes: 10
         run: bash .github/scripts/parmar-keycloak-oidc-e2e-infra.sh pull-image
 

@@ -292,6 +292,10 @@ start_keycloak() {
     --name "$RUN_CONTAINER" \
     --network "$RUN_NETWORK" \
     --label "parmar.e2e.owner=${RUN_OWNER}" \
+    --cap-drop=ALL \
+    --security-opt=no-new-privileges \
+    --pids-limit=512 \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
     --publish 127.0.0.1:8443:8443 \
     --group-add "$runner_gid" \
     --mount "type=bind,src=${keycloak_tls_dir},dst=/run/parmar-e2e/tls,readonly" \

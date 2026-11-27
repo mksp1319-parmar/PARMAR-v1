@@ -12,6 +12,7 @@ from copy import deepcopy
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import parse_qsl, unquote, urlparse, urlsplit
 from uuid import UUID
 
@@ -606,6 +607,7 @@ def _execution_authorization_check(
     approval_id: object = None,
     approval_binding: object = None,
     decision_id: str | None = None,
+    execution_claim_id: str | None = None,
     execution_context: dict | None = None,
     require_active_profile: bool = False,
 ) -> bool:
@@ -666,6 +668,7 @@ def _execution_authorization_check(
             user_id=context.principal.user_id,
             session_id=context.session_id,
             approval_binding=approval_binding,
+            execution_claim_id=execution_claim_id,
         )
     except (
         ApprovalStorageUnavailable,
@@ -2505,23 +2508,30 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
             if will_execute:
                 execution = pending.execution_context
                 service = ChatService(external_authorization=EXTERNAL_AUTHORIZATION)
-                execution_check = lambda: _execution_authorization_check(
-                    self,
-                    context,
-                    approval_id=approval_id,
-                    approval_binding=expected_binding,
-                    decision_id=pending.decision_id,
-                    execution_context=execution,
-                    require_active_profile=True,
-                )
                 current_context_check = lambda: _execution_authorization_check(
                     self,
                     context,
                     execution_context=execution,
                     require_active_profile=True,
                 )
-                try:
-                    result = service.respond_approved(
+
+                def run_approved_effect(
+                    execution_claim_id: str,
+                    store_execution_check: Callable[[], bool],
+                ) -> dict[str, Any]:
+                    def execution_check() -> bool:
+                        return store_execution_check() and _execution_authorization_check(
+                            self,
+                            context,
+                            approval_id=approval_id,
+                            approval_binding=expected_binding,
+                            decision_id=pending.decision_id,
+                            execution_claim_id=execution_claim_id,
+                            execution_context=execution,
+                            require_active_profile=True,
+                        )
+
+                    response = service.respond_approved(
                         pending.request_text,
                         approved_response=result,
                         dashboard=pending.dashboard,
@@ -2538,18 +2548,27 @@ class PARMARRequestHandler(BaseHTTPRequestHandler):
                         execution_check=execution_check,
                     )
                     if not execution_check():
-                        self.send_error(403, "Execution authorization is no longer valid")
-                        return
-                    if not PENDING_APPROVALS.complete_execution(
+                        raise ExecutionAuthorizationUnavailable(
+                            "Execution authorization is no longer valid."
+                        )
+                    return response
+
+                try:
+                    effect_completed, result = PENDING_APPROVALS.execute_approved_effect(
                         approval_id,
                         user_id=context.principal.user_id,
                         session_id=context.session_id,
                         approval_binding=expected_binding,
-                    ):
+                        effect=run_approved_effect,
+                    )
+                    if not effect_completed:
                         self.send_error(409, "Pending approval is no longer valid")
                         return
                 except ExecutionAuthorizationUnavailable:
                     self.send_error(503, "Execution authorization is unavailable")
+                    return
+                except ApprovalStorageUnavailable:
+                    self.send_error(503, "Pending approval storage is unavailable")
                     return
                 try:
                     research_result = _restrict_research_response(result)

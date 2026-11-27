@@ -219,7 +219,7 @@ class SQLiteOIDCStateStore:
             with sqlite3.connect(self.database_path, timeout=5) as connection:
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.execute("PRAGMA synchronous = FULL")
-                connection.execute("PRAGMA foreign_keys = ON")
+                self._enable_and_verify_foreign_keys(connection)
                 connection.execute(
                     """
                     CREATE TABLE IF NOT EXISTS oidc_authorization_states (
@@ -237,6 +237,15 @@ class SQLiteOIDCStateStore:
                     "CREATE INDEX IF NOT EXISTS oidc_state_expiry "
                     "ON oidc_authorization_states(expires_at)"
                 )
+
+    @staticmethod
+    def _enable_and_verify_foreign_keys(
+        connection: sqlite3.Connection,
+    ) -> None:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute("PRAGMA foreign_keys").fetchone()
+        if row is None or row[0] != 1:
+            raise OIDCUnavailable("OIDC state storage is unavailable.")
 
     def create(
         self,
@@ -267,7 +276,7 @@ class SQLiteOIDCStateStore:
         try:
             with self._lock:
                 with sqlite3.connect(self.database_path, timeout=5) as connection:
-                    connection.execute("PRAGMA foreign_keys = ON")
+                    self._enable_and_verify_foreign_keys(connection)
                     connection.execute(
                         """
                         INSERT INTO oidc_authorization_states(
@@ -309,7 +318,7 @@ class SQLiteOIDCStateStore:
         try:
             with self._lock:
                 with sqlite3.connect(self.database_path, timeout=5) as connection:
-                    connection.execute("PRAGMA foreign_keys = ON")
+                    self._enable_and_verify_foreign_keys(connection)
                     connection.execute("BEGIN IMMEDIATE")
                     row = connection.execute(
                         """

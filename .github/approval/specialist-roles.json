@@ -1,0 +1,34 @@
+{
+  "roles": [
+    {
+      "name": "Security",
+      "required_authority": "Named independent security specialist or organization security authority",
+      "separation": "Must not be the implementation author or approver of this review"
+    },
+    {
+      "name": "Data Model",
+      "required_authority": "Named identity/data-model specialist with SQLite/schema and migration authority",
+      "separation": "Must independently review B2/B3 data invariants"
+    },
+    {
+      "name": "Operations",
+      "required_authority": "Named operations owner or infrastructure specialist",
+      "separation": "Must independently verify topology, backup/restore and migration boundaries"
+    },
+    {
+      "name": "Privacy/Legal",
+      "required_authority": "Qualified privacy/legal reviewer assigned by the organization",
+      "separation": "Must not rely on engineering source inspection as independent legal evidence"
+    },
+    {
+      "name": "Provider Compatibility",
+      "required_authority": "Named provider owner or protocol interoperability authority",
+      "separation": "Must verify exact issuer, subject, claim and lifecycle behavior"
+    },
+    {
+      "name": "Release Authority",
+      "required_authority": "Named organization release authority with change-control authority",
+      "separation": "Must verify all prior gates and exact deployment scope"
+    }
+  ]
+}

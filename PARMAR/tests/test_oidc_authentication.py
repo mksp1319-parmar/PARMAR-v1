@@ -1,6 +1,7 @@
 import io
 import json
 import socket
+import sqlite3
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -1533,6 +1534,29 @@ def test_oidc_callback_state_store_outage_returns_503_without_exchange(monkeypat
     assert response["status"] == 503
     assert "state database details" not in json.dumps(response)
     assert SESSION_COOKIE_NAME not in str(response.get("headers", {}).get("Set-Cookie", ""))
+
+
+def test_sqlite_oidc_state_store_enables_and_verifies_foreign_keys():
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        SQLiteOIDCStateStore._enable_and_verify_foreign_keys(connection)
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+def test_sqlite_oidc_state_store_rejects_unverifiable_foreign_keys():
+    class FakeConnection:
+        def execute(self, sql):
+            if sql.strip().upper() == "PRAGMA FOREIGN_KEYS = ON":
+                return None
+            if sql.strip().upper() == "PRAGMA FOREIGN_KEYS":
+                return SimpleNamespace(fetchone=lambda: (0,))
+            raise AssertionError(sql)
+
+    with pytest.raises(OIDCUnavailable, match="state storage is unavailable"):
+        SQLiteOIDCStateStore._enable_and_verify_foreign_keys(FakeConnection())
 
 
 def test_sqlite_oidc_state_store_wraps_runtime_storage_outage(tmp_path):

@@ -1,0 +1,12 @@
+# Repository-owner fallback review coverage. These entries do not establish
+# independent specialist authority or replace named specialist teams.
+.github/approval/** @mksp1319-parmar
+.github/scripts/validate-specialist-approvals.py @mksp1319-parmar
+.github/workflows/parmar-specialist-approvals.yml @mksp1319-parmar
+.github/workflows/parmar-keycloak-oidc-e2e.yml @mksp1319-parmar
+PARMAR/ACCOUNT-BINDING-B2-SCHEMA-DESIGN.md @mksp1319-parmar
+PARMAR/ACCOUNT-BINDING-B3-IMPLEMENTATION-PLAN.md @mksp1319-parmar
+PARMAR/ACCOUNT-BINDING-CONSOLIDATED-APPROVAL-PACKET.md @mksp1319-parmar
+PARMAR/identity_contracts.py @mksp1319-parmar
+PARMAR/identity_store.py @mksp1319-parmar
+PARMAR/oidc.py @mksp1319-parmar

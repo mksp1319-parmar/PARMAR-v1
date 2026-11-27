@@ -118,6 +118,41 @@ def test_session_creation_stores_only_token_hash_and_resolves_server_identity():
     }
 
 
+def test_identity_session_is_revoked_when_post_creation_account_check_fails():
+    repository = InMemorySessionRepository()
+    account_identity = AccountIdentity.generate()
+    authentication = AuthenticationContext(
+        START,
+        START + timedelta(minutes=5),
+    )
+    status_checks = 0
+
+    def account_status(_account_identity):
+        nonlocal status_checks
+        status_checks += 1
+        if status_checks == 1:
+            return True
+        raise OSError("identity store unavailable")
+
+    manager = SessionManager(
+        repository,
+        SessionPolicy(idle_timeout_seconds=60, absolute_timeout_seconds=300),
+        account_status_lookup=account_status,
+    )
+
+    with pytest.raises(SessionStorageUnavailable):
+        manager.create_identity_session(
+            fixed_identity_resolver(account_identity, authentication),
+            "verified-test-evidence",
+            now=START,
+        )
+
+    sessions = list(repository._sessions.values())
+    assert len(sessions) == 1
+    assert sessions[0].status == "REVOKED"
+    assert repository.get_identity_evidence_state(authentication.evidence_id) is IdentityEvidenceState.REVOKED
+
+
 def test_invalid_random_session_token_is_anonymous():
     manager, _repository = make_manager()
 

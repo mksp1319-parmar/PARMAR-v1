@@ -9,8 +9,10 @@
 > clear the existing protected-operation runtime NO-GO, select a provider,
 > enable OIDC, or establish production readiness.
 >
-> The unresolved phrase “fully primium type” is preserved verbatim and is not
-> interpreted here.
+> The exact historical phrase “fully primium type” is preserved as evidence
+> but is withdrawn as non-operative by Product Owner Option A, recorded
+> 2026-11-26. PO-13 does not cancel or define PARMAR Premium and authorizes no
+> subscription, billing or entitlement implementation.
 
 ## 1. Purpose, authority and repository baseline
 
@@ -85,7 +87,7 @@ continue resolving identities from both old and new representations.
 
 | Responsibility | Existing owner/boundary | Planned change |
 |---|---|---|
-| Account/provider persistence and schema version | `identity_store.py`, `SQLiteIdentityRepository` | Own new binding/provider/lifecycle tables, constraints, guarded transactions, schema preflight and migration. It is the only writer of ownership. |
+| Account/provider persistence and schema version | `identity_store.py`, `SQLiteIdentityRepository` | Own new binding/provider/lifecycle tables, constraints, guarded transactions, schema preflight and migration. It is the only writer of ownership. The disposable DDL stores subject text in plaintext for constraint testing; approved at-rest protection and a compatible exact-match uniqueness strategy are prerequisites to production schema acceptance. |
 | Typed account/provider identity and resolution | `identity_contracts.py`, `identity.py` | Preserve immutable value objects and exact existing-binding lookup. Add typed lifecycle commands/results only after policy approval; never accept browser-supplied account identity as proof. |
 | OIDC assertion validation/state | `oidc.py` | Reuse verifier and one-time state mechanisms where their contract fits. Add a distinct link-purpose transaction and purpose binding; do not turn the login callback into a link callback. Provider assurance additions depend on the provider/security gate. |
 | HTTP routing and CSRF/session integration | `interface/futuristic_app.py` | Thin route orchestration only. Enforce authenticated session, session-bound CSRF, origin policy, transaction ownership and generic conflict responses. Delegate lifecycle decisions to services. |
@@ -260,7 +262,67 @@ eligibility or support role. SQL access is not an authorization boundary.
   behavior, but never treat it as atomic with a provider call or another
   database write.
 
-### 5.3 Hard execution-fence boundary
+### 5.3 Disablement, reactivation, closure and recovery boundaries
+
+These are implementation requirements derived from the limited approved
+policy outcomes; they do not choose a lifecycle authority, grant an actor
+authority, or approve storage/retention policy.
+
+- **Disablement:** deny new authentication and protected authorization,
+  preserve binding/history rows, and advance the authoritative account
+  security version. Existing sessions and approvals must be rejected or
+  invalidated within the approved consistency boundary. Current code has
+  account status reads and session revocation but no supported lifecycle
+  disablement writer spanning the separate stores.
+- **Reactivation:** require a separately approved authority and evidence
+  policy. Preserve the same owner and binding history; do not restore old
+  sessions, identity evidence, approvals or browser credentials. Require fresh
+  authentication. No reactivation route or authority is implemented.
+- **Closure/deletion:** keep closure, binding revocation, data deletion and
+  retention reporting distinct. No closure state, grace period, tombstone
+  retention, or deletion behavior is selected here. Do not delete/reassign
+  bindings or identities as a side effect of account closure.
+- **Recovery/restoration:** independent evidence and explicit confirmation are
+  required by the approved outcome. Restore only the same proven account;
+  ambiguous ownership stays quarantined. No profile, email, legacy ID, support
+  assertion or prior session is sufficient evidence.
+- **Last usable method:** perform the availability check and the unlink state
+  transition in the same authoritative transaction. A preflight read followed
+  by a separate write is raceable. Concurrent link/unlink operations must be
+  serialized against the same account/provider and method set.
+- **Retries and terminal outcomes:** every request and durable effect uses a
+  stable operation/effect identifier. Replay returns the recorded outcome,
+  never repeats proof consumption or ownership mutation. Distinguish retryable
+  failure from terminal failure and indeterminate external acknowledgement.
+  An indeterminate irreversible effect requires operator evidence and a
+  separate recovery authority; it is not safe to retry blindly.
+- **Audit and notice:** bind durable audit/outbox intent to the authoritative
+  lifecycle commit. Do not treat queued as delivered. The required-audit
+  failure mode, notification channels, retention and exception authority
+  remain specialist decisions.
+
+### 5.4 Cross-store consistency alternatives and rehearsal boundary
+
+Current PARMAR account status, sessions, pending approvals, audit and
+notifications use separate repositories/databases. Independent transactions,
+revalidation calls, version snapshots or a per-approval `EXECUTING` claim do
+not make the account change and downstream effects atomic.
+
+| Approach | What it can guarantee | Limit / decision needed |
+|---|---|---|
+| Current separate stores plus request-time version checks | Detect some stale state and fail closed when a dependency is unavailable. | Check-to-effect races and partial invalidation remain. Not an atomic fence; cannot authorize protected effects. |
+| One transactional authority for account/binding status, epoch, session/approval authorization, operation claim, local effect and outbox intent | A single database transaction can serialize local authorization/effect commits against disablement, provided every writer and executor uses that authority and validates the expected epoch. | Requires topology and schema migration decisions; does not make an external provider, email service, or arbitrary API call atomic. No current PARMAR service has this complete contract. |
+| Transactional outbox plus idempotent/fenced consumers | The authority can atomically persist state and intent; consumers can retry delivery with stable IDs and reject stale fencing epochs. | Delivery is generally at-least-once. Exactly-once external effects require the receiver to enforce idempotency/fencing or an explicit reconciliation path. Ambiguous acknowledgements need operations policy. |
+| Distributed transaction/coordinator or linearizable external authorization service | May coordinate separately hosted participants if every participant supports the protocol and failure semantics. | Infrastructure and protocol are absent; cannot be inferred from SQLite or selected without Operations/Security approval. |
+
+No production option is selected in this blueprint. The new
+`tests/test_account_binding_atomic_rehearsal.py` fixture models one
+disposable SQLite authority and an idempotent local sink. It is an executable
+reference experiment only: it is not the PARMAR runtime, does not include
+external systems or real account data, and does not prove a supported
+deployment topology or protected-operation atomic fence.
+
+### 5.5 Hard execution-fence boundary
 
 The current core contract and `runtime_no_go.py` keep protected side-effect
 paths blocked. Version revalidation before a later write still has a
@@ -358,7 +420,7 @@ adapters for ordinary CI:
 |---|---|
 | State machine | Every allowed transition succeeds only with required actor/proof/confirmation; every omitted, skipped, replayed or invalid transition fails without partial mutation. |
 | Ownership | Partial-index predicate reserves ACTIVE and PENDING_UNLINK only; non-owning PENDING rows do not reserve the provider identity; two accounts cannot activate the same issuer/subject regardless of adapter; revoked historical owner cannot transfer; same-owner reactivation requires new proof. |
-| SQLite constraints | Parent keys and FK column definitions match; FK pragma is on and verified per connection; missing/old SQLite feature fails closed; issuer/subject SQL validation preserves the current application bounds for ordinary non-NUL values and rejects empty/edge-whitespace values without normalization; embedded U+0000 requires an explicit application/data-model decision because SQLite `length(TEXT)` stops there while Python `len()` does not; inserting the same issuer/subject under a different adapter cannot create a second identity row; direct active insert, reassignment, arbitrary version, skipped transition and delete are rejected. |
+| SQLite constraints | Parent keys and FK column definitions match; FK pragma is on and verified per connection; missing/old SQLite feature fails closed; issuer/subject SQL validation preserves the current application bounds for ordinary non-NUL values and rejects empty/edge-whitespace values without normalization; current application and SQL checks reject embedded U+0000, while final provider-facing acceptance remains a data-model/provider decision; inserting the same issuer/subject under a different adapter cannot create a second identity row; direct active insert, reassignment, arbitrary version, skipped transition and delete are rejected. |
 | Concurrency | Independent connections contend for activation; exactly one owner succeeds; stale expected version loses; uniqueness remains valid after rollback and restart. |
 | Lifecycle security | Cross-account IDOR, CSRF/origin failure, transaction/session mismatch, nonce replay, provider proof replay, unknown account, disabled account and support-only claims fail closed. |
 | Unlink/recovery | Last usable method cannot be removed; count is rechecked in final transaction; recovery cannot bind before `VERIFIED`; duplicate/replayed recovery confirmation is denied. |
@@ -435,8 +497,10 @@ been corrected.
 | D16 | Legacy/Local Demo records remain unmapped until approved owner verification | Mapping evidence, migration procedure, collision handling and rollback |
 
 Managed/family/organization ownership remains deferred; delegation cannot
-grant account ownership. The phrase “fully primium type” remains unresolved
-and is not interpreted.
+grant account ownership. PO-13 is approved as Option A and the exact historical
+phrase “fully primium type” is withdrawn as non-operative. It does not alter
+PARMAR Premium or future product scope and authorizes no subscription,
+billing, entitlement or access-control implementation.
 
 ## 10. Repository-grounded implementation sequence
 
@@ -447,7 +511,7 @@ suite in stage 7. Gate 1–3 approval is a prerequisite to all implementation.
 
 | Stage | Work and dependencies | Acceptance criteria | Planned verification |
 |---|---|---|---|
-| 1. Database schema and migration | After Gates 1–3 and data-model approval. Extend only the authoritative identity SQLite store; follow its schema-version, `BEGIN IMMEDIATE`, FK verification and rollback patterns. | Option B invariants; no dual-writer/resolver; durable migration manifest; exact uniqueness/FKs/indexes/triggers; issuer/subject input constraints preserve current application bounds without normalization after the embedded-U+0000 behavior is explicitly resolved; ambiguous legacy rows quarantined; backup/restore, idempotent resume and rollback evidence; no inferred ownership. | `python -m pytest PARMAR/tests/test_identity_store.py PARMAR/tests/test_account_registry.py -q` plus `python -m pytest PARMAR/tests/account_binding_b2_schema_validation.py -q` only after separate Gate 2 prototype authorization; new migration cases; isolated backup/restore rehearsal. |
+| 1. Database schema and migration | After Gates 1–3 and data-model approval. Extend only the authoritative identity SQLite store; follow its schema-version, `BEGIN IMMEDIATE`, FK verification and rollback patterns. | Option B invariants; no dual-writer/resolver; durable migration manifest; exact uniqueness/FKs/indexes/triggers; issuer/subject input constraints preserve current application bounds without normalization; the current prototype rejects embedded U+0000, but its final provider-facing policy remains for authority decision; provider subject at-rest protection and an approved exact-match uniqueness strategy; ambiguous legacy rows quarantined; backup/restore, idempotent resume and rollback evidence; no inferred ownership. | `python -m pytest PARMAR/tests/test_identity_store.py PARMAR/tests/test_account_registry.py -q` plus `python -m pytest PARMAR/tests/account_binding_b2_schema_validation.py -q` (synthetic prototype already separately authorized; passing it is not Gate 2 acceptance); migration cases and isolated backup/restore rehearsal remain required. |
 | 2. Account-binding lifecycle service | After stage 1. Keep ownership writes in one identity-store transaction; proof verification is supplied through typed, provider-neutral interfaces. | Allowed transitions only; expected-state/version checks; no reassignment; same-owner reactivation requires new proof; no partial mutation on denial/failure; stable lifecycle/reconciliation ID committed atomically. | Focused lifecycle/state-machine tests and direct-write/constraint tests in the identity-store and lifecycle test modules. |
 | 3. OIDC linking and identity verification | After stage 2 and approved provider/assurance contract. Add a link-purpose flow distinct from login; current login remains disabled by default and production-disabled. | Link/login purpose separation; account/session-bound state, nonce and PKCE; approved freshness claims; one-time consumption; conflict-safe generic outcomes; unknown identities do not provision accounts; secrets/proof excluded from outputs/logs. | `python -m pytest PARMAR/tests/test_oidc_authentication.py PARMAR/tests/test_identity_http.py -q`; live-provider checks are deferred to stage 8. |
 | 4. Session and approval invalidation | Security-version definition is part of stage 1; lifecycle commits in stage 2 increment it. Implement version snapshot, resolution and idempotent invalidation before any link workflow is considered usable. | Stale sessions/evidence/approvals fail closed across restart; relevant account/binding changes invalidate by approved scope; unavailable authoritative state denies; ownership/integrity checks remain; no claim that version check is an atomic side-effect fence. | `python -m pytest PARMAR/tests/test_sessions.py PARMAR/tests/test_approval_integrity.py PARMAR/tests/test_approval_persistence.py -q` plus account/version race tests. |
@@ -473,7 +537,7 @@ are:
 | Gate | Exact acceptance criteria | Evidence verified in this review | Status and decision material |
 |---|---|---|---|
 | 1 — Policy approval (Product Owner) | All 16 decisions and every §D matter have a disposition, named owner, required approvers and recorded status; no recommendation is mislabeled approved. Record required Security/Operations reviews. | Framework §§C.1–C.16 record limited-scope Product Owner decisions as approved. The approval register and user approval review record APR-01–APR-20 as approved proposed-policy baseline on 2026-11-13. The framework and consolidated packet record additional limited Product Owner choices on 2026-11-25. No separate attributable Security/Operations review or complete named-owner assignment was found. | **NOT PASSED.** Preserve D1–D16 and APR-01–APR-20 within their recorded scopes and do not request reapproval. Retain the 2026-11-25 bounded choices; complete the remaining details and named-owner assignments, and record required Security/Operations reviews. Provider selection, exact assurance, recovery thresholds/assisted routes, notification events/channels beyond durable enqueue for ownership changes, audit architecture, transition authorities beyond the current states, class-specific retention, exceptional correction, schema and migration details remain gated. |
-| 2 — Identity/binding data-model approval (Identity/data-model owner) | After Gate 1: approve cardinality, exact issuer/subject normalization independent of adapter ID, verifier-provenance semantics, binding ownership/immutability, lifecycle states, audit history, session invalidation and cross-store failure semantics. Evidence must include reviewed schema/migration/rollback, invariant checks and independent-connection concurrency showing at most one mapping and no partial second mapping. Product Owner and Security approve the model; Operations reviews operational/cross-store semantics where applicable. | B2 supplies a proposed Option B schema, invariants, transactions, migration/rollback and failure model. The Product Owner has selected issuer+subject as the identity tuple regardless of adapter, but exact canonicalization/migration and multiple-verifier provenance retention are deferred. No B2 acceptance record, B2 migration, independent-connection evidence for its partial index/state machine, or backup/restore rehearsal was found. Existing registry duplicate-insert coverage concerns the current table and does not pass B2's criterion. B2 also says runtime SQLite validation is needed before Gate 2, creating an evidence-order dependency not resolved by the framework. | **NOT PASSED.** The Product Owner's limited decisions do not accept the full B2 model. Security and the identity/data-model owner must approve the schema contract, with Operations approval for operational failure/topology choices. Decide how to produce pre-Gate-2 executable constraint/concurrency evidence (including a cross-adapter duplicate-key case; for example, separately authorize a bounded disposable schema prototype) or supply equivalent independent evidence. No DDL/prototype was run. Do not start any migration unless separately authorized after Gate 2. |
+| 2 — Identity/binding data-model approval (Identity/data-model owner) | After Gate 1: approve cardinality, exact issuer/subject normalization independent of adapter ID, verifier-provenance semantics, binding ownership/immutability, lifecycle states, audit history, session invalidation and cross-store failure semantics. Evidence must include reviewed schema/migration/rollback, invariant checks and independent-connection concurrency showing at most one mapping and no partial second mapping. Product Owner and Security approve the model; Operations reviews operational/cross-store semantics where applicable. | B2 supplies a proposed Option B schema, invariants, transactions, migration/rollback and failure model. The Product Owner has selected issuer+subject as the identity tuple regardless of adapter, but exact canonicalization/migration and multiple-verifier provenance retention are deferred. The authorized synthetic harness executes the proposed DDL and covers constraints, transitions, version guards, adapter-independent uniqueness and races using separate SQLite connections in one process. It does not execute the application migration, verify an independent-process or production topology, or exercise backup/restore recovery. The live working tree's B2 test run is recorded in the consolidated packet; no B2 acceptance or independent reviewer record exists. | **NOT PASSED.** The Product Owner's limited decisions do not accept the full B2 model. Security and the identity/data-model owner must approve the schema contract, with Operations approval for operational failure/topology choices. Remaining evidence includes migration and rollback mechanics, independent-process/supported-topology behavior, backup/restore recovery, and explicit review of whether current NUL rejection is an accepted policy. Do not start any real-data migration unless separately authorized after Gate 2. |
 | 3 — Threat model and abuse-case review (Security) | After Gates 1–2: assign a mitigation and owner for takeover, session theft, replay, CSRF, provider compromise, duplicate/concurrent binding, recovery abuse, last-method unlink, insider abuse, notification/audit outage and state races; Security records the review and the Product Owner accepts residual risks. | B2 §8 lists relevant threats and proposed controls, and B3 §8.1 proposes tests. The broad identity architecture review and runtime NO-GO audit are not a completed account-binding threat/abuse matrix. No approved Security review or Product Owner residual-risk disposition for this model was found. The separate Local Demo dispatch path now has current-source mitigation and focused-test evidence; independent Security/deployment closure remains pending. | **NOT PASSED.** Security must review a threat-to-control-to-test-to-owner matrix and document mitigations and residual risks; the Product Owner must explicitly accept or reject each residual risk, with Operations owning operational mitigations. Track the Local Demo verification separately; it does not substitute for this gate. |
 
 ### Gate decision packet
@@ -509,7 +573,8 @@ scopes. These include:
   details depend on the reviews/evidence listed in the consolidated packet.
   Per-threat residual-risk disposition is still required after Security
   review. PO-01, PO-09, PO-11 and PO-12 record already-approved current
-  deferrals/boundaries; PO-13 remains unresolved and is not to be interpreted.
+  deferrals/boundaries; PO-13 is resolved by Product Owner Option A and its
+  exact phrase remains historical only.
 - **Security:** threat model; proof/replay/CSRF requirements; `auth_time`,
   `max_age`, `acr` and assurance policy; recovery evidence/abuse controls;
   writer/file access controls; audit integrity/failure policy; reconciliation
@@ -559,11 +624,26 @@ Security/deployment closure and all framework gate clearances remain pending.
 The original B3 review changed planning documentation only and ran no tests.
 On 2026-11-25, the follow-up approval-to-completion task recorded limited
 Product Owner choices and corrected the B2 issuer/subject uniqueness proposal;
-that pass changed documentation only. Later work prepared the schema-only
-validation harness. A safe in-memory SQLite expression probe then confirmed
-that `length(TEXT)` stops at embedded U+0000 while Python `len()` counts the
-remaining characters; exact SQL/application length parity therefore remains
-an explicit data-model/provider decision. The harness has 10 tests collected
-without running fixtures or DDL. No application lifecycle code, migration,
-dependency, provider setting or runtime gate was changed. No B2 DDL
-execution, live provider operation or deployment test was run.
+that pass changed documentation only. Later work prepared and executed the
+synthetic schema harness under prototype authorization
+`3509b65517d31ed63c2c2f50c22c0fc8f8d7cb140ad5487cbad7bc4b19180ea8`.
+The probe confirmed SQLite `length(TEXT)` stops at embedded U+0000 while
+Python `len()` counts remaining characters. The current Python value object
+and B2 SQL constraint both reject embedded U+0000, so that SQLite behavior
+does not establish an acceptance mismatch in the prototype; the final
+provider-facing policy remains deferred. The initial 53-test harness was
+expanded to 58 passing cases against the disposable temporary SQLite database,
+including race, interrupted-transaction/process-exit and backup/restore
+checks. No application lifecycle code,
+migration, dependency, provider setting or runtime gate was changed. No
+real-data migration, restore rehearsal, live provider operation or deployment
+test was run.
+
+The continuation added a disposable single-database disablement/outbox
+reference rehearsal (13 passing tests) and a synthetic migration classification,
+interruption/restart and backup/restore rehearsal (4 passing tests). It also
+added live-gated checks for disabled-account session revocation, issuer and
+audience mismatch, and an unpublished JWKS key ID. Because no authorized live
+environment is configured, those scenarios remain unexecuted. These are
+prototype and gated-test artifacts, not implementation or production
+guarantees.

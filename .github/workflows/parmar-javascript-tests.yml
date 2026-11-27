@@ -2,15 +2,7 @@ name: PARMAR JavaScript tests
 
 on:
   push:
-    paths:
-      - ".github/workflows/parmar-javascript-tests.yml"
-      - "PARMAR/tests/**"
-      - "PARMAR/interface/static/**"
   pull_request:
-    paths:
-      - ".github/workflows/parmar-javascript-tests.yml"
-      - "PARMAR/tests/**"
-      - "PARMAR/interface/static/**"
   workflow_dispatch:
 
 permissions:

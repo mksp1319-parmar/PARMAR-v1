@@ -1,0 +1,18 @@
+{
+  "environment_name": "parmar-keycloak-e2e",
+  "deployment_branch_policy": {
+    "protected_branches": true,
+    "custom_branch_policies": false
+  },
+  "required_reviewers": [],
+  "secrets": [],
+  "variables": {},
+  "activation_boundary": "No Environment or reviewer configuration is active until the repository administrator creates it.",
+  "required_attestation": "GitHub requires approval from one listed reviewer only; this is a dispatch safeguard, not multi-role specialist approval. Verify reviewer authority and record formal role decisions separately.",
+  "live_e2e": {
+    "production_oidc": false,
+    "provider_image": "",
+    "exact_confirmation": "RUN-LIVE-E2E",
+    "cleanup_required": true
+  }
+}

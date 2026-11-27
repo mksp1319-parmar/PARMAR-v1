@@ -16,7 +16,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from uuid import UUID
 
 from PARMAR.chat.context import ChatContext
@@ -98,6 +98,45 @@ def _cancellation_audit(
         "binding_fingerprint": binding.scope_fingerprint,
         "reason_code": reason_code,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _approval_now(now: float | None) -> datetime:
+    if now is None:
+        return datetime.now(timezone.utc)
+    if type(now) not in {int, float} or not isinstance(now, (int, float)):
+        raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+    try:
+        timestamp = float(now)
+        if not (float("-inf") < timestamp < float("inf")):
+            raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError) as error:
+        raise ApprovalStorageUnavailable("Approval storage is unavailable.") from error
+
+
+def _execution_audit(
+    pending: "PendingApproval",
+    token_hash: str,
+    user_id: UUID,
+    session_id: UUID,
+    execution_claim_id: str,
+    now: float | None,
+) -> dict[str, Any]:
+    binding = pending.approval_binding
+    if binding is None:
+        raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+    timestamp = _approval_now(now).isoformat()
+    return {
+        "version": 1,
+        "event": "APPROVAL_EXECUTION_COMPLETED",
+        "approval_ref": token_hash,
+        "actor_user_id": str(user_id),
+        "session_id": str(session_id),
+        "decision_id": pending.decision_id,
+        "binding_fingerprint": binding.scope_fingerprint,
+        "execution_claim_id": execution_claim_id,
+        "timestamp": timestamp,
     }
 
 
@@ -203,6 +242,7 @@ class PendingApproval:
     approval_binding: ActionApprovalBinding | None = None
     state: ApprovalState = ApprovalState.PENDING
     audit_evidence: dict[str, Any] | None = None
+    execution_claim_id: str | None = None
 
 
 class PendingApprovalStore:
@@ -815,6 +855,9 @@ class SQLitePendingApprovalStore:
                 )
                 connection.row_factory = sqlite3.Row
                 try:
+                    connection.execute("PRAGMA foreign_keys=ON")
+                    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                        raise ApprovalStorageUnavailable("Approval storage is unavailable.")
                     self._initialize(connection)
                     if write:
                         connection.execute("BEGIN IMMEDIATE")
@@ -1047,6 +1090,18 @@ class SQLitePendingApprovalStore:
                 )
                 if not _valid_approval_binding(approval_binding, user_id):
                     raise ValueError("Invalid approval action binding.")
+            execution_claim_id = raw.get("execution_claim_id")
+            if execution_claim_id is not None and (
+                not isinstance(execution_claim_id, str)
+                or len(execution_claim_id) != 64
+                or any(character not in "0123456789abcdef" for character in execution_claim_id)
+            ):
+                raise ValueError("Invalid approval execution claim.")
+            if execution_claim_id is not None and state not in {
+                ApprovalState.EXECUTING,
+                ApprovalState.CONSUMED,
+            }:
+                raise ValueError("Unexpected approval execution claim.")
             audit_evidence = raw.get("lifecycle_audit")
             if state is ApprovalState.CANCELLED:
                 if (
@@ -1059,12 +1114,31 @@ class SQLitePendingApprovalStore:
                     or audit_evidence.get("decision_id") != decision_id
                     or audit_evidence.get("binding_fingerprint")
                     != (approval_binding.scope_fingerprint if approval_binding else None)
+                    or execution_claim_id is not None
                     or audit_evidence.get("reason_code") not in _CANCELLATION_REASON_CODES
                 ):
                     raise ValueError("Invalid approval cancellation audit.")
                 audit_timestamp = datetime.fromisoformat(audit_evidence["timestamp"])
                 if audit_timestamp.tzinfo is None or audit_timestamp.utcoffset() is None:
                     raise ValueError("Invalid approval cancellation timestamp.")
+            elif state is ApprovalState.CONSUMED and audit_evidence is not None:
+                if (
+                    not isinstance(audit_evidence, dict)
+                    or audit_evidence.get("version") != 1
+                    or audit_evidence.get("event") != "APPROVAL_EXECUTION_COMPLETED"
+                    or audit_evidence.get("approval_ref") != token_hash
+                    or audit_evidence.get("actor_user_id") != str(user_id)
+                    or audit_evidence.get("session_id") != str(session_id)
+                    or audit_evidence.get("decision_id") != decision_id
+                    or audit_evidence.get("binding_fingerprint")
+                    != (approval_binding.scope_fingerprint if approval_binding else None)
+                    or execution_claim_id is None
+                    or audit_evidence.get("execution_claim_id") != execution_claim_id
+                ):
+                    raise ValueError("Invalid approval execution audit.")
+                audit_timestamp = datetime.fromisoformat(audit_evidence["timestamp"])
+                if audit_timestamp.tzinfo is None or audit_timestamp.utcoffset() is None:
+                    raise ValueError("Invalid approval execution timestamp.")
             elif audit_evidence is not None:
                 raise ValueError("Unexpected approval lifecycle audit.")
             expiry = datetime.fromisoformat(expires_at)
@@ -1085,6 +1159,7 @@ class SQLitePendingApprovalStore:
                 approval_binding=approval_binding,
                 state=state,
                 audit_evidence=audit_evidence,
+                execution_claim_id=execution_claim_id,
             )
         except ApprovalStorageUnavailable:
             raise
@@ -1107,6 +1182,7 @@ class SQLitePendingApprovalStore:
         token_hash: str,
         *,
         include_terminal: bool = False,
+        now: float | None = None,
     ) -> tuple[PendingApproval | None, sqlite3.Row | None]:
         row = connection.execute(
             "SELECT * FROM pending_approvals WHERE token_hash = ?",
@@ -1138,7 +1214,7 @@ class SQLitePendingApprovalStore:
         if lifecycle_state is not ApprovalState.PENDING:
             return pending, row
         expiry = datetime.fromisoformat(expires_at)
-        if datetime.now(timezone.utc) >= expiry:
+        if _approval_now(now) >= expiry:
             expired_state = _transition_approval_state(
                 lifecycle_state,
                 ApprovalState.EXPIRED,
@@ -1199,7 +1275,7 @@ class SQLitePendingApprovalStore:
             approval_binding=approval_binding,
         )
         payload = self._canonical(self._encode_pending(pending))
-        expiry = datetime.now(timezone.utc) + timedelta(seconds=self._ttl_seconds)
+        expiry = _approval_now(now) + timedelta(seconds=self._ttl_seconds)
         expires_at = expiry.isoformat()
         tag = self._tag(token_hash, "PENDING", expires_at, payload)
         with self._connection(write=True) as connection:
@@ -1222,7 +1298,7 @@ class SQLitePendingApprovalStore:
         if token_hash is None or not isinstance(user_id, UUID) or not isinstance(session_id, UUID):
             return None
         with self._connection(write=True) as connection:
-            pending, _row = self._read_pending(connection, token_hash)
+            pending, _row = self._read_pending(connection, token_hash, now=now)
             if pending is None or not self._record_matches_owner(pending, user_id, session_id):
                 return None
             return pending
@@ -1242,7 +1318,7 @@ class SQLitePendingApprovalStore:
         if token_hash is None or not isinstance(user_id, UUID) or not isinstance(session_id, UUID):
             return None, "MISSING"
         with self._connection(write=True) as connection:
-            pending, row = self._read_pending(connection, token_hash)
+            pending, row = self._read_pending(connection, token_hash, now=now)
             if row is None:
                 return None, "NOT_FOUND"
             if pending is None:
@@ -1290,7 +1366,7 @@ class SQLitePendingApprovalStore:
         if token_hash is None or not isinstance(user_id, UUID) or not isinstance(session_id, UUID):
             return None, "MISSING"
         with self._connection(write=True) as connection:
-            pending, row = self._read_pending(connection, token_hash)
+            pending, row = self._read_pending(connection, token_hash, now=now)
             if row is None:
                 return None, "NOT_FOUND"
             if pending is None:
@@ -1320,6 +1396,112 @@ class SQLitePendingApprovalStore:
                 return None, "NOT_FOUND"
             return replace(pending, state=state), "OK"
 
+    def claim_execution_effect(
+        self,
+        token: object,
+        *,
+        user_id: object,
+        session_id: object,
+        approval_binding: ActionApprovalBinding,
+        now: float | None = None,
+    ) -> str | None:
+        token_hash = self._token_hash(token)
+        if token_hash is None or not isinstance(user_id, UUID) or not isinstance(session_id, UUID):
+            return None
+        with self._connection(write=True) as connection:
+            pending, row = self._read_pending(
+                connection,
+                token_hash,
+                include_terminal=True,
+                now=now,
+            )
+            if (
+                pending is None
+                or row is None
+                or row["state"] != ApprovalState.EXECUTING.value
+                or pending.execution_claim_id is not None
+                or not self._record_matches_owner(pending, user_id, session_id)
+                or type(approval_binding) is not ActionApprovalBinding
+                or pending.approval_binding != approval_binding
+            ):
+                return None
+            if _approval_now(now) >= datetime.fromisoformat(row["expires_at"]):
+                expired_state = _transition_approval_state(
+                    ApprovalState.EXECUTING,
+                    ApprovalState.EXPIRED,
+                )
+                connection.execute(
+                    "UPDATE pending_approvals SET state = ?, integrity_tag = ? "
+                    "WHERE token_hash = ? AND state = 'EXECUTING'",
+                    (
+                        expired_state.value,
+                        self._tag(
+                            token_hash,
+                            expired_state.value,
+                            row["expires_at"],
+                            row["payload"],
+                        ),
+                        token_hash,
+                    ),
+                )
+                return None
+            execution_claim_id = secrets.token_hex(32)
+            payload_data = json.loads(row["payload"])
+            payload_data["execution_claim_id"] = execution_claim_id
+            payload = self._canonical(payload_data)
+            cursor = connection.execute(
+                "UPDATE pending_approvals SET payload = ?, integrity_tag = ? "
+                "WHERE token_hash = ? AND state = 'EXECUTING'",
+                (
+                    payload,
+                    self._tag(token_hash, row["state"], row["expires_at"], payload),
+                    token_hash,
+                ),
+            )
+            return execution_claim_id if cursor.rowcount == 1 else None
+
+    def execute_approved_effect(
+        self,
+        token: object,
+        *,
+        user_id: object,
+        session_id: object,
+        approval_binding: ActionApprovalBinding,
+        effect: Callable[[str, Callable[[], bool]], Any],
+        now: float | None = None,
+    ) -> tuple[bool, Any]:
+        if not callable(effect):
+            raise TypeError("An approved effect callback is required.")
+        execution_claim_id = self.claim_execution_effect(
+            token,
+            user_id=user_id,
+            session_id=session_id,
+            approval_binding=approval_binding,
+            now=now,
+        )
+        if execution_claim_id is None:
+            return False, None
+        execution_check = lambda: self.authorize_execution(
+            token,
+            user_id=user_id,
+            session_id=session_id,
+            approval_binding=approval_binding,
+            execution_claim_id=execution_claim_id,
+        )
+        if not execution_check():
+            return False, None
+        result = effect(execution_claim_id, execution_check)
+        if not self._complete_execution(
+            token,
+            user_id=user_id,
+            session_id=session_id,
+            approval_binding=approval_binding,
+            execution_claim_id=execution_claim_id,
+            now=now,
+        ):
+            raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+        return True, result
+
     def authorize_execution(
         self,
         token: object,
@@ -1327,6 +1509,7 @@ class SQLitePendingApprovalStore:
         user_id: object,
         session_id: object,
         approval_binding: ActionApprovalBinding,
+        execution_claim_id: str | None = None,
         now: float | None = None,
     ) -> bool:
         token_hash = self._token_hash(token)
@@ -1337,6 +1520,7 @@ class SQLitePendingApprovalStore:
                 connection,
                 token_hash,
                 include_terminal=True,
+                now=now,
             )
             if (
                 pending is None
@@ -1345,29 +1529,24 @@ class SQLitePendingApprovalStore:
                 or not self._record_matches_owner(pending, user_id, session_id)
                 or type(approval_binding) is not ActionApprovalBinding
                 or pending.approval_binding != approval_binding
-            ):
-                return False
-            if datetime.now(timezone.utc) >= datetime.fromisoformat(row["expires_at"]):
-                state = _transition_approval_state(ApprovalState.EXECUTING, ApprovalState.EXPIRED)
-                connection.execute(
-                    "UPDATE pending_approvals SET state = ?, integrity_tag = ? "
-                    "WHERE token_hash = ? AND state = 'EXECUTING'",
-                    (
-                        state.value,
-                        self._tag(token_hash, state.value, row["expires_at"], row["payload"]),
-                        token_hash,
-                    ),
+                or not isinstance(execution_claim_id, str)
+                or pending.execution_claim_id is None
+                or not hmac.compare_digest(
+                    pending.execution_claim_id,
+                    execution_claim_id,
                 )
+            ):
                 return False
             return True
 
-    def complete_execution(
+    def _complete_execution(
         self,
         token: object,
         *,
         user_id: object,
         session_id: object,
         approval_binding: ActionApprovalBinding,
+        execution_claim_id: str,
         now: float | None = None,
     ) -> bool:
         token_hash = self._token_hash(token)
@@ -1378,6 +1557,7 @@ class SQLitePendingApprovalStore:
                 connection,
                 token_hash,
                 include_terminal=True,
+                now=now,
             )
             if (
                 pending is None
@@ -1386,31 +1566,64 @@ class SQLitePendingApprovalStore:
                 or not self._record_matches_owner(pending, user_id, session_id)
                 or type(approval_binding) is not ActionApprovalBinding
                 or pending.approval_binding != approval_binding
+                or pending.execution_claim_id is None
+                or not isinstance(execution_claim_id, str)
+                or not hmac.compare_digest(
+                    pending.execution_claim_id,
+                    execution_claim_id,
+                )
             ):
                 return False
-            if datetime.now(timezone.utc) >= datetime.fromisoformat(row["expires_at"]):
-                state = _transition_approval_state(ApprovalState.EXECUTING, ApprovalState.EXPIRED)
-                connection.execute(
-                    "UPDATE pending_approvals SET state = ?, integrity_tag = ? "
-                    "WHERE token_hash = ? AND state = 'EXECUTING'",
-                    (
-                        state.value,
-                        self._tag(token_hash, state.value, row["expires_at"], row["payload"]),
-                        token_hash,
-                    ),
-                )
-                return False
             state = _transition_approval_state(ApprovalState.EXECUTING, ApprovalState.CONSUMED)
+            audit_evidence = _execution_audit(
+                pending,
+                token_hash,
+                user_id,
+                session_id,
+                execution_claim_id,
+                now,
+            )
+            payload_data = json.loads(row["payload"])
+            payload_data["lifecycle_audit"] = audit_evidence
+            payload = self._canonical(payload_data)
             cursor = connection.execute(
-                "UPDATE pending_approvals SET state = ?, integrity_tag = ? "
+                "UPDATE pending_approvals SET state = ?, payload = ?, integrity_tag = ? "
                 "WHERE token_hash = ? AND state = 'EXECUTING'",
                 (
                     state.value,
-                    self._tag(token_hash, state.value, row["expires_at"], row["payload"]),
+                    payload,
+                    self._tag(token_hash, state.value, row["expires_at"], payload),
                     token_hash,
                 ),
             )
             return cursor.rowcount == 1
+
+    def completion_audit(
+        self,
+        token: object,
+        *,
+        user_id: object,
+        session_id: object,
+    ) -> dict[str, Any] | None:
+        token_hash = self._token_hash(token)
+        if token_hash is None or not isinstance(user_id, UUID) or not isinstance(session_id, UUID):
+            return None
+        with self._connection() as connection:
+            pending, row = self._read_pending(
+                connection,
+                token_hash,
+                include_terminal=True,
+            )
+            if (
+                pending is None
+                or row is None
+                or row["state"] != ApprovalState.CONSUMED.value
+                or not self._record_matches_owner(pending, user_id, session_id)
+                or not isinstance(pending.audit_evidence, dict)
+                or pending.audit_evidence.get("event") != "APPROVAL_EXECUTION_COMPLETED"
+            ):
+                return None
+            return deepcopy(pending.audit_evidence)
 
     def cancel(
         self,
@@ -1440,6 +1653,8 @@ class SQLitePendingApprovalStore:
                 return "NOT_FOUND"
             if pending is None or not self._record_matches_owner(pending, user_id, session_id):
                 return "OWNER_MISMATCH"
+            if pending.execution_claim_id is not None:
+                return "EXECUTION_STARTED"
             try:
                 expected_binding = approval_binding_for_pending(
                     user_id,

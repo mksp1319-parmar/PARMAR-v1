@@ -77,6 +77,13 @@ def test_account_identity_is_immutable_canonical_random_uuid4():
         AccountIdentity(UUID("00000000-0000-1000-8000-000000000001"))
 
 
+def test_provider_identity_rejects_embedded_nul():
+    with pytest.raises(ValueError):
+        ProviderIdentity("issuer\u0000suffix", "subject")
+    with pytest.raises(ValueError):
+        ProviderIdentity("issuer", "subject\u0000suffix")
+
+
 def test_provider_identity_resolves_only_an_explicit_existing_account_binding():
     provider_identity = ProviderIdentity("https://issuer.example", str(uuid4()))
     account_identity = AccountIdentity.generate()

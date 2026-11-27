@@ -3,6 +3,7 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -280,7 +281,7 @@ def test_approved_chat_memory_retrieval_is_no_go_before_retrieval_or_provider(ap
     assert provider_calls == []
 
 
-def _create_direct(store, *, ttl=300):
+def _create_direct(store, *, now=None):
     request = "Purchase a $500 software license"
     response, dashboard, summary = PARMARUIAdapter.analyze_request_with_dashboard(request)
     user_id, session_id = uuid4(), uuid4()
@@ -297,6 +298,7 @@ def _create_direct(store, *, ttl=300):
             summary["enforcement"]["decision_id"],
             None,
         ),
+        now=now,
     )
     return token, user_id, session_id
 
@@ -471,6 +473,156 @@ def test_sqlite_cancel_and_consume_are_serialized(tmp_path):
     assert state in {"CONSUMED", "CANCELLED"}
 
 
+def test_execution_completion_persists_audit_and_injected_now_controls_expiry(tmp_path):
+    key = b"approval persistence test key: stable and private"
+    database = tmp_path / "approval-completion-audit.sqlite3"
+    store = SQLitePendingApprovalStore(database, key)
+    created_at = 1800000000.0
+    token, user_id, session_id = _create_direct(store, now=created_at)
+    pending = store.inspect(token, user_id=user_id, session_id=session_id)
+    assert pending is not None and pending.approval_binding is not None
+
+    record, state = store.approve_for_execution(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+        approval_binding=pending.approval_binding,
+        now=created_at + 1,
+    )
+    assert record is not None and state == "OK"
+
+    completion_now = created_at + 2
+    effect_completed, effect_result = store.execute_approved_effect(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+        approval_binding=pending.approval_binding,
+        effect=lambda _claim_id, execution_check: execution_check(),
+        now=completion_now,
+    )
+    assert effect_completed and effect_result is True
+
+    token_hash = store._token_hash(token)
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT state, payload FROM pending_approvals WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "CONSUMED"
+    payload = json.loads(row[1])
+    audit = payload["lifecycle_audit"]
+    assert audit["event"] == "APPROVAL_EXECUTION_COMPLETED"
+    assert audit["approval_ref"] == token_hash
+    assert audit["actor_user_id"] == str(user_id)
+    assert audit["session_id"] == str(session_id)
+    assert audit["binding_fingerprint"] == pending.approval_binding.scope_fingerprint
+    assert audit["timestamp"] == datetime.fromtimestamp(
+        completion_now,
+        tz=timezone.utc,
+    ).isoformat()
+
+    restarted_store = SQLitePendingApprovalStore(database, key)
+    assert restarted_store.completion_audit(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+    ) == audit
+
+    expired_token, expired_user_id, expired_session_id = _create_direct(
+        store,
+        now=created_at,
+    )
+    expired_pending = store.inspect(
+        expired_token,
+        user_id=expired_user_id,
+        session_id=expired_session_id,
+        now=created_at + 299,
+    )
+    assert expired_pending is not None
+    far_future = created_at + 300
+    expired_record, expired_state = store.approve_for_execution(
+        expired_token,
+        user_id=expired_user_id,
+        session_id=expired_session_id,
+        approval_binding=expired_pending.approval_binding,
+        now=far_future,
+    )
+    assert expired_record is None
+    assert expired_state == "EXPIRED"
+
+
+def test_execution_completion_audit_failure_rolls_back_and_can_be_retried(tmp_path, monkeypatch):
+    key = b"approval persistence test key: stable and private"
+    database = tmp_path / "approval-completion-failure.sqlite3"
+    store = SQLitePendingApprovalStore(database, key)
+    created_at = 1800000000.0
+    token, user_id, session_id = _create_direct(store, now=created_at)
+    pending = store.inspect(token, user_id=user_id, session_id=session_id, now=created_at)
+    assert pending is not None and pending.approval_binding is not None
+
+    record, state = store.approve_for_execution(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+        approval_binding=pending.approval_binding,
+        now=created_at + 1,
+    )
+    assert record is not None and state == "OK"
+
+    canonical = store._canonical
+
+    def fail_audit_serialization(payload):
+        if "lifecycle_audit" in payload:
+            raise ApprovalStorageUnavailable("Approval storage is unavailable.")
+        return canonical(payload)
+
+    monkeypatch.setattr(store, "_canonical", fail_audit_serialization)
+    effect_calls = []
+
+    def effect(execution_claim_id, execution_check):
+        assert execution_check()
+        effect_calls.append(execution_claim_id)
+        return "effect completed"
+
+    with pytest.raises(ApprovalStorageUnavailable):
+        store.execute_approved_effect(
+            token,
+            user_id=user_id,
+            session_id=session_id,
+            approval_binding=pending.approval_binding,
+            effect=effect,
+            now=created_at + 2,
+        )
+    assert len(effect_calls) == 1
+
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT state, payload FROM pending_approvals WHERE token_hash = ?",
+            (store._token_hash(token),),
+        ).fetchone()
+    assert row is not None and row[0] == "EXECUTING"
+    assert "lifecycle_audit" not in json.loads(row[1])
+    assert "execution_claim_id" in json.loads(row[1])
+
+    restarted_store = SQLitePendingApprovalStore(database, key)
+    replay_completed, replay_result = restarted_store.execute_approved_effect(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+        approval_binding=pending.approval_binding,
+        effect=effect,
+        now=created_at + 3,
+    )
+    assert not replay_completed and replay_result is None
+    assert len(effect_calls) == 1
+    assert restarted_store.completion_audit(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+    ) is None
+
+
 def test_sqlite_approval_execution_claim_is_exclusive_and_cancellation_fences_retries(tmp_path):
     key = b"approval persistence test key: stable and private"
     database = tmp_path / "approval-execution-fence.sqlite3"
@@ -495,7 +647,7 @@ def test_sqlite_approval_execution_claim_is_exclusive_and_cancellation_fences_re
     assert len(successful_claims) == 1
     assert successful_claims[0][0].state.value == "EXECUTING"
     assert sum(state == "OK" for _, state in results) == 1
-    assert first_store.authorize_execution(
+    assert not first_store.authorize_execution(
         token,
         user_id=user_id,
         session_id=session_id,
@@ -510,19 +662,96 @@ def test_sqlite_approval_execution_claim_is_exclusive_and_cancellation_fences_re
         reason_code="AUTHORIZATION_WITHDRAWN",
         approval_binding=pending.approval_binding,
     ) == "CANCELLED"
+    assert first_store.claim_execution_effect(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+        approval_binding=pending.approval_binding,
+    ) is None
     assert not first_store.authorize_execution(
         token,
         user_id=user_id,
         session_id=session_id,
         approval_binding=pending.approval_binding,
     )
-    assert not first_store.complete_execution(
+    effect_calls = []
+    completed, _result = first_store.execute_approved_effect(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+        approval_binding=pending.approval_binding,
+        effect=lambda *_args: effect_calls.append(True),
+    )
+    assert not completed and effect_calls == []
+    assert claim(first_store)[1] != "OK"
+
+
+def test_execution_effect_claim_serializes_with_cancellation_and_blocks_replay(tmp_path):
+    key = b"approval persistence test key: stable and private"
+    database = tmp_path / "approval-effect-claim-race.sqlite3"
+    first_store = SQLitePendingApprovalStore(database, key)
+    second_store = SQLitePendingApprovalStore(database, key)
+    token, user_id, session_id = _create_direct(first_store)
+    pending = first_store.inspect(token, user_id=user_id, session_id=session_id)
+    assert pending is not None and pending.approval_binding is not None
+    approved, state = first_store.approve_for_execution(
         token,
         user_id=user_id,
         session_id=session_id,
         approval_binding=pending.approval_binding,
     )
-    assert claim(first_store)[1] != "OK"
+    assert approved is not None and state == "OK"
+
+    effect_started = Event()
+    release_effect = Event()
+    effect_calls = []
+
+    def effect(execution_claim_id, execution_check):
+        assert execution_claim_id
+        assert execution_check()
+        effect_calls.append(execution_claim_id)
+        effect_started.set()
+        assert release_effect.wait(timeout=5)
+        return "effect result"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            first_store.execute_approved_effect,
+            token,
+            user_id=user_id,
+            session_id=session_id,
+            approval_binding=pending.approval_binding,
+            effect=effect,
+        )
+        assert effect_started.wait(timeout=5)
+        assert second_store.cancel(
+            token,
+            user_id=user_id,
+            session_id=session_id,
+            reason_code="AUTHORIZATION_WITHDRAWN",
+            approval_binding=pending.approval_binding,
+        ) == "EXECUTION_STARTED"
+        release_effect.set()
+        completed, result = future.result(timeout=5)
+
+    assert completed and result == "effect result"
+    assert len(effect_calls) == 1
+    restarted_store = SQLitePendingApprovalStore(database, key)
+    replay_calls = []
+    replayed, replay_result = restarted_store.execute_approved_effect(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+        approval_binding=pending.approval_binding,
+        effect=lambda *_args: replay_calls.append(True),
+    )
+    assert not replayed and replay_result is None
+    assert replay_calls == []
+    assert restarted_store.completion_audit(
+        token,
+        user_id=user_id,
+        session_id=session_id,
+    ) is not None
 
 
 def test_version_two_approval_schema_migrates_to_execution_state(tmp_path):

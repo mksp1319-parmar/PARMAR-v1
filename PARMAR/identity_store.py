@@ -355,12 +355,16 @@ class SQLiteIdentityRepository:
             CREATE TABLE {table_name} (
                 issuer TEXT NOT NULL
                     CHECK(
-                        length(issuer) BETWEEN 1 AND 2048
+                        typeof(issuer) = 'text'
+                        AND instr(issuer, char(0)) = 0
+                        AND length(issuer) BETWEEN 1 AND 2048
                         AND issuer = trim(issuer, {strip_chars})
                     ),
                 subject TEXT NOT NULL
                     CHECK(
-                        length(subject) BETWEEN 1 AND 1024
+                        typeof(subject) = 'text'
+                        AND instr(subject, char(0)) = 0
+                        AND length(subject) BETWEEN 1 AND 1024
                         AND subject = trim(subject, {strip_chars})
                     ),
                 account_id TEXT NOT NULL

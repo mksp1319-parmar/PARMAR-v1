@@ -1,9 +1,12 @@
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 
-from scripts.render_visual_acceptance import render_report
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from render_visual_acceptance import render_report
 
 
 class VisualAcceptanceReportTests(unittest.TestCase):

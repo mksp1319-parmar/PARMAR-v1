@@ -22,6 +22,26 @@ B2 prototype, DDL, migration, restore rehearsal, or live provider operation
 was run; the original audit's test statement remains an accurate historical
 scope description.
 
+## Revalidation — 2026-11-26
+
+- The latest full offline Python suite passed **1071 tests**, with **12
+  live-Keycloak-only skips** and **5 passing subtests**. Its first run exposed
+  a stale review-artifact digest for the changed Data Model package; the
+  manifest was refreshed and the full suite rerun passed. The account-binding
+  synthetic DDL harness passed **58 tests**. The new synthetic atomic/fencing
+  rehearsal passed **13 tests** and the migration/recovery rehearsal passed
+  **4 tests**.
+- These newer prototype results supersede the earlier statement that no B2
+  prototype had run. They do **not** implement or rehearse a source/destination
+  data migration, an operational backup/restore, or a rollback.
+- The GitHub read-only integration found no open pull requests, confirmed the
+  Keycloak workflow is active, and reported no runs for that workflow. Direct
+  unauthenticated REST checks were rate-limited; live ruleset and Environment
+  configuration could not be reverified in this continuation. The local
+  approval records and reviewer identity register remain empty.
+- No migration, restore-write operation, live provider request, or production
+  activation was executed. Recovery/cutover readiness remains **NOT PROVEN**.
+
 ## Control-by-control evidence
 
 | Requirement | Implemented evidence | Assessment |

@@ -936,6 +936,9 @@ class SQLiteSessionRepository:
                 connection = sqlite3.connect(self.database_path, timeout=5, isolation_level=None)
                 connection.row_factory = sqlite3.Row
                 try:
+                    connection.execute("PRAGMA foreign_keys=ON")
+                    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                        raise SessionStorageUnavailable("Authenticated session storage is unavailable.")
                     self._initialize(connection)
                     if write:
                         connection.execute("BEGIN IMMEDIATE")
@@ -1738,7 +1741,16 @@ class SessionManager:
             raise RuntimeError("Session token generation failed.")
         if not self.repository.create_identity(session, token_hash):
             return None
-        if not self._trusted_account_is_active(principal.account_identity, current):
+        try:
+            account_is_active = self._trusted_account_is_active(
+                principal.account_identity,
+                current,
+            )
+        except SessionStorageUnavailable:
+            self.repository.revoke(session.session_id, current)
+            raise
+        if not account_is_active:
+            self.repository.revoke(session.session_id, current)
             return None
         return SessionCredentials(session=session, session_token=token)
 

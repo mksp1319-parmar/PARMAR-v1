@@ -13,7 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email.message import Message
 from html.parser import HTMLParser
 from http.cookiejar import CookieJar
@@ -165,6 +165,23 @@ def _json_payload(response: HttpResult, message: str) -> dict[str, object]:
         raise LiveE2EFailure(message) from None
     _check(isinstance(payload, dict), message)
     return payload
+
+
+def _token_with_unpublished_kid(token: str) -> str:
+    parts = token.split(".")
+    _check(len(parts) == 3, "Keycloak returned a malformed ID token.")
+    header_segment = parts[0]
+    header = json.loads(
+        base64.urlsafe_b64decode(
+            header_segment + "=" * (-len(header_segment) % 4)
+        ).decode("utf-8")
+    )
+    _check(isinstance(header, dict), "Keycloak returned an invalid ID-token header.")
+    header["kid"] = "unpublished-test-" + secrets.token_urlsafe(12)
+    encoded_header = base64.urlsafe_b64encode(
+        json.dumps(header, separators=(",", ":")).encode("utf-8")
+    ).rstrip(b"=").decode("ascii")
+    return ".".join((encoded_header, parts[1], parts[2]))
 
 
 def _cookie_from_jar(cookie_jar: CookieJar, name: str) -> str | None:
@@ -1067,6 +1084,81 @@ def test_invalid_pkce_verifier_is_rejected_by_keycloak_token_endpoint(live_envir
     )
 
 
+@pytest.mark.parametrize("claim", ["issuer", "audience"])
+@pytest.mark.skipif(not LIVE_E2E_ENABLED, reason="Manual live Keycloak workflow only.")
+def test_real_keycloak_id_token_rejects_mismatched_issuer_or_audience(
+    live_environment,
+    monkeypatch,
+    claim,
+):
+    flow = _capture_authorization_callback(live_environment, _start_login(live_environment))
+    adapter = live_environment.app.OIDC_ADAPTER
+    configuration = adapter.configuration
+    mismatch = (
+        configuration.issuer + "/unexpected"
+        if claim == "issuer"
+        else configuration.audience + "-unexpected"
+    )
+    monkeypatch.setattr(
+        adapter,
+        "configuration",
+        replace(configuration, **{claim: mismatch}),
+    )
+    identity_before = _identity_store_snapshot(live_environment)
+    sessions_before = _session_store_snapshot(live_environment)
+
+    response = _callback_response(live_environment, flow, flow.callback_url)
+    _assert_error_is_safe(
+        live_environment,
+        flow,
+        response,
+        401,
+        expected_session_count=len(sessions_before),
+    )
+    _check(
+        _identity_store_snapshot(live_environment) == identity_before
+        and _session_store_snapshot(live_environment) == sessions_before
+        and _state_transaction_count(live_environment, flow.state) == 0,
+        f"A real Keycloak token with mismatched {claim} changed trusted state.",
+    )
+
+
+@pytest.mark.skipif(not LIVE_E2E_ENABLED, reason="Manual live Keycloak workflow only.")
+def test_real_keycloak_id_token_with_unpublished_jwks_kid_is_rejected(
+    live_environment,
+    monkeypatch,
+):
+    flow = _capture_authorization_callback(live_environment, _start_login(live_environment))
+    adapter = live_environment.app.OIDC_ADAPTER
+    original_exchange = adapter.exchange_authorization_code
+
+    def exchange_with_unpublished_kid(*args, **kwargs):
+        return _token_with_unpublished_kid(original_exchange(*args, **kwargs))
+
+    monkeypatch.setattr(
+        adapter,
+        "exchange_authorization_code",
+        exchange_with_unpublished_kid,
+    )
+    identity_before = _identity_store_snapshot(live_environment)
+    sessions_before = _session_store_snapshot(live_environment)
+
+    response = _callback_response(live_environment, flow, flow.callback_url)
+    _assert_error_is_safe(
+        live_environment,
+        flow,
+        response,
+        401,
+        expected_session_count=len(sessions_before),
+    )
+    _check(
+        _identity_store_snapshot(live_environment) == identity_before
+        and _session_store_snapshot(live_environment) == sessions_before
+        and _state_transaction_count(live_environment, flow.state) == 0,
+        "An ID token with an unpublished JWKS kid changed trusted state.",
+    )
+
+
 @pytest.mark.skipif(not LIVE_E2E_ENABLED, reason="Manual live Keycloak workflow only.")
 def test_genuinely_unbound_issuer_subject_cannot_authenticate_or_access_protected_routes(
     live_environment,
@@ -1212,4 +1304,71 @@ def test_real_authorization_code_pkce_login_creates_trusted_session_and_replay_f
         replay_response,
         401,
         expected_session_count=sessions_before_replay,
+    )
+
+
+@pytest.mark.skipif(not LIVE_E2E_ENABLED, reason="Manual live Keycloak workflow only.")
+def test_disabling_bound_account_revokes_live_session_and_blocks_reauthentication(
+    live_environment,
+):
+    flow = _capture_authorization_callback(live_environment, _start_login(live_environment))
+    callback_response = _callback_response(
+        live_environment,
+        flow,
+        flow.callback_url,
+    )
+    _check(callback_response.status == 200, "Initial bound-account login failed.")
+    session_token = _cookie_from_jar(
+        flow.cookie_jar,
+        live_environment.app.SESSION_COOKIE_NAME,
+    )
+    _check(bool(session_token), "Initial login did not issue a session cookie.")
+    session = live_environment.app.SESSION_MANAGER.resolve(session_token)
+    _check(session is not None, "Initial session did not resolve.")
+    evidence_id = session.identity_evidence_id
+    session_count = _session_count(live_environment)
+    account_id = live_environment.bootstrap_result["account_id"]
+
+    with live_environment.app.IDENTITY_REPOSITORY._connection() as connection:
+        updated = connection.execute(
+            "UPDATE accounts SET status='DISABLED' WHERE account_id=? AND status='ACTIVE'",
+            (account_id,),
+        )
+        _check(updated.rowcount == 1, "Synthetic account disablement did not apply once.")
+
+    _check(
+        live_environment.app.SESSION_MANAGER.resolve(session_token) is None,
+        "A session for the disabled account remained active.",
+    )
+    persisted = live_environment.app.SESSION_MANAGER.repository.get_by_session_id(
+        session.session_id
+    )
+    _check(
+        persisted is not None
+        and persisted.status == "REVOKED"
+        and persisted.active_profile_id is None,
+        "Account disablement did not revoke its persistent session.",
+    )
+    _check(
+        evidence_id is not None
+        and live_environment.app.SESSION_MANAGER.identity_evidence_state(evidence_id).value
+        == "REVOKED",
+        "Account disablement did not revoke authentication evidence.",
+    )
+
+    retry = _capture_authorization_callback(
+        live_environment,
+        _start_login(live_environment),
+    )
+    retry_response = _callback_response(
+        live_environment,
+        retry,
+        retry.callback_url,
+    )
+    _assert_error_is_safe(
+        live_environment,
+        retry,
+        retry_response,
+        401,
+        expected_session_count=session_count,
     )

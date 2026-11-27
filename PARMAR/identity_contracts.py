@@ -100,6 +100,7 @@ class ProviderIdentity:
             if (
                 not isinstance(value, str)
                 or not value
+                or "\u0000" in value
                 or value != value.strip()
                 or len(value) > limit
             ):

@@ -2,6 +2,17 @@
 
 ## Scope and limits
 
+This runbook covers PARMAR worktree archives only. It is **not** a backup,
+restore, migration or rollback procedure for PARMAR SQLite identity, session,
+approval, OIDC-state, conversation or memory databases. The archive excludes
+SQLite database files and does not provide a consistent SQLite/WAL snapshot.
+Do not use it as evidence that account-binding data can be recovered.
+
+The separate [Account Binding Migration and Recovery Runbook](../PARMAR/ACCOUNT-BINDING-MIGRATION-RECOVERY-RUNBOOK.md)
+is a review-ready, stop-gated procedure. It is not executable authorization:
+no B2 production migration, SQLite restore-write tool, writer-quiescence
+controller or operational restore rehearsal is implemented or approved.
+
 The backup command captures a point-in-time worktree view: eligible tracked
 files as they exist when the backup is made, modified tracked files,
 non-ignored untracked files, deleted tracked paths as metadata, staged and

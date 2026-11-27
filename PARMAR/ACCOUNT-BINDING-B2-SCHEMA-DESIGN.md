@@ -43,16 +43,17 @@ The account ID trigger protects account ID updates and account deletion ([identi
 Python characters, and leading/trailing Python whitespace; the current SQLite
 binding table applies corresponding `length()` and edge-whitespace checks
 ([identity_contracts.py:89–103](./identity_contracts.py#L89),
-[identity_store.py:341–369](./identity_store.py#L341)). These checks validate
-ordinary non-NUL values without selecting provider-specific canonicalization.
-Exact parity is not established for values containing U+0000: Python `len()`
-counts characters after it, while SQLite `length(TEXT)` stops at the first
-U+0000. The handling of embedded U+0000 therefore remains an explicit
-data-model/provider decision, not a passed constraint. The Python value object
-also rejects non-string inputs; SQLite TEXT affinity can coerce some numeric
-bindings before a CHECK sees the stored value. The database invariant should
-therefore be reviewed as a stored-value constraint, while the application
-boundary remains responsible for typed provider input.
+[identity_store.py:341–369](./identity_store.py#L341)). These checks validate ordinary non-NUL values without selecting
+provider-specific canonicalization. The current `ProviderIdentity` contract
+and both the existing and proposed SQL checks reject embedded U+0000. SQLite
+`length(TEXT)` does stop at U+0000, but that behavior is not reachable for
+values accepted by these checks. Whether rejection is the final provider-facing
+identity policy remains deferred; the current behavior is technical evidence,
+not Product Owner or data-model approval. The Python value object also rejects
+non-string inputs; SQLite TEXT affinity can coerce some numeric bindings before
+a CHECK sees the stored value. The database invariant is therefore a
+stored-value constraint, while the application boundary remains responsible
+for typed provider input.
 
 The internal provisioner directly inserts an active account ([identity_store.py:603–637](./identity_store.py#L603)); it does not represent a public enrollment authorization boundary ([identity_store.py:828–830](./identity_store.py#L828)).
 
@@ -242,20 +243,24 @@ The partial unique index covers both `ACTIVE` and `PENDING_UNLINK`: ownership is
 - `account_identity_binding.binding_id` is the primary key; `(account_id, provider_identity_id)` is unique, preserving one lifecycle row per pair and permitting same-owner reactivation of that row.
 - `account_identity_binding.account_id` references the existing SQLite `accounts.account_id` primary key (the logical `AccountIdentity` entity); this parent key is present in the current identity-store schema.
 - `account_identity_binding.provider_identity_id` references `provider_identity.provider_identity_id`, which is its primary key.
-- No active-owner composite foreign key is needed: the authoritative binding row contains both owner and provider identity. The illustrative DDL below does not create or redefine the existing account table.
+- No active-owner composite foreign key is needed: the authoritative binding row contains both owner and provider identity. The synthetic disposable DDL below does not create or redefine the existing account table.
 - Account and provider deletion are restricted while bindings refer to them. A closed account or revoked binding is not deleted by ordinary lifecycle operations.
 
-**Illustrative SQLite DDL — unimplemented; do not execute as part of this design review**
+**Synthetic SQLite prototype DDL — disposable execution only**
 
 The excerpt shows the binding-integrity tables, index and triggers only; non-key timestamps, proof references, audit entities and reconciliation-work schema are described separately and are not implied to have been created.
 
 ```sql
 CREATE TABLE provider_identity (
-    provider_identity_id TEXT NOT NULL PRIMARY KEY,
-    adapter_id TEXT NOT NULL,
+    provider_identity_id TEXT NOT NULL PRIMARY KEY
+        CHECK(typeof(provider_identity_id) = 'text'),
+    adapter_id TEXT NOT NULL
+        CHECK(typeof(adapter_id) = 'text'),
     issuer_namespace TEXT NOT NULL
         CHECK (
-            length(issuer_namespace) BETWEEN 1 AND 2048
+            typeof(issuer_namespace) = 'text'
+            AND instr(issuer_namespace, char(0)) = 0
+            AND length(issuer_namespace) BETWEEN 1 AND 2048
             AND issuer_namespace = trim(
                 issuer_namespace,
                 char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760,
@@ -265,7 +270,9 @@ CREATE TABLE provider_identity (
         ),
     subject_key TEXT NOT NULL
         CHECK (
-            length(subject_key) BETWEEN 1 AND 1024
+            typeof(subject_key) = 'text'
+            AND instr(subject_key, char(0)) = 0
+            AND length(subject_key) BETWEEN 1 AND 1024
             AND subject_key = trim(
                 subject_key,
                 char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32, 133, 160, 5760,
@@ -277,17 +284,21 @@ CREATE TABLE provider_identity (
 );
 
 CREATE TABLE account_identity_binding (
-    binding_id TEXT NOT NULL PRIMARY KEY,
+    binding_id TEXT NOT NULL PRIMARY KEY
+        CHECK(typeof(binding_id) = 'text'),
     account_id TEXT NOT NULL
+        CHECK(typeof(account_id) = 'text')
         REFERENCES accounts(account_id)
         ON UPDATE RESTRICT
         ON DELETE RESTRICT,
     provider_identity_id TEXT NOT NULL
+        CHECK(typeof(provider_identity_id) = 'text')
         REFERENCES provider_identity(provider_identity_id)
         ON UPDATE RESTRICT
         ON DELETE RESTRICT,
-    state TEXT NOT NULL,
-    binding_version INTEGER NOT NULL CHECK (binding_version >= 1),
+    state TEXT NOT NULL CHECK(typeof(state) = 'text'),
+    binding_version INTEGER NOT NULL
+        CHECK (typeof(binding_version) = 'integer' AND binding_version >= 1),
     UNIQUE (account_id, provider_identity_id),
     CHECK (state IN (
         'PENDING',
@@ -368,9 +379,11 @@ END;
 
 ```
 
-The issuer/subject checks preserve the current `ProviderIdentity` and identity-store bounds and edge-whitespace rejection for ordinary non-NUL values. SQLite `length(TEXT)` stops at embedded U+0000, unlike Python `len()`, so over-limit values with a U+0000 before the excess suffix can pass the illustrated SQL bound while failing the application contract. Exact embedded-U+0000 behavior must be decided by the identity/data-model and provider authorities before claiming SQL/application parity. Options include rejecting U+0000 consistently at the application and database boundaries, or selecting and testing a database validation mechanism that counts the same characters as Python; neither choice is approved here. No trimming, rewriting or provider-specific canonicalization is proposed.
+The issuer/subject checks preserve the current `ProviderIdentity` bounds and edge-whitespace rejection for ordinary non-NUL values. The SQL `instr(..., char(0)) = 0` condition rejects every value containing U+0000 before it can satisfy the full check; such over-limit values do not pass the illustrated SQL constraint. Although SQLite `length(TEXT)` stops at U+0000 while Python `len()` counts beyond it, this does not create an acceptance mismatch while both boundaries reject U+0000. The synthetic DDL and current value object demonstrate that rejection behavior, but the final provider-facing policy remains for the identity/data-model and provider authorities to decide. If a future policy accepts U+0000, its length semantics must be specified and tested consistently. No trimming, rewriting or provider-specific canonicalization is proposed.
 
-After that decision, authorized synthetic validation must compare application and SQL acceptance for string values: empty and over-limit values with and without embedded U+0000, leading/trailing whitespace, internal whitespace, and the same exact issuer/subject tuple presented through different adapter IDs. Separately, verify application rejection of non-string values and document SQLite TEXT-affinity behavior for direct numeric/BLOB bindings; do not claim those inputs have identical acceptance unless the data-model owner defines that contract.
+The synthetic validation compares application and SQL acceptance for empty and over-limit strings, embedded U+0000, leading/trailing whitespace, internal whitespace, and the same exact issuer/subject tuple presented through different adapter IDs. Current tests show both application and SQL reject embedded U+0000; they do not decide whether that restriction is accepted provider policy. Application rejection of non-string values and SQLite TEXT-affinity behavior for direct numeric/BLOB bindings are tested/documented separately; do not claim identical acceptance for those direct inputs unless the data-model owner defines that contract.
+
+**At-rest protection boundary:** the synthetic DDL stores `subject_key` as ordinary SQLite `TEXT` so the prototype can exercise exact-tuple uniqueness. This does not implement the logical model's protected/reference-only treatment for provider subjects and is not an acceptable production storage decision. Before schema acceptance or migration, Security, Privacy/Legal and the identity/data-model owner must approve a representation, key custody/rotation and backup handling, and an exact-match uniqueness/lookup strategy that preserves the issuer/subject ownership key. No encryption or keyed-index design is selected here.
 
 The triggers are deliberately validation-only: they do not write to another ownership table, so there is no synchronization loop or trigger-recursion dependency. Pending attempts do not reserve ownership. On activation, the transition trigger rejects another account if the provider identity is currently owned or has a revoked owner. The unique pair constraint rejects a duplicate lifecycle row for the same pair. These checks prevent ordinary reassignment while allowing multiple non-owning pending attempts; concurrent activation is still protected by the partial unique index. Any exceptional correction requires a separately approved migration path, not a bypassing lifecycle update.
 
@@ -378,7 +391,7 @@ SQLite cannot distinguish an authorized application transition from an otherwise
 
 `PRAGMA foreign_keys=ON` is connection-scoped and must be applied and verified on every identity-store connection before any transaction. Parent columns must be primary/unique keys with compatible collations. Foreign keys and the partial index enforce referential and uniqueness properties; they do not prove identity, provider possession, confirmation, recovery authority, last-method eligibility, or notification delivery.
 
-**SQLite compatibility assumption:** SQLite 3.8.0 or later is required for partial indexes. The deployed/runtime SQLite library must be pinned or checked at startup; older or incompatible builds must fail closed rather than silently omit the index. Foreign-key enforcement must be compiled in and verified on every opened connection. The illustrative DDL is documentation only and was not executed.
+**SQLite compatibility assumption:** SQLite 3.8.0 or later is required for partial indexes. The deployed/runtime SQLite library must be pinned or checked at startup; older or incompatible builds must fail closed rather than silently omit the index. Foreign-key enforcement must be compiled in and verified on every opened connection. The synthetic DDL was executed only in an isolated disposable prototype and remains unapproved for application or production use.
 
 **Database/application guarantee matrix**
 
@@ -405,6 +418,22 @@ SQLite cannot distinguish an authorized application transition from an otherwise
 The account parent is the existing `accounts` table, whose `account_id` is a primary key and whose account-ID update/delete protections already exist in the source schema ([identity_store.py:310–394](./identity_store.py#L310)). The provider table and its unique tuple are proposed additions. Provider namespace and subject changes require a separately approved migration; they cannot be applied as ordinary updates.
 
 **Sensitive classification:** High.
+
+### 4.5 Identity validation and type policy
+
+**Embedded U+0000:** the current value object and proposed SQL adapter reject this character before persistence. This is the tested technical behavior, not an approved provider-facing identity policy; final acceptance remains with the Product Owner, identity/data-model owner and provider-capability review.
+
+**Unicode:** do not normalize NFC/NFD automatically. A future canonicalization policy requires provider, identity, migration and compatibility approval. Current SQL and application behavior preserve Unicode code points and thus treat canonical equivalents as distinct until an authority approves normalization.
+
+**Type boundary:** issuer and subject must be exact Python `str` values. `None`, `bytes`, `bool`, integers and floats are invalid before SQL binding. Direct SQLite adapters must use parameter binding and must not rely on TEXT affinity to convert input types.
+
+**Binding version:** the application adapter must require exact Python `int` values with `type(value) is int`, reject booleans and values below one, and pass each lifecycle update as `old_version + 1`. SQLite INTEGER affinity and the trigger provide a second defensive boundary but cannot recover the original storage class of an already-coerced parameter.
+
+**Connection trust boundary:** only application-owned connections may enable foreign keys and open the B2 schema. Every connection must execute `PRAGMA foreign_keys=ON` and verify `PRAGMA foreign_keys` returns `1` before use. Raw, test or administrator connections are untrusted and must not write lifecycle tables.
+
+**Schema privilege boundary:** deployment must use separate read/write roles or a least-privilege application role that cannot `DROP` or replace tables, indexes or triggers. Schema migrations and trigger changes require a separately authorized migration role and all-writer quiescence. SQLite files require filesystem permissions that prevent untrusted processes from replacing or modifying the database.
+
+SQLite itself has no native database users or role/GRANT isolation. “Roles” below must be implemented as separate OS processes/users, containers, file permissions, deployment credentials and migration tooling, not by SQLite statements. A process with write access to the SQLite file can ordinarily alter schema; therefore the application process must not share schema-write capability with untrusted code, and migration code must run only under a separately controlled authority.
 
 **Invariants:**
 
@@ -1489,7 +1518,12 @@ This design leaves the following configurable or unresolved:
 - provider logout/back-channel behavior;
 - account closure grace period;
 - exact session revocation latency;
-- premium/subscription entitlement, including “fully primium type.”
+- PO-13 is resolved as **Option A**: the exact historical phrase
+  “fully primium type” is withdrawn as non-operative. See the
+  [Product Owner decision framework](./ACCOUNT-BINDING-PRODUCT-OWNER-DECISION-FRAMEWORK.md)
+  §D and [PO-13 decision brief](./ACCOUNT-BINDING-CONSOLIDATED-APPROVAL-PACKET.md#po-13-decision-brief).
+  This does not cancel or define PARMAR Premium and does not approve a
+  subscription, billing provider, plan, entitlement or access-control change.
 
 **Pending Security/Operations approvals**
 
@@ -1508,15 +1542,16 @@ None is stored as an inferred permanent default.
 | Batch 22.12.32 finding | Correction in this revision | Resolution status | Remaining approval/evidence |
 |---|---|---|---|
 | Cross-store atomicity | Identity lifecycle mutation and durable reconciliation intent commit together; secondary effects use stable IDs, fenced leases and fail-closed revalidation | RESOLVED as a design contract; no worker is implemented | Security/Operations approval for lifecycle success/failure, retry and reconciliation thresholds |
-| Binding integrity | Replaced duplicate active-owner table with authoritative binding row, precise partial index, immutable keys, state guard and delete rejection | RESOLVED as a design contract; no DDL was executed | Implementation review and runtime SQLite verification before Gate 2 |
+| Binding integrity | Replaced duplicate active-owner table with authoritative binding row, precise partial index, immutable keys, state guard and delete rejection | RESOLVED as a design contract; the separate authorized synthetic DDL prototype has executed and passed its current tests | Independent data-model/security review and application integration evidence remain before Gate 2 |
+| Provider subject confidentiality | Classified provider subjects as high-sensitivity and protected/reference-only | NOT RESOLVED: disposable DDL uses ordinary TEXT for exact-tuple testing; no production protection or key design exists | Security/Privacy/Legal/data-model approval of storage, exact-match lookup, key custody, rotation and backup handling before schema acceptance |
 | Recovery state machine | Preserved `REQUESTED -> UNDER_REVIEW -> VERIFIED -> CONFIRMED -> CONSUMED` and ties binding activation to verified recovery | RESOLVED for state flow; evidence and authority remain deferred | Product/Security/Privacy/Operations approval |
 | Audit/notification durability | Kept Options A/B/C, clarified crash behavior, stable event IDs and authorization holds | NOT APPROVED as policy | Security/Operations approval of required-audit failure and delivery behavior |
 | Disablement/reactivation | Separate authority, security-version increment, revalidation and non-operational pending behavior remain explicit | PARTIALLY RESOLVED; authority/evidence are not selected | Product/Security/Operations approval |
 | Migration/rollback | Added Option B index creation/validation, conflict quarantine, verified backup/restore, stop/resume and post-rollback invalidation | PARTIALLY RESOLVED; execution authority and exact accountable roles remain pending | Operations/Security approval and named migration authority |
 | Sensitive-data classification | Preserved field-level classification and minimized references/logging | RESOLVED as documentation only | Security/Privacy review of storage/key implementation |
-| HIGH-1: lifecycle/active-owner trigger conflict | Removed the competing active-owner table and its synchronization/delete-trigger path; unlink is a single authoritative state transition | RESOLVED in the design | Validate actual schema implementation before Gate 2 |
+| HIGH-1: lifecycle/active-owner trigger conflict | Removed the competing active-owner table and its synchronization/delete-trigger path; unlink is a single authoritative state transition | RESOLVED in the design and synthetic DDL tests | Independent review and eventual application-schema integration validation remain |
 | HIGH-2: unauthorized/stale ownership paths | Direct insert is limited to PENDING; immutable owner keys, valid-transition/version trigger, historical-owner check and partial index protect stored invariants. Valid transitions still require an authorized lifecycle writer | RESOLVED as a documented database/application boundary; an unrestricted SQL writer is not an authorization boundary | Implement and independently test writer authorization, file access and every direct-write path |
-| MEDIUM-1: binding-version rewrite | Every allowed state update requires exactly `OLD.binding_version + 1`; other updates are rejected | RESOLVED in the design | Runtime SQLite trigger validation before implementation acceptance |
+| MEDIUM-1: binding-version rewrite | Every allowed state update requires exactly `OLD.binding_version + 1`; other updates are rejected | RESOLVED in the design and synthetic DDL tests | Application lifecycle implementation and independent review remain |
 | MEDIUM-2: stale/duplicate reconciliation workers | Atomic lease claim, monotonic fencing epoch, conditional progress updates and stable per-effect idempotency keys are specified | RESOLVED as a design contract; not executable evidence | Implement worker schema/effects and test crash/takeover behavior; thresholds remain pending |
 | MEDIUM-3: migration/rollback authority and compatibility | Option B index validation, named migration authority, independent Operations/Security authorization and post-rollback revalidation are required | PARTIALLY RESOLVED; organization-specific authority is not named | Name authority and approve runbook before migration |
 | HIGH-3: existing protected-operation atomic-fence NO-GO | Added the repository's runtime-enforced NO-GO and the limit of B2 version checks/approval claims; B3 must preserve the gate until an authoritative execution-fencing design is independently proven | RESOLVED as a documented implementation boundary; protected operations remain blocked | Security/Operations approval and race/crash evidence before any NO-GO gate is cleared |
@@ -1547,7 +1582,7 @@ Managed/family/organizational delegated authority is not converted into account 
 |---|---|
 | Unknown identity cannot create account | Linking/recovery requires existing/independently verified account context; unknown callback resolver still fails closed |
 | Provider identity cannot bind two accounts | `(issuer_namespace, subject_key)` is unique independent of adapter; the partial unique index over `ACTIVE`/`PENDING_UNLINK` plus activation-time historical-owner guard prevents competing owners; pending attempts do not reserve ownership |
-| Provider identity input validation | Ordinary non-NUL issuer/subject values enforce existing non-empty length bounds and edge-whitespace validation without normalization; embedded-U+0000 behavior remains unresolved because SQLite `length()` and Python `len()` differ |
+| Provider identity input validation | Ordinary non-NUL issuer/subject values enforce existing non-empty length bounds and edge-whitespace validation without normalization; current application and SQL checks reject embedded U+0000, while final provider-facing acceptance remains deferred |
 | No automatic ownership transfer | Binding owner keys are immutable; historical owner is retained after revocation; exceptional correction requires a separately approved migration |
 | Linking needs account proof, provider proof, confirmation | LinkingTransaction records all three as required |
 | Unlink protects last method | Commit rechecks usable methods and denies last-method removal outside approved recovery |
@@ -1587,8 +1622,13 @@ It does not authorize:
 - schema creation;
 - application code;
 - route/API changes;
-- tests;
+- application or integration tests against non-disposable data;
 - provider activation;
 - account binding/recovery operations;
 - admin actions;
 - production deployment.
+
+A separate recorded authorization covers only execution of the disposable
+synthetic SQLite DDL/test harness. That limited prototype authorization does
+not approve the schema or authorize application/production DDL, migration,
+provider operation, or Gate 1–7 clearance.

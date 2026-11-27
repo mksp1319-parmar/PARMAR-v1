@@ -390,6 +390,11 @@ also recorded limited decisions PO-02–PO-08, PO-10 and PO-14 in the
 Those choices do not pass a gate or approve technical mechanisms. The status
 in this table reflects the remaining scope after those decisions.
 
+PO-13 is a tracking identifier used by the consolidated packet, not one of
+D1–D16 or APR-01–APR-20. It was absent from the earlier §D table. The row
+below records the explicit Product Owner Option A disposition recorded on
+2026-11-26 by the authorized decision supplied in the current task.
+
 | Matter | Unresolved question | Owner / approvers | Consulted | Dependencies | Gate | Status |
 |---|---|---|---|---|---|---|
 | Identity normalization/input representation | Exact issuer/subject canonicalization, embedded-U+0000 validation behavior, issuer migration, subject changes and provider-key migration | Product owner; security | Identity/data-model owner, provider owner, operations | 1, 6 | Gate 1–2 | PARTIALLY APPROVED — issuer+subject is the identity tuple regardless of adapter; canonicalization, embedded-U+0000 acceptance and migration deferred |
@@ -401,6 +406,7 @@ in this table reflects the remaining scope after those decisions.
 | Managed/family authority | Family, guardian and organization relationships grant no automatic account ownership. Delegated permissions must be explicit, scoped and revocable and may not confer identity-linking, merging, reassignment or account-recovery authority. Workspace membership does not grant personal-content access. A future managed-account ownership model requires separate product-owner approval and security/privacy review | Product owner; security, operations | Privacy/legal | 2, 6, 8–10 | Gate 1–3 | APPROVED — delegated permissions only; managed-account ownership remains separate |
 | Local Demo separation | No conversion of Local Demo or legacy identity to a PARMAR account without approved verification | Product owner; security | Operations, privacy/legal | 2, 16 | Gate 1–2 | APPROVED — keep identities unmapped absent owner verification; anonymous dispatch mitigation verified in source/tests, independent Security/deployment closure pending |
 | Provider/logout assumptions | Required provider logout/revocation semantics and outage behavior | Product owner; security, operations | Provider owner | 1, 14 | Gate 1–6 | APPROVED — PARMAR local revocation is authoritative; provider logout/revocation semantics remain deferred |
+| **PO-13 — product-packaging/subscription phrase** | The exact historical phrase is “fully primium type.” **Selected disposition: Option A — no product requirement; withdraw the phrase as non-operative.** No additional scope, definition, subscription, billing, entitlement, pricing or access-control meaning is approved. | Product Owner | None | This closes PO-13 policy ambiguity; it does not add or cancel PARMAR Premium or future product scope and creates no subscription/entitlement implementation dependency | Gate 1 policy disposition | **APPROVED — OPTION A (2026-11-26)** |
 
 ## E. Complete approval worksheet
 
