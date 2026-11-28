@@ -37,7 +37,7 @@ for (const [filename, title, sections] of [
       assert.match(svg, new RegExp(`${number} \\/`), `Missing reference screen ${number}`);
     }
     assert.match(svg, /Logo\.jpg/i);
-    assert.match(svg, /href="\.\.\/assets\/voki\/Vokki\.png"/);
+    assert.match(svg, /href="\.\.\/assets\/voki\/Vokki-screen\.png"/);
     assert.doesNotMatch(svg, /href=["']https?:\/\//);
   });
 }

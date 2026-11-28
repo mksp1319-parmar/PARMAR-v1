@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -45,13 +46,13 @@ test('Home matches the reference-led dashboard while Core and VOKKI remain separ
   assert.match(html, /id="global-search-input"/);
   assert.match(appSource, /No saved memories yet\./);
   assert.match(home, /data-voki-home-avatar/);
-  assert.match(home, /data-voki-default-image src="\/static\/assets\/voki\/Vokki\.png"/);
+  assert.match(home, /data-voki-default-image src="\/static\/assets\/voki\/Vokki-screen\.png"/);
   assert.doesNotMatch(home, /data-voki-interface|parmar-core/);
 
   assert.match(html, /data-section="core" data-nav-key="core" aria-label="Decision review"/);
   assert.match(html, /id="section-core" aria-labelledby="core-title"/);
   assert.match(html, /id="section-voki" aria-labelledby="voki-interface-title"/);
-  assert.match(html, /data-voki-default-image src="\/static\/assets\/voki\/Vokki\.png"/);
+  assert.match(html, /data-voki-default-image src="\/static\/assets\/voki\/Vokki-screen\.png"/);
   assert.equal((html.match(/id="request-input"/g) || []).length, 1);
   assert.equal((html.match(/id="analyze-btn"/g) || []).length, 1);
   assert.match(html, /data-section="home" data-nav-key="home"/);
@@ -258,19 +259,32 @@ test('Home and dedicated VOKKI use the canonical avatar through the shared real 
   const premiumStyles = fs.readFileSync(path.join(staticDir, 'premium.css'), 'utf8');
   const appInitialize = functionSource('initialize');
   const setVokiState = functionSource('setVokiState');
-  const avatarAsset = fs.readFileSync(path.join(staticDir, 'assets', 'voki', 'Vokki.png'));
+  const avatarAsset = fs.readFileSync(path.join(staticDir, 'assets', 'voki', 'Vokki-screen.png'));
+  const originalAsset = fs.readFileSync(path.join(staticDir, 'assets', 'voki', 'Vokki.png'));
+  const provenance = JSON.parse(fs.readFileSync(
+    path.join(staticDir, 'assets', 'voki', 'Vokki-screen.provenance.json'),
+    'utf8',
+  ));
   const suppliedReference = fs.readFileSync(path.join(__dirname, '..', '..', 'Vokki.png'));
+  const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
   assert.match(avatarSource, /source: 'provided-reference'/);
-  assert.match(avatarSource, /reference: 'Vokki\.png'/);
-  assert.match(avatarSource, /asset: '\/static\/assets\/voki\/Vokki\.png'/);
+  assert.match(avatarSource, /reference: 'Vokki-screen\.png'/);
+  assert.match(avatarSource, /sourceAsset: 'Vokki\.png'/);
+  assert.match(avatarSource, /asset: '\/static\/assets\/voki\/Vokki-screen\.png'/);
   assert.match(avatarSource, /data-voki-default-image/);
   assert.deepEqual(avatarAsset.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  assert.deepEqual(avatarAsset, suppliedReference);
-  assert.equal((html.match(/src="\/static\/assets\/voki\/Vokki\.png"/g) || []).length, 2);
+  assert.deepEqual(originalAsset, suppliedReference);
+  assert.equal(avatarAsset.readUInt32BE(16), 1097);
+  assert.equal(avatarAsset.readUInt32BE(20), 615);
+  assert.equal(sha256(avatarAsset), provenance.sha256);
+  assert.equal(sha256(originalAsset), provenance.sourceSha256);
+  assert.deepEqual(provenance.crop, { x: 125, y: 83, width: 1097, height: 615 });
+  assert.equal(provenance.opaque, true);
+  assert.equal((html.match(/src="\/static\/assets\/voki\/Vokki-screen\.png"/g) || []).length, 2);
   const homeAvatar = html.match(/<div class="home-voki-presence"[\s\S]*?<\/div>/)?.[0];
   const workspaceAvatar = html.match(/<div class="voki-avatar"[\s\S]*?<\/div>/)?.[0];
-  assert.match(homeAvatar || '', /src="\/static\/assets\/voki\/Vokki\.png"/);
-  assert.match(workspaceAvatar || '', /src="\/static\/assets\/voki\/Vokki\.png"/);
+  assert.match(homeAvatar || '', /src="\/static\/assets\/voki\/Vokki-screen\.png"/);
+  assert.match(workspaceAvatar || '', /src="\/static\/assets\/voki\/Vokki-screen\.png"/);
   const homeComposer = html.match(/<form class="home-chat-composer"[\s\S]*?<\/form>/)?.[0];
   assert.ok(homeComposer);
   assert.doesNotMatch(homeComposer, /<img\b/);
@@ -301,8 +315,8 @@ test('PARMAR logo variants are available at their responsive app entry points', 
   assert.match(html, /class="sidebar-brand-wordmark" src="\/static\/assets\/parmar-wordmark\.png"/);
   assert.match(html, /class="mobile-brand-emblem" src="\/static\/assets\/parmar-emblem\.png"/);
   assert.match(html, /class="mobile-brand-wordmark" src="\/static\/assets\/parmar-wordmark\.png"/);
-  assert.equal((html.match(/src="\/static\/assets\/parmar-wordmark\.png"/g) || []).length, 3);
-  assert.match(html, /class="brand-logo-image chat-brand-logo" src="\/static\/assets\/parmar-wordmark\.png"/);
+  assert.equal((html.match(/src="\/static\/assets\/parmar-wordmark\.png"/g) || []).length, 2);
+  assert.doesNotMatch(html, /chat-brand-logo/);
   assert.doesNotMatch(html.match(/<a class="brand-block sidebar-brand"[\s\S]*?<\/a>/)?.[0] || '', /parmar-logo\.png/);
   assert.match(premiumStyles, /\.sidebar-brand-lockup\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;/s);
   assert.match(premiumStyles, /\.sidebar-brand-emblem\s*\{[^}]*width:\s*34px;[^}]*height:\s*34px;/s);

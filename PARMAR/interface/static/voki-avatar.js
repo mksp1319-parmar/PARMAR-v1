@@ -7,8 +7,10 @@
     id: 'vokki-local-default',
     kind: 'local-default',
     source: 'provided-reference',
-    reference: 'Vokki.png',
-    asset: '/static/assets/voki/Vokki.png',
+    reference: 'Vokki-screen.png',
+    sourceAsset: 'Vokki.png',
+    sourceSha256: '11251171bb22a55749ba8f396f5a44e755bdeb7fdec752633a126e0855e096d4',
+    asset: '/static/assets/voki/Vokki-screen.png',
   });
   const lifecycleExpressions = Object.freeze({
     UNKNOWN: 'unavailable',

@@ -381,6 +381,10 @@ summary:focus-visible {
     scroll-padding-bottom: 20px;
   }
 
+  body[data-active-section="chat"] .main-panel {
+    height: 100dvh;
+  }
+
   .topbar {
     min-height: 62px;
     margin-inline: -14px;
@@ -1049,16 +1053,16 @@ summary:focus-visible {
 
 #section-voki .voki-avatar-default-image {
   position: absolute;
-  top: -13.3%;
-  left: -11.3%;
+  top: 0;
+  left: 0;
   display: block;
-  width: 152.3%;
+  width: 100%;
   max-width: none;
-  height: auto;
+  height: 100%;
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  object-fit: fill;
+  object-fit: contain;
   object-position: center;
   filter: none;
 }
@@ -1440,8 +1444,8 @@ summary:focus-visible {
     left: 0;
     width: 100%;
     height: 100%;
-    object-fit: cover;
-    object-position: 40% center;
+    object-fit: contain;
+    object-position: center;
   }
 }
 
@@ -1457,8 +1461,20 @@ summary:focus-visible {
     left: 0;
     width: 100%;
     height: 100%;
-    object-fit: cover;
-    object-position: 40% center;
+    object-fit: contain;
+    object-position: center;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 900px) {
+  body[data-active-section="chat"] .chat-composer .composer-tool span {
+    display: none;
+  }
+
+  body[data-active-section="chat"] .chat-composer .composer-tool {
+    width: 38px;
+    justify-content: center;
+    padding-inline: 0;
   }
 }
 
@@ -1472,9 +1488,12 @@ summary:focus-visible {
   }
 
   #section-voki .voki-avatar-default-image {
-    top: -59.4%;
-    left: -492.3%;
-    width: 638.2%;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center;
   }
 }
 
@@ -1655,6 +1674,17 @@ summary:focus-visible {
   gap: 8px;
   border: 0;
   padding: 0;
+}
+
+.home-voki-presence .home-voki-avatar-image {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  object-position: center;
+  filter: none;
 }
 
 @media (max-width: 760px) {

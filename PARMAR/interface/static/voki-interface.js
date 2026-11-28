@@ -47,6 +47,98 @@
     'SPEAKING',
   ]);
 
+  class VOKKISenseState {
+    constructor({
+      now = () => Date.now(),
+      setTimeoutFn = (...args) => globalThis.setTimeout(...args),
+      clearTimeoutFn = (...args) => globalThis.clearTimeout(...args),
+      activeTimeoutMs = 120_000,
+      inactiveTimeoutMs = 300_000,
+      onStateChange = () => {},
+    } = {}) {
+      this.now = now;
+      this.setTimeoutFn = setTimeoutFn;
+      this.clearTimeoutFn = clearTimeoutFn;
+      this.activeTimeoutMs = activeTimeoutMs;
+      this.inactiveTimeoutMs = inactiveTimeoutMs;
+      this.onStateChange = onStateChange;
+      this.state = 'ACTIVE';
+      this.paused = false;
+      this.lastInteractionAt = this.now();
+      this.greeted = false;
+      this.timer = null;
+      this.arm();
+    }
+
+    arm() {
+      if (this.timer !== null) this.clearTimeoutFn(this.timer);
+      this.timer = this.setTimeoutFn(() => this.evaluate(), this.activeTimeoutMs);
+      if (this.timer && typeof this.timer.unref === 'function') this.timer.unref();
+    }
+
+    evaluate() {
+      if (this.paused) return;
+      const elapsed = this.now() - this.lastInteractionAt;
+      const nextState = elapsed >= this.inactiveTimeoutMs
+        ? 'INACTIVE'
+        : elapsed >= this.activeTimeoutMs
+          ? 'BUSY'
+          : 'ACTIVE';
+      this.setState(nextState);
+      if (nextState !== 'INACTIVE') this.arm();
+    }
+
+    recordInteraction() {
+      this.lastInteractionAt = this.now();
+      if (!this.paused) this.setState('ACTIVE');
+      this.arm();
+    }
+
+    setPaused(paused) {
+      this.paused = paused === true;
+      if (this.paused) {
+        this.setState('PAUSED');
+      } else {
+        this.recordInteraction();
+      }
+      return this.paused;
+    }
+
+    enterInterface({ visible = true } = {}) {
+      if (!visible || this.paused) return false;
+      this.recordInteraction();
+      if (this.greeted) return false;
+      this.greeted = true;
+      return true;
+    }
+
+    setDocumentVisible(visible) {
+      if (!visible) {
+        this.setState(this.paused ? 'PAUSED' : 'INACTIVE');
+      } else {
+        this.recordInteraction();
+      }
+    }
+
+    setBusy(busy) {
+      if (this.paused) return;
+      if (busy) this.setState('BUSY');
+      else this.recordInteraction();
+    }
+
+    setState(state) {
+      if (!['ACTIVE', 'BUSY', 'INACTIVE', 'PAUSED'].includes(state)) state = 'INACTIVE';
+      if (this.state === state) return;
+      this.state = state;
+      this.onStateChange({ state });
+    }
+
+    dispose() {
+      if (this.timer !== null) this.clearTimeoutFn(this.timer);
+      this.timer = null;
+    }
+  }
+
   function interpretContract(contract) {
     const lifecycleState = typeof contract?.lifecycle?.state === 'string'
       ? contract.lifecycle.state
@@ -95,6 +187,7 @@
       voiceInputAdapterFactory,
       getLocalConversation,
       appendLocalConversationMessage,
+      getMemoryState,
     }) {
       if (!element || typeof request !== 'function') {
         throw new TypeError('VOKKI interface requires a root element and a request function.');
@@ -104,6 +197,7 @@
       this.getLanguage = getLanguage || (() => 'en');
       this.getLocalConversation = getLocalConversation || (() => null);
       this.appendLocalConversationMessage = appendLocalConversationMessage || (() => false);
+      this.getMemoryState = getMemoryState || (() => ({ enabled: false, authenticated: false, storage: null }));
       this.beginRequest = beginRequest || (() => true);
       this.finishRequest = finishRequest || (() => {});
       this.input = element.querySelector('[data-voki-input]');
@@ -125,6 +219,8 @@
       this.speechStatus = element.querySelector('[data-voki-speech-status]');
       this.proactiveToggle = element.querySelector('[data-voki-proactive-toggle]');
       this.muteToggle = element.querySelector('[data-voki-mute-toggle]');
+      this.pauseToggle = element.querySelector('[data-voki-pause-toggle]');
+      this.pauseStatus = element.querySelector('[data-voki-pause-status]');
       this.proactiveStatus = element.querySelector('[data-voki-proactive-status]');
       this.stopSpeechButton = element.querySelector('[data-voki-stop-speech]');
       this.talkButton = element.querySelector('[data-voki-talk]');
@@ -157,12 +253,18 @@
       this.conversationId = null;
       this.localSessionId = null;
       this.authenticated = false;
+      this.syncSenseMemory();
       this.historyLoading = false;
       this.requestPending = false;
       this.historyGeneration = 0;
+      this.requestGeneration = 0;
+      this.paused = false;
       this.loadedConversationId = null;
       this.conversationGeneration = 0;
       this.authenticationGeneration = 0;
+      this.sense = new VOKKISenseState({
+        onStateChange: ({ state }) => this.handleSenseState(state),
+      });
       const SpeechAdapter = globalThis.PARMARVOKKISpeech?.VOKKISpeechAdapter;
       this.speech = speechAdapterFactory
         ? speechAdapterFactory({
@@ -205,6 +307,7 @@
           onStateChange: (state) => this.handleProactiveState(state),
         })
         : null;
+      this.syncSenseMemory();
       this.bind();
       this.handleSpeechState({ state: this.speech?.state || 'IDLE', boundary: null });
       this.syncProactiveControls();
@@ -221,8 +324,15 @@
     }
 
     bind() {
+      const recordInteraction = () => this.sense?.recordInteraction();
+      this.root.addEventListener?.('pointerdown', recordInteraction);
+      this.root.addEventListener?.('keydown', recordInteraction);
+      this.pauseToggle?.addEventListener('change', () => {
+        this.setPaused(this.pauseToggle.checked);
+      });
       globalThis.addEventListener?.('parmar-auth-state-changed', () => {
         this.authenticationGeneration += 1;
+        this.requestGeneration += 1;
         this.historyGeneration += 1;
         this.conversationGeneration += 1;
         this.authenticated = false;
@@ -259,6 +369,8 @@
       globalThis.addEventListener?.('parmar-auth-session-ready', (event) => {
         const detail = event?.detail || {};
         this.authenticated = detail.authenticated === true;
+        this.requestGeneration += 1;
+        this.syncSenseMemory();
         void this.identityOnboarding?.setStorageScope(detail.identityScope);
         if (this.authenticated && isConversationId(detail.conversationId)) {
           this.activateConversation(detail.conversationId, { refresh: detail.refresh === true });
@@ -271,6 +383,7 @@
       globalThis.addEventListener?.('parmar-conversation-selection-changed', (event) => {
         const detail = event?.detail || {};
         if (detail.authenticated !== this.authenticated) return;
+        this.requestGeneration += 1;
         if (this.authenticated && isConversationId(detail.conversationId)) {
           this.activateConversation(detail.conversationId, { refresh: detail.refresh === true });
         } else if (!this.authenticated && typeof detail.conversationId === 'string') {
@@ -333,10 +446,12 @@
       }
       const stopVoiceWhenHidden = () => {
         if (globalThis.document?.hidden) {
+          this.sense?.setDocumentVisible(false);
           this.cancelVoiceInput();
           this.proactiveSpeech?.suspend();
           this.speech?.cancel();
         } else {
+          this.sense?.setDocumentVisible(true);
           this.proactiveSpeech?.flush();
         }
       };
@@ -350,6 +465,7 @@
       if (section && typeof globalThis.MutationObserver === 'function') {
         this.sectionObserver = new globalThis.MutationObserver(() => {
           if (!section.classList.contains('active')) {
+            this.sense?.setDocumentVisible(false);
             this.cancelVoiceInput();
             this.proactiveSpeech?.suspend();
             this.speech?.cancel();
@@ -358,6 +474,12 @@
               this.identityOnboarding.cancel();
             }
           } else {
+            this.sense?.setDocumentVisible(true);
+            if (this.sense?.enterInterface({ visible: globalThis.document?.hidden !== true })) {
+              if (!this.requestPending && this.transport) {
+                this.transport.textContent = 'Hello. VOKKI is ready for your request; PARMAR remains the authority.';
+              }
+            }
             this.proactiveSpeech?.flush();
           }
         });
@@ -396,6 +518,7 @@
     }
 
     activateConversation(conversationId, { refresh = false } = {}) {
+      this.requestGeneration += 1;
       if (conversationId === this.conversationId
         && !refresh
         && (this.historyLoading || this.loadedConversationId === conversationId)) return;
@@ -436,6 +559,7 @@
     }
 
     activateLocalConversation(sessionId, { refresh = false } = {}) {
+      this.requestGeneration += 1;
       if (this.authenticated || typeof sessionId !== 'string' || !sessionId) return;
       const isCurrentConversation = sessionId === this.localSessionId;
       if (isCurrentConversation && !refresh) return;
@@ -667,6 +791,8 @@
       }
       const proactiveEvent = globalThis.PARMARVOKKISpeech?.createProactiveEvent(result);
       const regularSpeechStarted = this.proactiveSpeech?.muted !== true
+        && this.paused !== true
+        && this.sense?.state !== 'INACTIVE'
         && this.speech?.enabled === true
         && this.speech.speakReleasedResponse(result);
       if (!regularSpeechStarted) this.proactiveSpeech?.enqueueEvent(proactiveEvent);
@@ -735,6 +861,34 @@
       this.syncVoiceInputControls();
     }
 
+    setPaused(paused) {
+      this.paused = this.sense?.setPaused(paused) === true;
+      if (this.paused) {
+        this.cancelVoiceInput();
+        this.speech?.cancel();
+        this.proactiveSpeech?.suspend();
+      } else {
+        this.proactiveSpeech?.flush();
+      }
+      if (this.pauseToggle) this.pauseToggle.checked = this.paused;
+      if (this.submitButton) this.submitButton.disabled = this.paused;
+      if (this.pauseStatus) {
+        this.pauseStatus.textContent = this.paused
+          ? 'VOKKI interaction is paused. Text and voice input remain stopped until resumed.'
+          : 'VOKKI interaction is active.';
+      }
+      this.syncVoiceInputControls();
+      this.syncSpeechControls();
+    }
+
+    handleSenseState(state) {
+      this.root.dataset.senseState = state;
+      if (this.presence) this.presence.dataset.senseState = state;
+      if (state === 'BUSY' || state === 'INACTIVE') {
+        this.proactiveSpeech?.suspend();
+      }
+    }
+
     handleProactiveState({ enabled, muted }) {
       this.root.dataset.proactiveSpeech = enabled ? 'enabled' : 'disabled';
       this.root.dataset.speechMuted = muted ? 'true' : 'false';
@@ -767,6 +921,15 @@
       this.speechToggle.disabled = !this.speech?.available;
       this.speechToggle.checked = Boolean(this.speech?.enabled);
       this.syncProactiveControls();
+    }
+
+    syncSenseMemory() {
+      const memory = this.getMemoryState();
+      this.root.dataset.memoryConsent = memory.enabled ? 'enabled' : 'disabled';
+      this.root.dataset.memoryScope = memory.authenticated ? 'authenticated' : 'local-demo';
+      this.root.dataset.memoryStorage = typeof memory.storage === 'string'
+        ? memory.storage
+        : 'UNKNOWN';
     }
 
     handleVoiceInputState({ state, message, available }) {
@@ -813,7 +976,9 @@
         || busyVoice
         || Boolean(this.voiceInput?.recognition)
         || this.historyLoading
-        || this.submitButton?.disabled === true;
+        || this.submitButton?.disabled === true
+        || this.paused
+        || this.sense?.state === 'INACTIVE';
       this.cancelVoiceButton?.toggleAttribute?.(
         'aria-hidden',
         !['REQUESTING_PERMISSION', 'LISTENING'].includes(this.voiceInputState),
@@ -854,7 +1019,7 @@
     }
 
     async submitRequest(messageOverride = null) {
-      if (this.historyLoading) return;
+      if (this.historyLoading || this.requestPending || this.paused) return;
       const message = (typeof messageOverride === 'string' ? messageOverride : this.input.value).trim();
       if (!message) {
         this.input.focus();
@@ -863,9 +1028,11 @@
       const requestId = this.beginRequest();
       if (requestId === null || requestId === false) return;
       this.requestPending = true;
+      this.sense?.setBusy(true);
 
       const authenticationGeneration = this.authenticationGeneration;
       const conversationGeneration = this.conversationGeneration;
+      const requestGeneration = ++this.requestGeneration;
       const localConversation = this.authenticated
         ? null
         : this.getLocalConversation(this.localSessionId);
@@ -896,13 +1063,15 @@
         if (!response.ok) throw new Error('VOKKI request failed.');
         const result = await response.json();
         if (authenticationGeneration !== this.authenticationGeneration
-          || conversationGeneration !== this.conversationGeneration) return;
+          || conversationGeneration !== this.conversationGeneration
+          || requestGeneration !== this.requestGeneration) return;
         this.renderResult(result);
         await this.synchronizeConversation(result, message);
         this.input.value = '';
       } catch (_error) {
         if (authenticationGeneration !== this.authenticationGeneration
-          || conversationGeneration !== this.conversationGeneration) return;
+          || conversationGeneration !== this.conversationGeneration
+          || requestGeneration !== this.requestGeneration) return;
         this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
         this.lifecycle.dataset.lifecycle = 'UNKNOWN';
         this.setPresence('UNKNOWN');
@@ -912,6 +1081,7 @@
         this.approvalId = null;
       } finally {
         this.requestPending = false;
+        this.sense?.setBusy(false);
         this.submitButton.disabled = false;
         this.syncVoiceInputControls();
         this.proactiveSpeech?.flush();
@@ -927,6 +1097,7 @@
 
       const authenticationGeneration = this.authenticationGeneration;
       const conversationGeneration = this.conversationGeneration;
+      const requestGeneration = ++this.requestGeneration;
       this.transport.textContent = 'Submitting your decision to PARMAR.';
       this.root.querySelectorAll('[data-voki-decision]').forEach((button) => {
         button.disabled = true;
@@ -940,12 +1111,14 @@
         if (!response.ok) throw new Error('VOKKI decision request failed.');
         const result = await response.json();
         if (authenticationGeneration !== this.authenticationGeneration
-          || conversationGeneration !== this.conversationGeneration) return;
+          || conversationGeneration !== this.conversationGeneration
+          || requestGeneration !== this.requestGeneration) return;
         this.renderResult(result);
         await this.synchronizeConversation(result);
       } catch (_error) {
         if (authenticationGeneration !== this.authenticationGeneration
-          || conversationGeneration !== this.conversationGeneration) return;
+          || conversationGeneration !== this.conversationGeneration
+          || requestGeneration !== this.requestGeneration) return;
         this.lifecycle.textContent = lifecycleLabels.UNKNOWN;
         this.lifecycle.dataset.lifecycle = 'UNKNOWN';
         this.setPresence('UNKNOWN');
@@ -1008,6 +1181,7 @@
 
   return {
     VOKKIInterface,
+    VOKKISenseState,
     interpretContract,
     lifecycleLabels,
     lifecyclePresence,

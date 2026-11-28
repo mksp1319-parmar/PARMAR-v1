@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/static/styles.css" />
     <link rel="stylesheet" href="/static/premium.css" />
     <link rel="stylesheet" href="/static/design-system.css" />
+    <link rel="stylesheet" href="/static/chat-redesign.css" />
   </head>
   <body data-state="UNKNOWN" data-active-section="home" data-theme="midnight" data-animation="normal" data-voki-state="UNKNOWN" data-left-panel-state="closed" data-right-panel-state="closed" data-gesture-state="idle">
     <div class="app-shell">
@@ -143,7 +144,7 @@
               <div class="home-voki-presence" data-voki-home-avatar data-expression="unavailable" data-lifecycle-state="UNKNOWN" role="img" aria-label="VOKKI, PARMAR’s canonical default avatar">
                 <span class="home-voki-halo home-voki-halo-outer" aria-hidden="true"></span>
                 <span class="home-voki-halo home-voki-halo-inner" aria-hidden="true"></span>
-                <img class="home-voki-avatar-image" data-voki-default-image src="/static/assets/voki/Vokki.png" alt="VOKKI, PARMAR’s canonical default avatar" />
+                <img class="home-voki-avatar-image" data-voki-default-image src="/static/assets/voki/Vokki-screen.png" alt="VOKKI, PARMAR’s canonical screen photograph" />
                 <span class="home-voki-caption" aria-hidden="true">VOKKI <span>PARMAR / HERE WHEN YOU NEED HER</span></span>
               </div>
               <div class="home-hero-date glass-panel" aria-label="Your local date and time">
@@ -243,7 +244,7 @@
                   <span class="voki-presence-field field-inner"></span>
                   <span class="voki-presence-light"></span>
                   <div class="voki-avatar" data-voki-avatar data-voki-avatar-host data-expression="unavailable" data-avatar-kind="local-default">
-                    <img class="voki-avatar-default-image" data-voki-default-image src="/static/assets/voki/Vokki.png" alt="" />
+                    <img class="voki-avatar-default-image" data-voki-default-image src="/static/assets/voki/Vokki-screen.png" alt="" />
                   </div>
                 </div>
                 <div class="voki-presence-caption sr-only"><span class="voki-presence-caption-line"></span><span>PARMAR / VOKKI</span><span class="voki-presence-caption-line"></span></div>
@@ -273,7 +274,12 @@
                   <input id="voki-speech-toggle" type="checkbox" data-voki-speech-toggle aria-describedby="voki-speech-status" />
                   <span class="sr-only">Read released responses aloud</span>
                 </label>
+                <label class="voki-speech-toggle" for="voki-pause-toggle">
+                  <input id="voki-pause-toggle" type="checkbox" data-voki-pause-toggle aria-describedby="voki-pause-status" />
+                  <span class="sr-only">Pause VOKKI interaction</span>
+                </label>
                 <p class="voki-speech-status sr-only" data-voki-speech-status role="status" aria-live="polite">Checking browser speech availability.</p>
+                <p class="voki-speech-status sr-only" data-voki-pause-status role="status" aria-live="polite">VOKKI interaction is active.</p>
                 <div class="voki-proactive-controls" role="group" aria-label="VOKKI proactive speech controls">
                   <label class="voki-speech-toggle" for="voki-proactive-toggle">
                     <input id="voki-proactive-toggle" type="checkbox" data-voki-proactive-toggle aria-describedby="voki-proactive-status voki-proactive-privacy" />
@@ -355,20 +361,36 @@
           </section>
 
           <section class="section-view" data-section="chat" id="section-chat" aria-labelledby="chat-title">
-            <div class="view-heading"><div><span class="eyebrow">PARMAR / CONVERSATION WORKSPACE</span><h1 id="chat-title">Chat</h1></div><p>Ask for perspective. PARMAR reviews requests through its existing safety pipeline before responding.</p></div>
             <section class="conversation-surface" aria-label="PARMAR conversation">
-              <aside class="chat-history-panel" aria-label="Conversations">
-                <div class="chat-history-heading"><strong>Conversations</strong><button class="text-button" id="new-session-btn" type="button" aria-label="New Chat" title="New Chat">+</button></div>
+              <button class="chat-history-scrim" id="chat-history-scrim" type="button" aria-label="Close conversation history" tabindex="-1" hidden></button>
+              <aside class="chat-history-panel" id="chat-history-panel" aria-label="Conversation history" tabindex="-1">
+                <div class="chat-history-heading">
+                  <div><strong>History</strong></div>
+                  <div class="chat-history-heading-actions">
+                    <button class="chat-history-close" id="chat-history-close" type="button" aria-label="Close conversation history" title="Close history" hidden>×</button>
+                    <button id="new-session-btn" type="button" aria-label="New Chat" title="New Chat" class="new-session-btn">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span>New chat</span>
+                    </button>
+                  </div>
+                </div>
                 <label class="chat-history-search">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.2" /><path d="m15.4 15.4 4.1 4.1" /></svg>
-                  <input id="chat-history-filter" type="search" placeholder="Search conversations…" autocomplete="off" aria-label="Filter conversations" />
+                  <input id="chat-history-filter" type="search" placeholder="Search history" autocomplete="off" aria-label="Search loaded conversations" />
                 </label>
+                <p class="chat-history-scope">Searches conversations available in this session.</p>
                 <ul class="history-list chat-history-list" id="chat-history-list" aria-label="Saved conversations"></ul>
               </aside>
               <div class="chat-main">
-                <div class="conversation-topline"><img class="brand-logo-image chat-brand-logo" src="/static/assets/parmar-wordmark.png" alt="PARMAR" /><span class="conversation-divider"></span><span id="chat-mode-label">Local demo</span><span class="conversation-spacer"></span><span class="human-note"><span class="authority-dot"></span> Human-led</span></div>
+                <div class="conversation-topline">
+                  <button class="chat-history-toggle" id="chat-history-toggle" type="button" aria-controls="chat-history-panel" aria-expanded="true" aria-label="Hide conversation history" title="Hide conversation history">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="6" height="15" rx="1" /><path d="M13.5 7h7M13.5 12h7M13.5 17h7" /></svg>
+                  </button>
+                  <h1 id="chat-title">Chat</h1>
+                  <span class="chat-mode-badge" id="chat-mode-badge"><span class="chat-mode-indicator" aria-hidden="true"></span><span id="chat-mode-label">Local Demo</span></span>
+                  <span class="conversation-spacer"></span>
+                </div>
                 <div class="auth-control-row" aria-label="Authentication session controls">
-                  <span id="auth-state-label" class="auth-state-label" aria-live="polite">Anonymous / Local Demo</span>
+                  <span id="auth-state-label" class="auth-state-label sr-only" aria-live="polite">Anonymous / Local Demo</span>
                   <span id="development-auth-note" class="development-auth-note" hidden>Development only — NOT identity verification.</span>
                   <button class="new-session-btn" id="development-login-btn" type="button" hidden>Start Local Development Session</button>
                   <button class="new-session-btn" id="refresh-session-btn" type="button" hidden>Refresh session</button>
@@ -390,25 +412,23 @@
                   <p class="profile-status" id="profile-status" role="status" aria-live="polite"></p>
                 </div>
                 <p class="history-status" id="auth-status" role="status" aria-live="polite" hidden></p>
-                <div class="chat-thread" id="chat-thread" aria-live="polite" aria-relevant="additions"></div>
+                <p class="chat-availability-note" id="chat-availability-note" data-state="checking" role="status" aria-live="polite"></p>
+                <div class="chat-thread" id="chat-thread" role="log" aria-label="Conversation messages" aria-relevant="additions text" tabindex="0"></div>
                 <div class="chat-composer">
                   <label class="sr-only" for="chat-input">Message PARMAR</label>
-                  <textarea id="chat-input" rows="2" placeholder="What would you like to think through?"></textarea>
+                  <textarea id="chat-input" rows="2" aria-describedby="chat-keyboard-hint chat-character-count chat-availability-note" placeholder="What would you like to think through?"></textarea>
                   <div class="composer-actions">
                     <label class="composer-research" title="Use the configured research provider when available">
                       <input id="research-mode" type="checkbox" aria-describedby="research-mode-help" />
-                      <span>Research</span>
+                      <span>Research <small>optional</small></span>
                     </label>
-                    <button class="composer-tool" type="button" disabled aria-describedby="files-unavailable" title="File attachments are unavailable">
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12.5 13.8 6.7a3 3 0 0 1 4.2 4.2l-7.1 7.2a4.5 4.5 0 0 1-6.4-6.4l7.1-7.1" /></svg><span>Files unavailable</span>
-                    </button>
-                    <button class="composer-tool composer-voki" type="button" data-section="voki" title="Open the dedicated VOKKI interface">
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5v15M7.5 8v8M16.5 8v8M4 10v4M20 10v4" /></svg><span>Open VOKKI</span>
-                    </button>
                     <button class="primary-btn send-button" id="chat-submit" type="button" aria-label="Send message"><span>Send</span><span class="button-arrow" aria-hidden="true">↗</span></button>
                   </div>
                 </div>
-                <div class="composer-note"><span>Enter to send</span><span class="composer-note-divider">·</span><span>Shift + Enter for a new line</span></div>
+                <div class="composer-note">
+                  <span id="chat-keyboard-hint">Enter to send · Shift + Enter for a new line</span>
+                  <span id="chat-character-count" aria-live="polite">0 / 4,000</span>
+                </div>
                 <span class="sr-only" id="research-mode-help">When enabled, the message requests research through the configured search provider. PARMAR safety and approval checks still apply.</span>
               </div>
             </section>

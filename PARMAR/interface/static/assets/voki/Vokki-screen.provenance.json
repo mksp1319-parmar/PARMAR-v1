@@ -1,0 +1,17 @@
+{
+  "asset": "Vokki-screen.png",
+  "sha256": "dbaacb08f6f7c584fd1fc262a120fe1dc152743eed2d3ce090cefd828fefdf61",
+  "dimensions": [1097, 615],
+  "colorMode": "RGB",
+  "opaque": true,
+  "sourceAsset": "Vokki.png",
+  "sourceSha256": "11251171bb22a55749ba8f396f5a44e755bdeb7fdec752633a126e0855e096d4",
+  "crop": {
+    "x": 125,
+    "y": 83,
+    "width": 1097,
+    "height": 615
+  },
+  "derivation": "Lossless pixel crop of the complete image displayed inside the desktop monitor. No image generation, retouching, transparency, or face reconstruction.",
+  "verifiedSourcePixelMismatches": 0
+}

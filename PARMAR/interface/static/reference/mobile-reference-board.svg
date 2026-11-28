@@ -93,7 +93,7 @@
         <text x="32" y="234" class="body">with a human always in control.</text>
         <rect x="31" y="258" width="328" height="160" rx="16" fill="#121414" stroke="#4e4030"/>
         <ellipse cx="194" cy="329" rx="110" ry="78" fill="url(#glow)"/>
-        <image x="55" y="273" width="85" height="130" href="../assets/voki/Vokki.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#home-voki-clip)" aria-label="Canonical VOKKI portrait"/>
+        <image x="55" y="273" width="85" height="130" href="../assets/voki/Vokki-screen.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#home-voki-clip)" aria-label="Canonical VOKKI screen photograph"/>
         <text x="157" y="316" class="strong">VOKKI</text>
         <text x="157" y="339" class="small">Connected to the</text>
         <text x="157" y="355" class="small">PARMAR conversation</text>
@@ -152,7 +152,7 @@
         <ellipse cx="195" cy="295" rx="116" ry="103" fill="url(#glow)"/>
         <circle cx="195" cy="291" r="77" fill="#101314" stroke="#544432"/>
         <circle cx="195" cy="291" r="59" fill="none" stroke="#776042" stroke-opacity=".48"/>
-        <image x="119" y="215" width="152" height="152" href="../assets/voki/Vokki.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#voki-portrait-clip)" aria-label="Canonical VOKKI portrait"/>
+        <image x="119" y="215" width="152" height="152" href="../assets/voki/Vokki-screen.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#voki-portrait-clip)" aria-label="Canonical VOKKI screen photograph"/>
         <text x="195" y="390" class="section" text-anchor="middle">PARMAR / VOKKI</text>
         <text x="195" y="410" class="tiny" text-anchor="middle">LIFECYCLE / UNKNOWN</text>
         <text x="31" y="454" class="small">Connected to the existing PARMAR chat flow.</text>

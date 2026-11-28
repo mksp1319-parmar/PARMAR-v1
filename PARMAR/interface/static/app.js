@@ -346,6 +346,14 @@ const dom = {
   historyFilter: document.getElementById('history-filter'),
   chatHistoryList: document.getElementById('chat-history-list'),
   chatHistoryFilter: document.getElementById('chat-history-filter'),
+  chatHistoryPanel: document.getElementById('chat-history-panel'),
+  chatHistoryToggle: document.getElementById('chat-history-toggle'),
+  chatHistoryClose: document.getElementById('chat-history-close'),
+  chatHistoryScrim: document.getElementById('chat-history-scrim'),
+  chatAvailabilityNote: document.getElementById('chat-availability-note'),
+  chatModeBadge: document.getElementById('chat-mode-badge'),
+  chatKeyboardHint: document.getElementById('chat-keyboard-hint'),
+  chatCharacterCount: document.getElementById('chat-character-count'),
   historyStatus: document.getElementById('history-status'),
   homeContinueList: document.getElementById('home-continue-list'),
   homeAttention: document.getElementById('home-attention'),
@@ -472,6 +480,11 @@ const state = {
   memoryQuery: '',
   settings: loadSettings(),
   currentSessionId: null,
+  chatHistoryOpen: true,
+  chatHistoryCompactViewport: null,
+  chatDrafts: new Map(),
+  newChatDraft: '',
+  chatTransportError: false,
   historyQuery: '',
   conversationId: null,
   authMode: 'checking',
@@ -1346,6 +1359,7 @@ function setRequestPending(pending) {
     control.setAttribute('aria-busy', String(pending));
   });
   document.body.dataset.requestPending = String(pending);
+  renderChatAvailability();
   renderHome();
 }
 
@@ -1428,6 +1442,8 @@ function clearAuthenticatedState(message, { broadcast = false, navigateToChat = 
     state.conversationId = null;
     clearActiveConversationId();
     state.currentSessionId = null;
+    state.chatDrafts.clear();
+    state.newChatDraft = '';
     state.sessions = [];
     state.pendingApprovalId = null;
     state.serverConversationIds.clear();
@@ -1480,8 +1496,9 @@ function renderAuthenticationControls() {
       ? (state.authenticationState === 'DEVELOPMENT_UNVERIFIED'
         ? 'Development session — unverified'
         : 'Authenticated session')
-      : 'Local demo';
+      : 'Local Demo';
   }
+  renderChatAvailability();
   if (dom.developmentLoginBtn) {
     dom.developmentLoginBtn.hidden = authenticated || !state.developmentAuthAvailable;
     dom.developmentLoginBtn.disabled = state.authMode === 'checking' || state.developmentLoginInProgress;
@@ -1497,6 +1514,54 @@ function renderAuthenticationControls() {
   if (dom.refreshSessionBtn) dom.refreshSessionBtn.hidden = !authenticated;
   renderPhoneStatus();
   renderProfileControls();
+}
+
+function renderChatAvailability() {
+  if (!dom.chatAvailabilityNote) return;
+  const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+  let status;
+  if (state.authMode === 'authenticated') {
+    status = {
+      state: 'denied',
+      message: 'Authenticated Chat is unavailable while the server authorization fence remains active. Requests are blocked before conversation access or provider dispatch.',
+    };
+  } else if (state.authMode === 'checking') {
+    status = {
+      state: 'checking',
+      message: 'Checking the server session. Local Demo is deterministic and is not an AI model.',
+    };
+  } else if (!online) {
+    status = {
+      state: 'offline',
+      message: 'Your browser is offline. Drafts remain in this tab; sending is unavailable until the connection returns.',
+    };
+  } else if (state.chatTransportError) {
+    status = {
+      state: 'error',
+      message: 'PARMAR could not complete the last request. Your draft was restored; retry is manual and no alternate provider is selected.',
+    };
+  } else {
+    status = {
+      state: 'local-demo',
+      message: 'Local Demo provides deterministic safety review, not conversational AI. AI inference is unavailable in this session.',
+    };
+  }
+  dom.chatAvailabilityNote.dataset.state = status.state;
+  dom.chatAvailabilityNote.textContent = status.message;
+
+  const chatEnabled = state.authMode === 'anonymous' && online && !state.requestInFlight;
+  if (dom.chatSubmit) dom.chatSubmit.disabled = !chatEnabled;
+  dom.chatSubmit?.setAttribute('aria-describedby', 'chat-availability-note');
+  if (dom.researchMode) {
+    dom.researchMode.disabled = !chatEnabled;
+    dom.researchMode.setAttribute('aria-describedby', 'research-mode-help chat-availability-note');
+  }
+  if (dom.chatModeBadge) dom.chatModeBadge.dataset.state = status.state;
+  if (dom.chatKeyboardHint) {
+    dom.chatKeyboardHint.textContent = state.settings.enterToSend === false
+      ? 'Ctrl / ⌘ + Enter to send · Enter for a new line'
+      : 'Enter to send · Shift + Enter for a new line';
+  }
 }
 
 function renderPhoneAvailability() {
@@ -1601,6 +1666,8 @@ function clearProfileConversationState() {
   state.pendingApprovalId = null;
   state.conversationId = null;
   state.currentSessionId = null;
+  state.chatDrafts.clear();
+  state.newChatDraft = '';
   state.sessions = [];
   state.serverConversationIds.clear();
   clearActiveConversationId();
@@ -1829,6 +1896,8 @@ async function refreshAuthenticationState({ expired = false, broadcast = false, 
       if (enteringAuthenticated || authenticatedSessionChanged) {
         invalidatePendingRequest();
         state.authEpoch += 1;
+        state.chatDrafts.clear();
+        state.newChatDraft = '';
         window.dispatchEvent(new CustomEvent('parmar-auth-state-changed'));
         state.sessions = [];
         state.memories = [];
@@ -2026,6 +2095,7 @@ function applySettings() {
   if (dom.settingsAnimation) dom.settingsAnimation.value = settings.animationIntensity;
   if (dom.settingsReducedMotion) dom.settingsReducedMotion.checked = Boolean(settings.reducedMotion);
   if (dom.settingsEnterToSend) dom.settingsEnterToSend.checked = settings.enterToSend !== false;
+  renderChatAvailability();
   if (dom.settingsPhoneToggle) dom.settingsPhoneToggle.checked = Boolean(settings.phonePermission);
   if (dom.phonePermissionToggle) dom.phonePermissionToggle.checked = Boolean(settings.phonePermission);
   if (dom.memoryEnabledToggle) dom.memoryEnabledToggle.checked = Boolean(settings.memoryEnabled);
@@ -2372,6 +2442,11 @@ function handleWorkspaceResize() {
     );
   }
   lastCompactPanelViewports = compactViewports;
+  const compactChatHistory = isCompactChatHistoryViewport();
+  if (state.chatHistoryCompactViewport !== compactChatHistory) {
+    state.chatHistoryCompactViewport = compactChatHistory;
+    setChatHistoryOpen(!compactChatHistory);
+  }
 }
 
 function openDiscoveryTarget(targetId, trigger) {
@@ -3683,6 +3758,7 @@ function syncChatHistoryList() {
 function continueConversation(conversationId) {
   const selected = state.sessions.find((entry) => entry.id === conversationId);
   if (!selected) return;
+  rememberCurrentChatDraft();
   if (state.authMode === 'authenticated') {
     void selectServerConversation(selected.id);
     return;
@@ -3692,8 +3768,7 @@ function continueConversation(conversationId) {
   state.conversationId = null;
   publishConversationSelection(selected.id, true);
   state.pendingApprovalId = null;
-  if (dom.chatInput) dom.chatInput.value = '';
-  resizeChatInput();
+  restoreChatDraft(selected.id);
   const lastUserMessage = [...selected.messages].reverse().find((message) => message.role === 'user');
   if (dom.requestInput) dom.requestInput.value = lastUserMessage?.text || '';
   renderSessionMessages();
@@ -3703,6 +3778,7 @@ function continueConversation(conversationId) {
   }
   renderHistory();
   selectSection('chat', 'chat');
+  if (isCompactChatHistoryViewport()) setChatHistoryOpen(false, { focus: true });
 }
 
 function homeTimestamp(value) {
@@ -4193,6 +4269,7 @@ async function refreshServerConversationHistory({ navigateToChat = true } = {}) 
 
 async function selectServerConversation(conversationId, { navigateToChat = true } = {}) {
   if (state.authMode !== 'authenticated' || !state.serverConversationIds.has(conversationId)) return;
+  rememberCurrentChatDraft();
   invalidatePendingRequest();
   cancelChatResponseReveal();
   const generation = ++state.historySelectionGeneration;
@@ -4226,15 +4303,18 @@ async function selectServerConversation(conversationId, { navigateToChat = true 
         ? { research: message.research, persisted_release: true }
         : null,
     }));
+    rememberCurrentChatDraft();
     state.currentSessionId = conversationId;
     state.conversationId = conversationId;
     storeActiveConversationId(conversationId);
     publishConversationSelection(conversationId, true);
-    if (dom.chatInput) dom.chatInput.value = '';
-    resizeChatInput();
+    restoreChatDraft(conversationId);
     renderSessionMessages();
     renderHistory();
     if (navigateToChat) selectSection('chat', 'chat');
+    if (navigateToChat && isCompactChatHistoryViewport()) {
+      setChatHistoryOpen(false, { focus: true });
+    }
   } catch (_error) {
     if (generation === state.historySelectionGeneration && authEpoch === state.authEpoch && state.authMode === 'authenticated') {
       state.historyError = true;
@@ -4296,36 +4376,125 @@ function resetReviewState(message = 'PARMAR is ready for a request.') {
 
 function resizeChatInput() {
   if (!dom.chatInput) return;
+  const characters = Array.from(dom.chatInput.value);
+  if (characters.length > 4000) {
+    const limitedValue = characters.slice(0, 4000).join('');
+    const cursor = Math.min(dom.chatInput.selectionStart, limitedValue.length);
+    dom.chatInput.value = limitedValue;
+    dom.chatInput.setSelectionRange(cursor, cursor);
+  }
   dom.chatInput.style.height = 'auto';
   dom.chatInput.style.height = `${Math.min(dom.chatInput.scrollHeight, 180)}px`;
+  updateChatCharacterCount();
+}
+
+function updateChatCharacterCount() {
+  if (!dom.chatInput || !dom.chatCharacterCount) return;
+  const length = Array.from(dom.chatInput.value).length;
+  dom.chatCharacterCount.textContent = `${length.toLocaleString()} / 4,000`;
+  dom.chatCharacterCount.dataset.state = length >= 3900 ? 'near-limit' : 'normal';
+}
+
+function setChatHistoryOpen(open, { focus = false } = {}) {
+  state.chatHistoryOpen = Boolean(open);
+  if (dom.chatHistoryPanel) dom.chatHistoryPanel.hidden = !state.chatHistoryOpen;
+  if (dom.chatHistoryPanel) dom.chatHistoryPanel.inert = !state.chatHistoryOpen;
+  const compact = isCompactChatHistoryViewport();
+  if (dom.chatHistoryPanel && compact) {
+    dom.chatHistoryPanel.setAttribute('role', 'dialog');
+    if (state.chatHistoryOpen) dom.chatHistoryPanel.setAttribute('aria-modal', 'true');
+    else dom.chatHistoryPanel.removeAttribute('aria-modal');
+  } else {
+    dom.chatHistoryPanel?.removeAttribute('role');
+    dom.chatHistoryPanel?.removeAttribute('aria-modal');
+  }
+  if (dom.chatHistoryClose) dom.chatHistoryClose.hidden = !compact;
+  if (dom.chatHistoryScrim) dom.chatHistoryScrim.hidden = !compact || !state.chatHistoryOpen;
+  dom.chatHistoryPanel?.closest('.conversation-surface')
+    ?.classList.toggle('chat-history-collapsed', !state.chatHistoryOpen);
+  if (dom.chatHistoryToggle) {
+    const label = state.chatHistoryOpen
+      ? 'Hide conversation history'
+      : 'Show conversation history';
+    dom.chatHistoryToggle.setAttribute('aria-expanded', String(state.chatHistoryOpen));
+    dom.chatHistoryToggle.setAttribute('aria-label', label);
+    dom.chatHistoryToggle.title = label;
+  }
+  if (focus) {
+    if (state.chatHistoryOpen) (dom.chatHistoryFilter || dom.chatHistoryPanel)?.focus();
+    else dom.chatHistoryToggle?.focus();
+  }
+}
+
+function isCompactChatHistoryViewport() {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 900px)').matches;
+}
+
+function trapChatHistoryFocus(event) {
+  if (event.key !== 'Tab' || !isCompactChatHistoryViewport()) return;
+  const focusable = Array.from(dom.chatHistoryPanel?.querySelectorAll(
+    'button:not(:disabled):not([hidden]), input:not(:disabled):not([hidden]), [href], [tabindex]:not([tabindex="-1"])',
+  ) || []).filter((element) => element.getClientRects().length > 0);
+  if (!focusable.length) {
+    event.preventDefault();
+    dom.chatHistoryPanel?.focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && (document.activeElement === first || !dom.chatHistoryPanel.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !dom.chatHistoryPanel.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function saveChatDraft(sessionId, value) {
+  const draft = String(value || '');
+  if (sessionId) {
+    if (draft) state.chatDrafts.set(sessionId, draft);
+    else state.chatDrafts.delete(sessionId);
+  } else {
+    state.newChatDraft = draft;
+  }
+}
+
+function rememberCurrentChatDraft() {
+  if (dom.chatInput) saveChatDraft(state.currentSessionId, dom.chatInput.value);
+}
+
+function restoreChatDraft(sessionId) {
+  if (!dom.chatInput) return;
+  dom.chatInput.value = sessionId
+    ? state.chatDrafts.get(sessionId) || ''
+    : state.newChatDraft;
+  resizeChatInput();
 }
 
 function renderEmptyChatState() {
   const emptyState = document.createElement('div');
   emptyState.className = 'chat-empty-state';
 
-  const emblem = document.createElement('div');
-  emblem.className = 'chat-empty-emblem';
-  emblem.setAttribute('aria-hidden', 'true');
-  emblem.textContent = 'P';
-
-  const eyebrow = document.createElement('span');
-  eyebrow.className = 'chat-empty-eyebrow';
-  eyebrow.textContent = 'A human-led space to think';
-
   const heading = document.createElement('h2');
-  heading.textContent = 'What would you like to work through?';
+  heading.textContent = state.authMode === 'authenticated'
+    ? 'Authenticated Chat is unavailable'
+    : 'Begin with a decision or question';
 
   const description = document.createElement('p');
-  description.textContent = 'Share a question or decision. PARMAR can help surface trade-offs and risks; the choice stays with you.';
+  description.textContent = state.authMode === 'authenticated'
+    ? 'The server authorization fence remains active. Existing conversation history is still available.'
+    : 'Local Demo offers deterministic safety review, not conversational AI.';
 
   const starters = document.createElement('div');
   starters.className = 'chat-starters';
   starters.setAttribute('aria-label', 'Suggested starting points');
   [
-    'Help me compare two options',
-    'Review a privacy concern',
-    'Think through a difficult trade-off',
+    'Review a privacy decision',
+    'Compare two approaches',
+    'Identify risks in a proposal',
   ].forEach((prompt) => {
     const button = document.createElement('button');
     button.className = 'chat-starter';
@@ -4340,7 +4509,7 @@ function renderEmptyChatState() {
     starters.appendChild(button);
   });
 
-  emptyState.append(emblem, eyebrow, heading, description, starters);
+  emptyState.append(heading, description, starters);
   dom.chatThread.replaceChildren(emptyState);
 }
 
@@ -4348,22 +4517,25 @@ function createCopyButton(text) {
   const button = document.createElement('button');
   button.className = 'message-copy';
   button.type = 'button';
-  button.textContent = '⧉';
+  button.textContent = 'Copy';
   button.setAttribute('aria-label', 'Copy message');
   button.title = 'Copy message';
   button.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(text);
-      button.textContent = '✓';
+      button.textContent = 'Copied';
+      button.dataset.state = 'copied';
       button.setAttribute('aria-label', 'Message copied');
       button.title = 'Message copied';
     } catch (_error) {
-      button.textContent = '!';
+      button.textContent = 'Unavailable';
+      button.dataset.state = 'unavailable';
       button.setAttribute('aria-label', 'Copy unavailable');
       button.title = 'Copy unavailable';
     }
     window.setTimeout(() => {
-      button.textContent = '⧉';
+      button.textContent = 'Copy';
+      delete button.dataset.state;
       button.setAttribute('aria-label', 'Copy message');
       button.title = 'Copy message';
     }, 1400);
@@ -5029,6 +5201,10 @@ async function startDevelopmentSession() {
 async function submitChatMessage() {
   const text = (dom.chatInput?.value || '').trim();
   if (!text) return;
+  if (state.authMode !== 'anonymous' || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+    renderChatAvailability();
+    return;
+  }
   if (state.authMode === 'authenticated' && !state.activeProfileId) {
     state.profileFeedback = state.profiles.length
       ? 'Select a profile before starting an authenticated conversation.'
@@ -5039,6 +5215,8 @@ async function submitChatMessage() {
     return;
   }
   const researchRequested = Boolean(dom.researchMode?.checked);
+  state.chatTransportError = false;
+  renderChatAvailability();
   const requestId = beginRequest();
   if (requestId === null) return;
 
@@ -5053,6 +5231,7 @@ async function submitChatMessage() {
     appendMessageToSession(sessionId, 'user', text, {});
   }
   if (dom.chatInput) dom.chatInput.value = '';
+  saveChatDraft(sessionId, '');
   resizeChatInput();
   const waitingMessage = appendWaitingIndicator(researchRequested);
   if (dom.statusMessage) dom.statusMessage.textContent = 'Message sent. Waiting for PARMAR’s response.';
@@ -5137,11 +5316,14 @@ async function submitChatMessage() {
     dom.requestInput.value = text;
   } catch {
     if (requestId !== state.requestSequence) return;
+    state.chatTransportError = true;
+    renderChatAvailability();
     const failureMessage = researchRequested
       ? 'The research request could not be completed. No usable PARMAR research result was available.'
       : 'The chat service could not respond. Please try again.';
     if (dom.chatInput && !dom.chatInput.value.trim()) {
       dom.chatInput.value = text;
+      saveChatDraft(sessionId, text);
       resizeChatInput();
     }
     if (state.currentSessionId === sessionId) {
@@ -5473,6 +5655,26 @@ function bindEvents() {
     const button = event.target.closest('button[data-session-id]');
     if (button) continueConversation(button.dataset.sessionId);
   });
+  dom.chatHistoryToggle?.addEventListener('click', () => {
+    setChatHistoryOpen(!state.chatHistoryOpen, { focus: true });
+  });
+  dom.chatHistoryClose?.addEventListener('click', () => {
+    setChatHistoryOpen(false, { focus: true });
+  });
+  dom.chatHistoryScrim?.addEventListener('click', () => {
+    setChatHistoryOpen(false, { focus: true });
+  });
+  dom.chatHistoryPanel?.addEventListener('keydown', (event) => {
+    if (!isCompactChatHistoryViewport()) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setChatHistoryOpen(false, { focus: true });
+      return;
+    }
+    trapChatHistoryFocus(event);
+  });
+  window.addEventListener('online', renderChatAvailability);
+  window.addEventListener('offline', renderChatAvailability);
 
   dom.capabilityToolbar?.addEventListener('keydown', (event) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -5653,6 +5855,7 @@ function bindEvents() {
       }
     });
     dom.chatInput.addEventListener('input', resizeChatInput);
+    dom.chatInput.addEventListener('input', rememberCurrentChatDraft);
   }
 
   if (dom.memoryEnabledToggle) {
@@ -5675,6 +5878,9 @@ function bindEvents() {
 
   if (dom.newSessionBtn) {
     dom.newSessionBtn.addEventListener('click', () => {
+      rememberCurrentChatDraft();
+      state.newChatDraft = '';
+      state.chatTransportError = false;
       invalidatePendingRequest();
       cancelChatResponseReveal();
       state.historyLoadGeneration += 1;
@@ -5696,6 +5902,7 @@ function bindEvents() {
       if (dom.requestInput) dom.requestInput.value = '';
       if (dom.chatInput) dom.chatInput.value = '';
       resizeChatInput();
+      if (isCompactChatHistoryViewport()) setChatHistoryOpen(false, { focus: true });
       setVokiState('UNKNOWN');
       setBadge('UNKNOWN');
       document.body.dataset.state = 'UNKNOWN';
@@ -5865,6 +6072,8 @@ function renderProviderInventory(providers, selectedProvider, reachability) {
 
 function initialize() {
   state.currentSessionId = null;
+  state.chatHistoryCompactViewport = isCompactChatHistoryViewport();
+  setChatHistoryOpen(!state.chatHistoryCompactViewport);
   renderHistory();
   renderSessionMessages();
   renderMemories();
@@ -5885,6 +6094,13 @@ function initialize() {
       request: apiRequest,
       getLocalConversation: getLocalVokiConversation,
       appendLocalConversationMessage: appendLocalVokiConversationMessage,
+      getMemoryState: () => ({
+        enabled: state.authMode === 'authenticated'
+          ? state.memoryConsent
+          : Boolean(state.settings.memoryEnabled),
+        authenticated: state.authMode === 'authenticated',
+        storage: state.memoryStorage,
+      }),
       getLanguage: () => dom.languageSelect?.value || state.settings.language,
       beginRequest,
       finishRequest,

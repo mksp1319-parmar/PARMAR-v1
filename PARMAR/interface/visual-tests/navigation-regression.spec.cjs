@@ -97,6 +97,7 @@ test('mobile edge gestures open navigation and reach the restricted AETHER works
 
   await page.locator('#sidebar-toggle').click();
   await page.locator('#sidebar [data-section="chat"]').click();
+  await expect(page.locator('body')).toHaveAttribute('data-left-panel-state', 'closed', { timeout: 10_000 });
   const composer = await page.locator('#chat-input').boundingBox();
   const composerStartX = Math.max(1, composer.x + 1);
   await touchSwipe(page, composerStartX, composer.y + composer.height / 2,
@@ -122,6 +123,7 @@ test('mobile edge gestures open navigation and reach the restricted AETHER works
 
 test('primary destinations, Settings, Customize, and Integrations retain their approved locations', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   const primary = await page.locator('#sidebar .nav [data-primary-navigation]')
     .evaluateAll((items) => items.map((item) => item.dataset.primaryNavigation));
@@ -135,11 +137,12 @@ test('primary destinations, Settings, Customize, and Integrations retain their a
   await expect(settings).toHaveCount(14);
   const settingIds = await settings.evaluateAll((items) => items.map((item) => item.dataset.settingsCategory));
   for (const category of settingIds) {
-    await page.locator('#sidebar [data-section="settings"]').click();
     const button = page.locator(`#settings-category-nav [data-settings-category="${category}"]`);
     await button.click();
     await expect(button).toHaveAttribute('aria-current', 'page');
     await expect(page.locator(`#settings-detail-view [data-settings-group="${category}"], #settings-detail-view [data-settings-panel="${category}"]`).first()).toBeVisible();
+    await page.locator('#settings-back-button').click();
+    await expect(page.locator('#settings-home-view')).toBeVisible();
   }
 
   await page.locator('#sidebar [data-section="customize"]').click();

@@ -117,7 +117,7 @@
         <rect x="239" y="283" width="285" height="45" rx="13" class="button"/>
         <text x="381" y="311" class="strong" fill="#17130e" text-anchor="middle">Start a conversation</text>
         <rect x="689" y="130" width="292" height="184" rx="16" fill="#111314" stroke="#454036"/>
-        <image x="706" y="143" width="118" height="157" href="../assets/voki/Vokki.png" preserveAspectRatio="xMidYMid slice" aria-label="Canonical VOKKI portrait"/>
+        <image x="706" y="143" width="118" height="157" href="../assets/voki/Vokki-screen.png" preserveAspectRatio="xMidYMid slice" aria-label="Canonical VOKKI screen photograph"/>
         <text x="844" y="216" class="subhead">VOKKI</text>
         <text x="844" y="238" class="small">Connected to PARMAR</text>
         <text x="844" y="260" class="small">Human authority retained</text>
@@ -184,7 +184,7 @@
         <ellipse cx="431" cy="330" rx="200" ry="178" fill="url(#glow)"/>
         <circle cx="431" cy="314" r="127" fill="#101314" stroke="#604b31"/>
         <circle cx="431" cy="314" r="98" fill="none" stroke="#8b6b43" stroke-opacity=".4"/>
-        <image x="305" y="188" width="252" height="252" href="../assets/voki/Vokki.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#desktop-voki-clip)" aria-label="Canonical VOKKI portrait"/>
+        <image x="305" y="188" width="252" height="252" href="../assets/voki/Vokki-screen.png" preserveAspectRatio="xMidYMid slice" clip-path="url(#desktop-voki-clip)" aria-label="Canonical VOKKI screen photograph"/>
         <text x="431" y="523" class="section" text-anchor="middle">PARMAR / VOKKI · LIFECYCLE UNKNOWN</text>
         <rect x="684" y="150" width="416" height="102" rx="15" class="card"/>
         <text x="706" y="181" class="section">CONNECTED TO PARMAR CORE</text>
