@@ -2736,7 +2736,6 @@ button:disabled {
   cursor: wait;
   opacity: 0.62;
   box-shadow: none !important;
-  transform: none !important;
 }
 
 .app-shell {
@@ -13253,6 +13252,14 @@ body[data-active-section="chat"] .sidebar-lower {
   background: rgba(18, 17, 15, 0.88);
 }
 
+.chat-history-panel[hidden] {
+  display: none;
+}
+
+.conversation-surface.chat-history-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .chat-history-heading {
   display: flex;
   align-items: center;
@@ -13320,9 +13327,49 @@ body[data-active-section="chat"] .sidebar-lower {
 }
 
 .conversation-topline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-height: 49px;
   flex: 0 0 auto;
   border-bottom-color: rgba(218, 207, 183, 0.09);
+}
+
+.chat-history-toggle {
+  display: inline-flex;
+  min-height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border: 1px solid rgba(218, 207, 183, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #d3bc8e;
+  font-size: 0.68rem;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.chat-history-toggle:hover {
+  border-color: rgba(218, 180, 118, 0.34);
+  background: rgba(218, 180, 118, 0.08);
+}
+
+.chat-availability-note {
+  flex: 0 0 auto;
+  margin: 8px 0 0;
+  padding: 8px 11px;
+  border: 1px solid rgba(218, 180, 118, 0.16);
+  border-radius: 7px;
+  background: rgba(218, 180, 118, 0.045);
+  color: #c9b991;
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.chat-history-panel:focus {
+  outline: 2px solid rgba(228, 201, 146, 0.85);
+  outline-offset: -2px;
 }
 
 .auth-control-row {
@@ -13343,6 +13390,7 @@ body[data-active-section="chat"] .sidebar-lower {
   border-radius: 8px;
   font-size: 0.81rem;
   line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 .chat-composer {
@@ -13603,22 +13651,45 @@ textarea {
 
   .conversation-surface {
     display: flex;
+    flex-direction: column;
     min-height: calc(100svh - 150px);
     border-radius: 10px;
   }
 
   .chat-history-panel {
+    width: 100%;
+    max-height: min(42dvh, 330px);
+    flex: 0 0 auto;
+    overflow: hidden;
+    border-right: 0;
+    border-bottom: 1px solid rgba(218, 207, 183, 0.1);
+  }
+
+  .chat-history-panel[hidden] {
     display: none;
+  }
+
+  .chat-history-list {
+    max-height: min(25dvh, 200px);
+  }
+
+  .chat-history-toggle {
+    min-height: 38px;
+    padding-inline: 10px;
+  }
+
+  .conversation-topline {
+    gap: 8px;
   }
 
   .chat-main {
     width: 100%;
-    min-height: calc(100svh - 150px);
+    min-height: max(320px, calc(100dvh - 150px));
     padding-inline: 11px;
   }
 
   .chat-thread {
-    min-height: 170px;
+    min-height: 120px;
   }
 
   .voki-presence-stage {

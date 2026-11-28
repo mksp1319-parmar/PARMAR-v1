@@ -203,9 +203,22 @@ async function inspectScreenshotPortrait(page, screenshot, layout) {
       [0.35, 0.5, 0.65].map((yFraction) => {
         const x = stageBounds.left + stageBounds.width * xFraction;
         const y = stageBounds.top + stageBounds.height * yFraction;
-        const sourceX = (x - portraitBounds.left) / portraitBounds.width * portrait.naturalWidth;
-        const sourceY = (y - portraitBounds.top) / portraitBounds.height * portrait.naturalHeight;
-        const sourcePixel = sourceContext.getImageData(Math.floor(sourceX), Math.floor(sourceY), 1, 1).data;
+        const containScale = Math.min(
+          portraitBounds.width / portrait.naturalWidth,
+          portraitBounds.height / portrait.naturalHeight,
+        );
+        const renderedWidth = portrait.naturalWidth * containScale;
+        const renderedHeight = portrait.naturalHeight * containScale;
+        const offsetX = (portraitBounds.width - renderedWidth) / 2;
+        const offsetY = (portraitBounds.height - renderedHeight) / 2;
+        const sourceX = (x - portraitBounds.left - offsetX) / containScale;
+        const sourceY = (y - portraitBounds.top - offsetY) / containScale;
+        const sourcePixel = (
+          sourceX >= 0 && sourceX < portrait.naturalWidth
+          && sourceY >= 0 && sourceY < portrait.naturalHeight
+        )
+          ? sourceContext.getImageData(Math.floor(sourceX), Math.floor(sourceY), 1, 1).data
+          : [0, 0, 0, 0];
         const capturedPixel = screenshotContext.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
         return {
           xFraction,
@@ -343,7 +356,7 @@ for (const viewport of viewports) {
       });
     });
     page.on('response', (response) => {
-      if (new URL(response.url()).pathname === '/static/assets/voki/Vokki.png') {
+      if (new URL(response.url()).pathname === '/static/assets/voki/Vokki-screen.png') {
         evidence.assetResponses.push({ status: response.status(), ok: response.ok() });
       }
     });
@@ -378,6 +391,18 @@ for (const viewport of viewports) {
       await testInfo.attach(`${viewport.name}-home-quick-actions`, {
         path: homeScreenshot,
         contentType: 'image/png',
+      });
+      const homePageScreenshot = testInfo.outputPath(`${viewport.name}-home.png`);
+      await page.screenshot({ path: homePageScreenshot });
+      await testInfo.attach(`${viewport.name}-home`, {
+        path: homePageScreenshot,
+        contentType: 'image/png',
+      });
+      evidence.screenshots.push({
+        path: path.relative(__dirname, homePageScreenshot).split(path.sep).join('/'),
+        state: 'PARMAR Home with the complete canonical VOKKI source image',
+        dimensions: `${viewport.width}x${viewport.height}`,
+        findings: [],
       });
 
       const homeNavigation = page.getByRole('button', { name: 'Talk with VOKKI' });
@@ -435,9 +460,22 @@ for (const viewport of viewports) {
       await expect(workspace.locator('[data-voki-input-status]')).toHaveAttribute('aria-live', 'polite');
 
       const portrait = workspace.locator('.voki-avatar-default-image');
-      await expect(portrait).toHaveAttribute('src', '/static/assets/voki/Vokki.png');
+      await expect(portrait).toHaveAttribute('src', '/static/assets/voki/Vokki-screen.png');
       await expect.poll(() => portrait.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
       await portrait.evaluate((image) => image.decode());
+      const allPixelsOpaque = await portrait.evaluate((image) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0);
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        for (let index = 3; index < pixels.length; index += 4) {
+          if (pixels[index] !== 255) return false;
+        }
+        return true;
+      });
+      expect(allPixelsOpaque, 'the extracted photograph remains fully opaque').toBe(true);
       await waitForStableLayout(page);
 
       const initialLayout = await inspectLayout(page);
@@ -450,14 +488,10 @@ for (const viewport of viewports) {
         element.left >= -1 && element.right <= viewport.width + 1
       )), 'primary content remains within the viewport width').toBe(true);
       expect(initialLayout.portrait.loaded, 'canonical VOKKI portrait loads').toBe(true);
-      expect(initialLayout.portrait.width).toBe(1672);
-      expect(initialLayout.portrait.height).toBe(941);
-      if (initialLayout.referenceComposition === 'tablet') {
-        expect(initialLayout.portrait.objectFit, 'tablet crop preserves the source image proportions').toBe('cover');
-      } else {
-        expect(initialLayout.portrait.proportional, 'the source image keeps its natural proportions').toBe(true);
-      }
-      expect(initialLayout.portrait.coversStage, 'the intentional portrait crop fills its presentation area').toBe(true);
+      expect(initialLayout.portrait.width).toBe(1097);
+      expect(initialLayout.portrait.height).toBe(615);
+      expect(initialLayout.portrait.objectFit, 'the complete screen photograph is shown without cropping').toBe('contain');
+      expect(initialLayout.portrait.coversStage, 'the image presentation fills the visual stage').toBe(true);
       expect(initialLayout.stage.clipsPortrait, 'portrait cropping is confined to the presentation stage').toBe(true);
       expect(initialLayout.referenceComposition).toBe(
         expectedComposition(viewport.width, viewport.height),
@@ -480,6 +514,14 @@ for (const viewport of viewports) {
       await expect(interfaceRoot.locator('[data-voki-input-status]')).toContainText(/press Talk to check/i);
       await expect(workspace.locator('[data-voki-cancel-voice]')).toBeHidden();
       await expect(workspace.locator('[data-voki-stop-speech]')).toBeHidden();
+      const pauseToggle = workspace.locator('[data-voki-pause-toggle]');
+      await pauseToggle.check();
+      await expect(interfaceRoot).toHaveAttribute('data-sense-state', 'PAUSED');
+      await expect(talkButton).toBeDisabled();
+      await expect(workspace.locator('[data-voki-submit]')).toBeDisabled();
+      await pauseToggle.uncheck();
+      await expect(interfaceRoot).toHaveAttribute('data-sense-state', 'ACTIVE');
+      await expect(talkButton).toBeEnabled();
 
       const reducedMotion = await page.locator('.voki-presence-stage').evaluate((element) => {
         const style = getComputedStyle(element);

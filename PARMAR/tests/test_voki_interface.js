@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   VOKKIInterface,
+  VOKKISenseState,
   interpretContract,
   lifecyclePresence,
   futurePresentationStates,
@@ -384,8 +385,8 @@ test('avatar initializes with the canonical reference identity and neutral unava
   assert.equal(root.dataset.expression, 'unavailable');
   assert.equal(avatar.lifecycle, 'UNKNOWN');
   assert.equal(DEFAULT_VOKKI_IDENTITY.source, 'provided-reference');
-  assert.equal(DEFAULT_VOKKI_IDENTITY.reference, 'Vokki.png');
-  assert.equal(DEFAULT_VOKKI_IDENTITY.asset, '/static/assets/voki/Vokki.png');
+  assert.equal(DEFAULT_VOKKI_IDENTITY.reference, 'Vokki-screen.png');
+  assert.equal(DEFAULT_VOKKI_IDENTITY.asset, '/static/assets/voki/Vokki-screen.png');
   assert.equal(defaultImage.src, DEFAULT_VOKKI_IDENTITY.asset);
   assert.equal(defaultImage.hidden, false);
 });
@@ -604,8 +605,8 @@ test('Home keeps the canonical VOKKI portrait and preserves optional local-refer
   const homeSection = html.match(/data-section="home" id="section-home"[\s\S]*?(?=<section class="section-view core-workspace" data-section="core")/)?.[0] || '';
   const vokiSection = html.match(/id="section-voki"[\s\S]*?(?=<section class="section-view" data-section="aether")/)?.[0] || '';
   assert.match(homeSection, /data-voki-home-avatar/);
-  assert.match(homeSection, /data-voki-default-image src="\/static\/assets\/voki\/Vokki\.png"/);
-  assert.match(vokiSection, /data-voki-default-image src="\/static\/assets\/voki\/Vokki\.png"/);
+  assert.match(homeSection, /data-voki-default-image src="\/static\/assets\/voki\/Vokki-screen\.png"/);
+  assert.match(vokiSection, /data-voki-default-image src="\/static\/assets\/voki\/Vokki-screen\.png"/);
   assert.doesNotMatch(vokiSection, /data-voki-approved-image/);
   assert.match(vokiSection, /data-voki-identity-start/);
   assert.match(vokiSection, /never replaces VOKKI’s canonical portrait/);
@@ -1493,7 +1494,7 @@ test('VOKKI is an independent interface and Chat remains a separate section', ()
   assert.match(html, /<script src="\/static\/voki-avatar\.js"><\/script>/);
   assert.match(html, /<script src="\/static\/voki-speech\.js"><\/script>/);
   assert.match(app, /selectSection\(button\.dataset\.section, button\.dataset\.navKey \|\| button\.dataset\.section\)/);
-  assert.match(chatSection, /class="composer-tool composer-voki"[^>]*data-section="voki"/);
+  assert.doesNotMatch(chatSection, /data-section="voki"|Open VOKKI/);
   assert.doesNotMatch(chatSection, /chat-voki|voki-voice-toggle|voki-visibility-toggle/);
   assert.match(html, /data-voki-speech-toggle/);
   assert.doesNotMatch(chatSection, /data-voki-speech-toggle/);
@@ -1809,4 +1810,59 @@ test('approval controls are hidden when no canonical server record is available'
 
   assert.equal(root.elements['[data-voki-approval]'].hidden, true);
   assert.equal(instance.approvalId, null);
+});
+
+test('VOKKI Sense inactivity, pause, and greeting are state-derived and opt-out friendly', () => {
+  let timerCallback = null;
+  let now = 1000;
+  const sense = new VOKKISenseState({
+    now: () => now,
+    setTimeoutFn: (callback) => {
+      timerCallback = callback;
+      return 1;
+    },
+    clearTimeoutFn: () => {},
+    activeTimeoutMs: 100,
+    inactiveTimeoutMs: 300,
+  });
+
+  assert.equal(sense.enterInterface({ visible: true }), true);
+  assert.equal(sense.enterInterface({ visible: true }), false);
+  sense.recordInteraction();
+  assert.equal(sense.state, 'ACTIVE');
+  sense.setPaused(true);
+  assert.equal(sense.state, 'PAUSED');
+  now += 500;
+  if (timerCallback) timerCallback();
+  assert.equal(sense.state, 'PAUSED');
+  sense.setPaused(false);
+  assert.equal(sense.state, 'ACTIVE');
+  now += 400;
+  if (timerCallback) timerCallback();
+  assert.equal(sense.state, 'INACTIVE');
+  sense.setDocumentVisible(false);
+  assert.equal(sense.state, 'INACTIVE');
+  sense.setDocumentVisible(true);
+  assert.equal(sense.state, 'ACTIVE');
+});
+
+test('VOKKI rapid repeated submit is single-flight and stale conversation switches invalidate a result', async () => {
+  let releases = [];
+  let resolveRequest;
+  const pending = new Promise((resolve) => { resolveRequest = resolve; });
+  const { instance, root } = makeInterface(async () => pending);
+  instance.input.value = 'Rapid request';
+
+  const first = instance.submitRequest();
+  const second = instance.submitRequest();
+  assert.equal(root.elements['[data-voki-submit]'].disabled, true);
+  assert.equal(await second, undefined);
+  resolveRequest(apiResponse(releasedResponse()));
+  await first;
+  assert.equal(root.elements['[data-voki-submit]'].disabled, false);
+
+  instance.activateConversation(null);
+  instance.input.value = 'Stale switch';
+  assert.equal(instance.requestPending, false);
+  releases = releases;
 });
